@@ -327,8 +327,8 @@ class TourvisorSearchTest:
 
 test_data = {
     "departure_city": "Москва",
-    "destination_country": "Ктай",
-    "departure_dates": ("26.08.2026", "28.08.2026"),  # ✅ Апрель 2026
+    "destination_country": "Китай",
+    "departure_dates": ("26.10.2026", "28.10.2026"),
     "nights": "2-5",
     "tourists": "3 взрослых",
     "charter": 1  # 1 — галка стоит, 0 — снята
