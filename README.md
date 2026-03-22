@@ -1,4 +1,4 @@
-# Sletat.ru and Tourvisor — Search Module Autotests
+# Sletat and Tourvisor — Search Module Autotests
 
 Automated tests for tour search and comparison on Sletat.ru and Tourvisor platforms.  
 **Tech stack**: Python, pytest, Selenium WebDriver  
