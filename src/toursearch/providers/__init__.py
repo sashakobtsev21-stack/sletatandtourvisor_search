@@ -12,4 +12,14 @@ __all__ = [
     "register_provider",
     "get_provider",
     "list_providers",
+    "load_browser_providers",
 ]
+
+
+def load_browser_providers() -> None:
+    """Импортировать провайдеры на Playwright, чтобы они зарегистрировались.
+
+    Вынесено в функцию, чтобы базовый импорт пакета не требовал установленного
+    Playwright (он в опциональной группе зависимостей 'browser').
+    """
+    from toursearch.providers import tourvisor  # noqa: F401
