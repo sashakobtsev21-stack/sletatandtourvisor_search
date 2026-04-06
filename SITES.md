@@ -1,87 +1,188 @@
-# Анализ структуры сайтов
+# Анализ структуры сайтов и полная карта фильтров
 
-Справочник по DOM и поведению площадок поиска туров — основа для провайдеров и
-их поддержки при изменениях вёрстки. Снято живой инспекцией Playwright (2026-05).
+Справочник по DOM, фильтрам и поведению площадок поиска туров — основа для
+провайдеров, модели `SearchParams` и устойчивости к изменениям вёрстки.
+Снято живой инспекцией Playwright (2026-05). **Главная площадка — Sletat.**
 
 Принцип выбора селекторов:
-1. `data-testid` / `id` — самые стабильные, использовать в первую очередь.
+1. `data-testid` / `id` — самые стабильные, в первую очередь.
 2. Семантические/BEM-классы (`TV*`, `uis-*`, `slsf-*`) — стабильны.
 3. Структурные пути (`ul li button`) — когда классы обфусцированы.
-4. **Не использовать** хешированные CSS-in-JS классы (`sc-bRKDuR`, `_3wkJmt…`) — меняются при каждой сборке.
+4. **Не использовать** хешированные CSS-in-JS классы (`sc-bRKDuR`, `_3wkJmt…`, `ui-select-city_XdGmv`) — меняются при сборке (брать по префиксу: `[id^='ui-select-city']`).
 
 ---
 
-## Tourvisor (tourvisor.ru/search.php)
+## 1. Режимы поиска (вкладки)
 
-**Технология:** собственный JS-фреймворк, классы с префиксом `TV*` (семантичные и стабильные),
-кастомные HTML-теги (`<t-td>`). Форма и результаты на одной странице.
+**Sletat** — вкладки (`.Tabs_item`): **Туры** (по умолчанию, с перелётом), **Отели**
+(= поиск **без перелёта**), Экскурсионные туры, Горящие туры, Авиаперелёты, Распродажа, Круизы.
+Переключение «с перелётом / без перелёта» также доступно кнопками
+`[data-testid="b2b.search-form.switch-search-type.tours-btn"]` и `…hotels-btn`.
 
-**Поведение:** поиск асинхронный, занимает ~20–90 с. Результаты стримятся.
-⚠️ **Критично:** панель операторов (`.TVOperatorFilterColumnBody`) подгружает цены
-асинхронно и **пересортировывает строки по цене** по мере загрузки. Читать данные
-только атомарным снимком (`page.evaluate`) после исчезновения `.TVSpinner`, иначе
-имя оператора и цена разъезжаются.
-
-| Поле | Открытие | Опции / значение |
-|---|---|---|
-| Город вылета | `div.TVDepartureFilter` | `.TVDepartureTableBody .TVDepartureTableItemControl` (есть заголовки-буквы `.TVItemBold` — пропускать) |
-| Страна | `div.TVCountryFilter` | список `.TVCountryAirportList:not(.TVHide)`, элемент `.TVComplexListItem` по тексту |
-| Даты | `div.TVFlyDatesFilter` | тултип `.TVFlyDatesSelectTooltip`; месяц/год — `.TVCalendarTitleControlMonth` / `.TVCalendarTitleControlYear`; вперёд — `.TVCalendarSliderViewRightButton:not(.TVDisabled)` (только вперёд); день — `t-td.TVCalendarTableCell[data-value='D']`, доступный — `.TVCalendarAvailableDayCell`, недоступный — `.TVCalendarDisabledCell`, выбранные — `.TVCalendarStartDateCell` / `.TVCalendarEndDateCell` |
-| Ночи | `div.TVNightsFilter` | `.TVRangeTableContainer`; ячейка `.TVRangeTableCell` с `.TVRangeCellLabel` = число |
-| Туристы — взрослые | `div.TVTouristsFilter` | счётчик `.TVTouristCount.TVTouristAll`, кнопки `.TVTouristActionPlus` / `.TVTouristActionMinus`; подтвердить `.TVButtonControl` (текст «Выбрать») |
-| Туристы — дети | (тот же тултип) | добавить: `.TVTouristDynamic .TVTouristButton`; возраст: сетка `.TVSelectChildAge` → `.TVSelectChildAgeItem` по `.TVSelectChildAgeValue`. **Диапазон: «до 2», 2…15** (старше — нет) |
-| Операторы | `div.TVOperatorListFilter` | `.TVOperatorsList`; чекбоксы `.TVCheckBox` по тексту, выбран — `.TVChecked`, недоступен — `.TVDisabled` |
-| Только чартер | — | `.TVCheckboxControl` с текстом «Только чартер», состояние `.TVChecked` |
-| Кнопка поиска | — | `.TVSearchButton` (текст «Найти туры») |
-
-**Результаты:** карточки `.TVResultItem`; панель операторов открывается по
-`.TVResultToolbarOperators`, строки `.TVOperatorFilterColumnBody .TVOperatorFilterItemControl`,
-имя `.TVCheckBox`, цена `.TVOperatorFilterItemPriceValue` (+ `.TVOperatorFilterItemPriceCurrency`).
+**Tourvisor** — основной режим «пакетные туры» (search.php). Отдельной вкладки «без
+перелёта» на форме нет; есть раздельные `TVFlyDatesFilter` (даты вылета) и
+`TVTripDurationFilter` (даты проживания). ⚠️ Режим «только отель/без перелёта»
+требует уточнения (возможно отдельный раздел сайта).
 
 ---
 
-## Sletat (sletat.ru/b2b/)
+## 2. Полный список фильтров (унифицированная таблица)
 
-**Технология:** React. Классы **смешанные** — стабильные BEM-подобные (`uis-*`, `slsf-*`)
-и **обфусцированные** CSS-in-JS хеши (`sc-bRKDuR`, `_3wkJmt…`, меняются при сборке).
-Поэтому: кнопки — по `data-testid`, списки с хеш-классами — по структуре.
+| Фильтр | Поле модели | Sletat | Tourvisor |
+|---|---|---|---|
+| Город вылета | `departure_city` | `input.excludeClickOutside` → `.city-selector-list ul li button` | `div.TVDepartureFilter` |
+| Страна прилёта | `destination_country` | `#ui-select-country-to` | `div.TVCountryFilter` |
+| Курорт/город прилёта | `resorts[]` | `#ui-select-resort` (дерево регион→курорт) | `TVResortTreeFilter` |
+| Даты вылета | `date_from`/`date_to` | `div.containerTitle` (react-date-range) | `div.TVFlyDatesFilter` |
+| Ночей (диапазон) | `nights_min`/`max` | `#ui-select-nightsMin` / `#ui-select-nightsMax` | `div.TVNightsFilter` |
+| Туристы (взрослые) | `adults` | `#touristSelector` `.adult-counter-btn` | `div.TVTouristsFilter` |
+| Дети + возраст | `children_ages[]` | `.child-counter__add-btn` + `.child-counter__list__item` (0–17) | `.TVTouristDynamic .TVTouristButton` + `.TVSelectChildAge` («до 2», 2–15) |
+| Звёздность отеля | `hotel_stars[]` | `#hotelCategoryContainer` (кнопки 3★/4★/5★ + список) | `TVStarsFilter` |
+| Питание | `meals[]` | `#mealsContainer` (UAI/AI/FB/HB/BB + список) | `TVMealFilter` |
+| Тип отеля | `hotel_types[]` | `#hotelServiceContainer` (`.group-wrapper`) | `TVAccommodationFilter` |
+| Конкретный отель | `hotels[]` | `#ui-select-hotels` | `TVHotelListFilter` |
+| Рейтинг отеля | `hotel_rating_min` | (через услуги/сортировку) | `TVHotelRatingFilter` |
+| Туроператоры | `operators[]` | `#ui-select-operators` | `div.TVOperatorListFilter` |
+| Только чартер | `charter_only` | «Чартерные» (flight-info) | `TVFlightTypeFilter` («Только чартер») |
+| Только прямые | `direct_only` | «Прямые» (flight-info) | (в составе рейсов) |
+| Без стопов | `no_stops` | «Без стопов» (вкл. по умолч.) | — |
+| С трансфером | `with_transfer` | «С трансфером» (flight-info) | — |
+| Без перелёта | `without_flight` | вкладка «Отели» / `switch-search-type.hotels-btn` | ⚠️ требует уточнения |
+| Моментальное подтв. | `instant_confirmation` | «Моментальное подтверждение» | `TVInstantConfirmationFilter` |
+| Диапазон цен | `price_min`/`max` | `input.uis-text_price-input` | `TVBudgetFilter` |
+| Валюта | `currency` | `#ui-select-currency_selector` | — |
+| Метро (для отелей) | `subway[]` | `[id^='ui-select-subway']` | — |
 
-**Вход:** логин не требуется. На старте бывают всплывающие: реклама `.icon-remove`
-и куки `button[data-testid='layout.cookie-alert.accept-btn']` — закрывать опционально (могут отсутствовать).
+---
 
-| Поле | Открытие | Опции / значение |
-|---|---|---|
-| Город вылета | `input.excludeClickOutside` (ввести текст) | `div.city-selector-list ul li button` (классы пунктов обфусцированы — брать структурно) |
-| Страна | `#ui-select-country-to` | `div.uis-select__options_country-to li.uis-select__options-item` → текст в `span.slsf-country-to__select-text` |
-| Даты | `div.containerTitle` | react-date-range: `.rdrCalendarWrapper`; навигация `button.navigatorSlideButton.nextButton` (и `:not(.nextButton)` назад); месяц — `.rdrMonthName`; день — `button.rdrDay` (текст в `span.customDay > span:first-child`), недоступный — `.rdrDayDisabled`; подтвердить — `button.date-range-date-label` |
-| Ночи | — | напрямую инпуты `#ui-select-nightsMin` / `#ui-select-nightsMax` (проще выставить через JS + событие `input`) |
-| Туристы — взрослые | `#touristSelector .tourist-current-select` | `.adult-counter-container`: `.adult-counter-btn` (плюс), `.adult-counter-btn--minus`, метка `.adult-counter-label` |
-| Туристы — дети | (тот же блок) | добавить: `.child-counter__add-btn`; возраст: `.child-counter__list .child-counter__list__item` по тексту. **Диапазон: 0…17 лет (полный)**; выбранные дети — в `.child-list-container` |
-| Операторы | `.uis-text_tour-operator` (id `#ui-select-operators`) | «снять все» — чекбокс в `.slsf-tour-operator__selected-block`; пункт — `label.uis-checkbox__label_tour-operator` с именем в `span.slsf-text-bold`; выбран — `.uis-checkbox__label_checked` |
-| Чартер / прямые | — | `fieldset.uis-item_flight-info` → `label.uis-checkbox__label_flight-info` по тексту («Чартерные» / «Прямые») + вложенный `input` |
-| Кнопка поиска | — | `[data-testid="b2b.search-form.search-btn"]` (классы обфусцированы — только testid) |
+## 3. Детали фильтров Sletat (значения опций)
 
-**Результаты (по прототипу, проверить вживую на Фазе 3):** «нет туров» —
+**Звёздность** (`#hotelCategoryContainer`, открыть `#hotelCategoryOpenButton`):
+быстрые кнопки `.hot-buttons__button` (3★/4★/5★), полный список — `ul.hotel-category-list`
+→ `li button.hotel-category-item` (`.hotel-category-text`); текущее значение
+`.hotel-category-current-select__item` («Любая»).
+
+**Питание** (`#mealsContainer`, открыть `#mealsOpenButton`): быстрые кнопки UAI/AI/FB/HB/BB;
+список `li button.hotel-category-item`: Любое, Без питания, Завтрак, Полупансион,
+Полный пансион, Всё включено, Ультра всё включено.
+
+**Рейсы** (`section.slsf-flight-info-wrapper`, чекбоксы `label.uis-checkbox__label_flight-info`
+по тексту + вложенный `input`): Чартерные, Прямые, **Без стопов** (вкл. по умолчанию),
+Моментальное подтверждение (`uis-item_instantApprove`), С трансфером.
+
+**Курорт** (`#ui-select-resort`): иерархический чек-лист — регион разворачивается кнопкой
+`.uis-checkbox__label-button_plus`, пункты `.uis-checkbox__label-title`. Множественный выбор.
+
+**Тип/услуги отеля** (`#hotelServiceContainer`): сгруппированный список `.group-wrapper`
+(`.group-title`) с `.uis-item.filter-item` (radio/checkbox), есть `.reset-button`,
+недоступные — `.filter-item.disabled`.
+
+**Конкретный отель** (`#ui-select-hotels`): селект с поиском; зависит от выбранной
+страны/курорта (без них может не раскрываться — открывать после страны).
+
+**Цена** (`fieldset.uis-item_price-input`): `input.uis-text_price-input` (placeholder «от»;
+аналогичный «до»).
+
+**Туристы**: `#touristSelector .tourist-current-select`; взрослые — `.adult-counter-btn`
+(плюс) / `.adult-counter-btn--minus`; дети — `.child-counter__add-btn` → список возрастов
+`.child-counter__list .child-counter__list__item` (0–17 лет), выбранные в `.child-list-container`.
+
+**Кнопка поиска**: `[data-testid="b2b.search-form.search-btn"]`.
+
+---
+
+## 4. Детали фильтров Tourvisor (классы блоков)
+
+Все блоки имеют семантичные классы `TV<Name>Filter` (стабильны):
+`TVDepartureFilter`, `TVCountryFilter`, `TVHotelSearchFilter` (Направление),
+`TVFlyDatesFilter`, `TVTripDurationFilter` (даты проживания), `TVNightsFilter`,
+`TVTouristsFilter`, `TVStarsFilter` (Класс отеля), `TVResortTreeFilter` (курорт),
+`TVBudgetFilter` (Бюджет), `TVAccommodationFilter` (Тип отеля), `TVMealFilter` (Питание),
+`TVHotelRatingFilter` (Рейтинг), `TVHotelListFilter` (конкретный отель, с вкладками/поиском
+`TVTabListWithSearchInput`), `TVOperatorListFilter`, `TVFlightTypeFilter` (Только чартер),
+`TVInstantConfirmationFilter` (Гарантия мест).
+
+Календарь: `t-td.TVCalendarTableCell[data-value='D']`, доступный — `.TVCalendarAvailableDayCell`,
+недоступный — `.TVCalendarDisabledCell`. Навигация только вперёд:
+`.TVCalendarSliderViewRightButton:not(.TVDisabled)`. Ночи: `.TVRangeTableCell` с `.TVRangeCellLabel`.
+
+⚠️ **Парсинг результатов:** панель операторов `.TVOperatorFilterColumnBody` подгружает
+цены асинхронно и **пересортировывает строки** → читать только атомарным `page.evaluate`
+после исчезновения `.TVSpinner`.
+
+---
+
+## 5. Результаты
+
+**Tourvisor:** карточки `.TVResultItem`; панель операторов по `.TVResultToolbarOperators` →
+`.TVOperatorFilterColumnBody .TVOperatorFilterItemControl` (имя `.TVCheckBox`, цена
+`.TVOperatorFilterItemPriceValue` + `.TVOperatorFilterItemPriceCurrency`).
+
+**Sletat (по прототипу, проверить вживую на Фазе 3):** «нет туров» —
 `.tour-not-found-message`; счётчик `div.search-status__tours-count`; панель операторов
-`.blinchik__operator-container` → `li.blinchik__operator-item`, имя в `label`, цена
-`.blinchik__price .sr-currency-rub`, недоступный — `label.uis-checkbox__label_disabled`.
+`.blinchik__operator-container` → `li.blinchik__operator-item` (имя в `label`, цена
+`.blinchik__price .sr-currency-rub`, недоступный — `label.uis-checkbox__label_disabled`).
 
 ---
 
-## Сравнение и выводы для архитектуры
+## 6. Предлагаемая расширенная модель `SearchParams`
+
+Чтобы пользователь мог задать все фильтры перед прогоном:
+
+```python
+class SearchParams:
+    # обязательные
+    departure_city: str
+    destination_country: str
+    date_from: date
+    date_to: date
+    nights_min: int
+    nights_max: int
+    adults: int
+    children_ages: list[int] = []
+
+    # назначение
+    resorts: list[str] = []            # курорты/города прилёта (Sletat дерево, TVResortTree)
+
+    # отель
+    hotel_stars: list[int] = []        # [3,4,5]; пусто = любая
+    meals: list[str] = []              # коды: BB/HB/FB/AI/UAI/none; пусто = любое
+    hotel_types: list[str] = []        # тип отеля
+    hotels: list[str] = []             # конкретные отели (имена/ID)
+    hotel_rating_min: float | None = None
+
+    # рейсы / режим
+    without_flight: bool = False       # вкладка «Отели» (Sletat)
+    charter_only: bool = False
+    direct_only: bool = False
+    no_stops: bool = False
+    with_transfer: bool = False
+    instant_confirmation: bool = False
+
+    # прочее
+    operators: list[str] = []
+    price_min: Decimal | None = None
+    price_max: Decimal | None = None
+    currency: str = "RUB"
+```
+
+Стратегия совместимости: общие поля поддерживают обе площадки; уникальные (метро,
+без стопов, трансфер) применяются провайдером, если он их умеет, иначе игнорируются.
+Нормализация значений (звёзды, коды питания, имена операторов/курортов) — таблицами
+соответствия на уровне каждого провайдера. Возраст детей: Tourvisor режет >15.
+
+---
+
+## 7. Хрупкость и устойчивость
 
 | Аспект | Tourvisor | Sletat |
 |---|---|---|
-| Стабильность классов | Высокая (`TV*` семантичны) | Смешанная (BEM + хеши) |
-| Якорные селекторы | классы `TV*`, тег `t-td` | `data-testid`, `id`, BEM; структура для хешей |
-| Дети (возраст) | «до 2», 2…15 | 0…17 (полнее) |
-| Ночи | UI-диапазон (клики) | прямые инпуты + JS-событие |
-| Главная хрупкость | async-пересортировка цен в панели операторов | обфусцированные CSS-in-JS классы |
-| Длительность поиска | ~20–90 с | ~до 90 с (есть `search-status`) |
+| Стабильность классов | высокая (`TV*`) | смешанная (BEM + хеши + хеш-суффиксы в id) |
+| Якоря | `TV*`, тег `t-td` | `data-testid`, `id`-префиксы, BEM, структура |
+| Дети (возраст) | «до 2», 2…15 | 0…17 |
+| Без перелёта | ⚠️ уточнить | вкладка «Отели» |
+| Главная хрупкость | async-пересортировка цен | обфусцированные CSS-in-JS классы |
 
-**Следствия:**
-- Селекторы каждого провайдера держать в одном месте (модуль/константы), как сейчас.
-- Парсинг результатов — только атомарным снимком DOM после завершения дозагрузки.
-- На падении — скриншот + сохранять `raw_label` для сверки.
-- Health-check (Фаза 6): smoke, проверяющий наличие ключевых якорных селекторов на обеих формах, чтобы ловить редизайн заранее.
-- Возраст детей нормализовать под каждую площадку (Tourvisor режет >15).
+Следствия: селекторы централизовать по провайдеру; результаты снимать атомарно;
+скриншот при падении; health-check (Фаза 6) проверяет наличие якорных селекторов и
+ключевых фильтров на обеих формах, чтобы ловить редизайн заранее.
