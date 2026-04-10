@@ -19,10 +19,11 @@
 Переключение «с перелётом / без перелёта» также доступно кнопками
 `[data-testid="b2b.search-form.switch-search-type.tours-btn"]` и `…hotels-btn`.
 
-**Tourvisor** — основной режим «пакетные туры» (search.php). Отдельной вкладки «без
-перелёта» на форме нет; есть раздельные `TVFlyDatesFilter` (даты вылета) и
-`TVTripDurationFilter` (даты проживания). ⚠️ Режим «только отель/без перелёта»
-требует уточнения (возможно отдельный раздел сайта).
+**Tourvisor** — `search.php` для туров; режим **без перелёта** = город вылета
+«**Без перелёта**» в `TVDepartureFilter` (отдельная точка входа `tourvisor.ru/poisk-otelej`
+с тем же `TV*`-фреймворком и теми же фильтрами/результатами). Раздельные `TVFlyDatesFilter`
+(даты вылета) и `TVTripDurationFilter` (даты проживания). Подробности динамики выдачи и
+сигнала завершения — в `RESULTS.md`.
 
 ---
 
@@ -47,7 +48,7 @@
 | Только прямые | `direct_only` | «Прямые» (flight-info) | (в составе рейсов) |
 | Без стопов | `no_stops` | «Без стопов» (вкл. по умолч.) | — |
 | С трансфером | `with_transfer` | «С трансфером» (flight-info) | — |
-| Без перелёта | `without_flight` | вкладка «Отели» / `switch-search-type.hotels-btn` | ⚠️ требует уточнения |
+| Без перелёта (режим Отели) | `search_mode="hotels"` | вкладка «Отели» / `switch-search-type.hotels-btn` | город вылета «Без перелёта» / `/poisk-otelej` |
 | Моментальное подтв. | `instant_confirmation` | «Моментальное подтверждение» | `TVInstantConfirmationFilter` |
 | Диапазон цен | `price_min`/`max` | `input.uis-text_price-input` | `TVBudgetFilter` |
 | Валюта | `currency` | `#ui-select-currency_selector` | — |
