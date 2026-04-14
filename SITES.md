@@ -31,8 +31,8 @@
 
 | Фильтр | Поле модели | Sletat | Tourvisor |
 |---|---|---|---|
-| Город вылета | `departure_city` | `input.excludeClickOutside` → `.city-selector-list ul li button` | `div.TVDepartureFilter` |
-| Страна прилёта | `destination_country` | `#ui-select-country-to` | `div.TVCountryFilter` |
+| Город вылета | `departure_city` | `input.excludeClickOutside` — **ВВОДИТЬ ТЕКСТОМ** (не все города в списке, напр. Екатеринбург), затем `.city-selector-list ul li button` | `div.TVDepartureFilter` |
+| Страна прилёта | `destination_country` | `#ui-select-country-to` → **набрать текст** (фильтрует, напр. Мальдивы), затем `span.slsf-country-to__select-text` | `div.TVCountryFilter` |
 | Курорт/город прилёта | `resorts[]` | `#ui-select-resort` (дерево регион→курорт) | `TVResortTreeFilter` |
 | Даты вылета | `date_from`/`date_to` | `div.containerTitle` (react-date-range) | `div.TVFlyDatesFilter` |
 | Ночей (диапазон) | `nights_min`/`max` | `#ui-select-nightsMin` / `#ui-select-nightsMax` | `div.TVNightsFilter` |
@@ -89,6 +89,28 @@
 `.child-counter__list .child-counter__list__item` (0–17 лет), выбранные в `.child-list-container`.
 
 **Кнопка поиска**: `[data-testid="b2b.search-form.search-btn"]`.
+
+**Ввод города/страны (важно):** не все значения есть в дефолтном списке (напр.
+Екатеринбург, Мальдивы). Поле города (`input.excludeClickOutside`) и страны
+(`#ui-select-country-to`) **фильтруются при наборе текста** → всегда вводить текст и
+выбирать из отфильтрованных опций, а не полагаться на видимый список.
+
+**Сортировка выдачи** (`.new-search-options`): `ul.uis-button-group` с `li.uis-button-group__button`
+«Цена» и «Популярность». ⚠️ **По умолчанию активна «Популярность»** (`_popular _active`),
+не цена. Для надёжной мин. цены кликнуть «Цена»:
+`//li[contains(@class,'uis-button-group__button') and normalize-space(text())='Цена']`
+(проверено: переупорядочивает карточки по возрастанию). Также «Вид: Полный/Краткий».
+
+**Панель операторов с мин. ценами** (`.blinchik`, сворачивается `_maximized/_visible`):
+`.blinchik__select-all` (чекбокс «Все») + `ul.blinchik__operator-list` →
+`li.blinchik__operator-item` (имя в `label`, мин. цена в `.blinchik__price .sr-currency-rub`,
+чекбокс `_checked`). Пустая цена у оператора = нет туров. Это источник per-operator мин. цен
+и способ **выбрать одного оператора** (снять «Все», отметить нужного — выдача фильтруется).
+
+**Выбор одного оператора (как параметр сравнения)** через форму: `.uis-text_tour-operator`
+→ снять «все» (`.slsf-tour-operator__selected-block input`) → набрать имя → отметить
+`label.uis-checkbox__label_tour-operator` (имя в `span.slsf-text-bold`). Проверено: выдача
+ограничивается выбранным оператором.
 
 ---
 
