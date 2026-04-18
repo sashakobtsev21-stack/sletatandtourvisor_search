@@ -15,7 +15,13 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from toursearch.models import ComparisonReport, Offer, ProviderResult, SearchParams
+from toursearch.models import (
+    ComparisonReport,
+    HotelOffer,
+    Offer,
+    ProviderResult,
+    SearchParams,
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -29,6 +35,7 @@ CREATE TABLE IF NOT EXISTS provider_results (
     provider         TEXT NOT NULL,
     success          INTEGER NOT NULL,
     duration_seconds REAL NOT NULL,
+    search_mode      TEXT NOT NULL DEFAULT 'tours',
     error            TEXT,
     screenshot_path  TEXT
 );
@@ -41,6 +48,19 @@ CREATE TABLE IF NOT EXISTS offers (
     currency           TEXT NOT NULL,
     raw_label          TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS hotel_offers (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider_result_id INTEGER NOT NULL REFERENCES provider_results(id) ON DELETE CASCADE,
+    provider           TEXT NOT NULL,
+    hotel_name         TEXT NOT NULL,
+    price              TEXT NOT NULL,
+    currency           TEXT NOT NULL,
+    stars              INTEGER,
+    rating             REAL,
+    destination        TEXT,
+    operators_count    INTEGER,
+    raw_label          TEXT NOT NULL
+);
 """
 
 
@@ -49,7 +69,7 @@ class RunSummary(BaseModel):
 
     run_id: int
     run_at: datetime
-    cheapest_operator: str | None = None
+    cheapest_label: str | None = None       # оператор (туры) или отель (отели)
     cheapest_price: Decimal | None = None
     cheapest_provider: str | None = None
     fastest_provider: str | None = None
@@ -85,13 +105,14 @@ class Storage:
         for result in report.results:
             rcur = self._conn.execute(
                 """INSERT INTO provider_results
-                   (run_id, provider, success, duration_seconds, error, screenshot_path)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                   (run_id, provider, success, duration_seconds, search_mode, error, screenshot_path)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (
                     run_id,
                     result.provider,
                     int(result.success),
                     result.duration_seconds,
+                    result.search_mode,
                     result.error,
                     result.screenshot_path,
                 ),
@@ -109,6 +130,25 @@ class Storage:
                         str(offer.price),
                         offer.currency,
                         offer.raw_label,
+                    ),
+                )
+            for ho in result.hotel_offers:
+                self._conn.execute(
+                    """INSERT INTO hotel_offers
+                       (provider_result_id, provider, hotel_name, price, currency,
+                        stars, rating, destination, operators_count, raw_label)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        pr_id,
+                        ho.provider,
+                        ho.hotel_name,
+                        str(ho.price),
+                        ho.currency,
+                        ho.stars,
+                        ho.rating,
+                        ho.destination,
+                        ho.operators_count,
+                        ho.raw_label,
                     ),
                 )
         self._conn.commit()
@@ -137,12 +177,31 @@ class Storage:
                 )
                 for o in offer_rows
             ]
+            ho_rows = self._conn.execute(
+                "SELECT * FROM hotel_offers WHERE provider_result_id = ? ORDER BY id", (pr["id"],)
+            ).fetchall()
+            hotel_offers = [
+                HotelOffer(
+                    provider=h["provider"],
+                    hotel_name=h["hotel_name"],
+                    price=Decimal(h["price"]),
+                    currency=h["currency"],
+                    stars=h["stars"],
+                    rating=h["rating"],
+                    destination=h["destination"],
+                    operators_count=h["operators_count"],
+                    raw_label=h["raw_label"],
+                )
+                for h in ho_rows
+            ]
             results.append(
                 ProviderResult(
                     provider=pr["provider"],
                     success=bool(pr["success"]),
                     duration_seconds=pr["duration_seconds"],
+                    search_mode=pr["search_mode"],
                     offers=offers,
+                    hotel_offers=hotel_offers,
                     error=pr["error"],
                     screenshot_path=pr["screenshot_path"],
                 )
@@ -166,7 +225,7 @@ class Storage:
                 RunSummary(
                     run_id=row["id"],
                     run_at=report.run_at,
-                    cheapest_operator=cheapest.operator if cheapest else None,
+                    cheapest_label=cheapest.label if cheapest else None,
                     cheapest_price=cheapest.price if cheapest else None,
                     cheapest_provider=cheapest.provider if cheapest else None,
                     fastest_provider=report.fastest_provider,

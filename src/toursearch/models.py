@@ -8,17 +8,26 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+SearchMode = Literal["tours", "hotels"]
+SortBy = Literal["price", "popularity"]
+
+# Допустимые коды питания (унифицированные; провайдер мапит на свои подписи).
+MEAL_CODES = {"none", "BB", "HB", "FB", "AI", "UAI"}
+
 
 class SearchParams(BaseModel):
-    """Параметры поиска тура, вводимые пользователем.
+    """Параметры поиска, вводимые пользователем.
 
-    Единый формат для всех площадок: каждый провайдер сам переводит эти поля
-    в действия на своей форме.
+    Единый формат для всех площадок и обоих режимов (туры/отели). Каждый провайдер
+    переводит эти поля в действия на своей форме; неподдерживаемые конкретной
+    площадкой поля игнорируются провайдером.
     """
 
+    # --- обязательное ---
     departure_city: str
     destination_country: str
     date_from: date
@@ -27,18 +36,51 @@ class SearchParams(BaseModel):
     nights_max: int = Field(ge=1)
     adults: int = Field(ge=1)
     children_ages: list[int] = Field(default_factory=list)
-    operators: list[str] = Field(default_factory=list)  # пусто = все операторы
+
+    # --- режим поиска ---
+    search_mode: SearchMode = "tours"  # "hotels" = без перелёта, только проживание
+
+    # --- назначение ---
+    resorts: list[str] = Field(default_factory=list)  # курорты/города прилёта; пусто = любой
+
+    # --- отель ---
+    hotel_stars: list[int] = Field(default_factory=list)  # [3,4,5]; пусто = любая
+    meals: list[str] = Field(default_factory=list)         # коды MEAL_CODES; пусто = любое
+    hotel_types: list[str] = Field(default_factory=list)
+    hotels: list[str] = Field(default_factory=list)        # конкретные отели (имена/ID)
+    hotel_rating_min: float | None = None
+
+    # --- операторы ---
+    operators: list[str] = Field(default_factory=list)     # пусто = все
+
+    # --- рейсы / опции тура ---
     charter_only: bool = False
     direct_only: bool = False
+    no_stops: bool = False
+    with_transfer: bool = False
+    instant_confirmation: bool = False
+
+    # --- цена / сортировка / валюта ---
+    price_min: Decimal | None = None
+    price_max: Decimal | None = None
+    currency: str = "RUB"
+    sort_by: SortBy = "price"  # для надёжной мин. цены по умолчанию сортируем по цене
 
     @model_validator(mode="after")
-    def _check_ranges(self) -> SearchParams:
+    def _validate(self) -> SearchParams:
         if self.date_to < self.date_from:
             raise ValueError("date_to не может быть раньше date_from")
         if self.nights_max < self.nights_min:
             raise ValueError("nights_max не может быть меньше nights_min")
         if any(age < 0 or age > 17 for age in self.children_ages):
             raise ValueError("возраст ребёнка должен быть в диапазоне 0..17")
+        if any(s < 1 or s > 5 for s in self.hotel_stars):
+            raise ValueError("звёздность должна быть в диапазоне 1..5")
+        bad_meals = [m for m in self.meals if m not in MEAL_CODES]
+        if bad_meals:
+            raise ValueError(f"недопустимые коды питания: {bad_meals}; разрешены {sorted(MEAL_CODES)}")
+        if self.price_min is not None and self.price_max is not None and self.price_max < self.price_min:
+            raise ValueError("price_max не может быть меньше price_min")
         return self
 
     @property
@@ -47,32 +89,60 @@ class SearchParams(BaseModel):
 
 
 class Offer(BaseModel):
-    """Одно предложение от туроператора.
-
-    Глубина данных «как сейчас»: оператор + минимальная цена. Поля отеля/рейса
-    намеренно отсутствуют — закладываются на будущее отдельной задачей.
-    """
+    """Предложение туроператора (режим «Туры»): оператор + минимальная цена."""
 
     provider: str
     operator: str
     price: Decimal
     currency: str = "RUB"
-    raw_label: str = ""  # исходный текст с сайта — для отладки и сверки
+    raw_label: str = ""
+
+    @property
+    def label(self) -> str:
+        return self.operator
+
+
+class HotelOffer(BaseModel):
+    """Предложение по отелю (режим «Отели»): отель + цена и характеристики."""
+
+    provider: str
+    hotel_name: str
+    price: Decimal
+    currency: str = "RUB"
+    stars: int | None = None
+    rating: float | None = None
+    destination: str | None = None
+    operators_count: int | None = None
+    raw_label: str = ""
+
+    @property
+    def label(self) -> str:
+        stars = f" {self.stars}*" if self.stars else ""
+        return f"{self.hotel_name}{stars}"
+
+
+PricedItem = Offer | HotelOffer
 
 
 class ProviderResult(BaseModel):
-    """Результат поиска на одной площадке."""
+    """Результат поиска на одной площадке в заданном режиме."""
 
     provider: str
     success: bool
-    duration_seconds: float  # от клика «Найти» до завершения парсинга
-    offers: list[Offer] = Field(default_factory=list)
+    duration_seconds: float  # от клика «Найти» до полного завершения поиска
+    search_mode: SearchMode = "tours"
+    offers: list[Offer] = Field(default_factory=list)              # режим «Туры»
+    hotel_offers: list[HotelOffer] = Field(default_factory=list)   # режим «Отели»
     error: str | None = None
     screenshot_path: str | None = None
 
+    def priced_items(self) -> list[PricedItem]:
+        """Все предложения с ценой независимо от режима."""
+        return [*self.offers, *self.hotel_offers]
+
     @property
-    def cheapest(self) -> Offer | None:
-        return min(self.offers, key=lambda o: o.price, default=None)
+    def cheapest(self) -> PricedItem | None:
+        return min(self.priced_items(), key=lambda o: o.price, default=None)
 
 
 class ComparisonReport(BaseModel):
@@ -83,18 +153,18 @@ class ComparisonReport(BaseModel):
     results: list[ProviderResult] = Field(default_factory=list)
 
     @property
-    def _offers_with_results(self) -> list[Offer]:
-        return [o for r in self.results if r.success for o in r.offers]
+    def _priced(self) -> list[PricedItem]:
+        return [item for r in self.results if r.success for item in r.priced_items()]
 
     @property
-    def cheapest(self) -> Offer | None:
+    def cheapest(self) -> PricedItem | None:
         """Лучшее предложение: минимальная цена среди всех площадок."""
-        return min(self._offers_with_results, key=lambda o: o.price, default=None)
+        return min(self._priced, key=lambda o: o.price, default=None)
 
     @property
-    def most_expensive(self) -> Offer | None:
+    def most_expensive(self) -> PricedItem | None:
         """Худшее предложение: максимальная цена среди всех площадок."""
-        return max(self._offers_with_results, key=lambda o: o.price, default=None)
+        return max(self._priced, key=lambda o: o.price, default=None)
 
     @property
     def _successful_results(self) -> list[ProviderResult]:

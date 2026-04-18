@@ -30,8 +30,16 @@ def search(
     nights_max: int = typer.Option(10, "--nights-max"),
     adults: int = typer.Option(2, "--adults"),
     child_age: list[int] = typer.Option([], "--child", help="Возраст ребёнка (можно несколько раз)"),
+    mode: str = typer.Option("tours", "--mode", help="Режим: tours | hotels (без перелёта)"),
+    resort: list[str] = typer.Option([], "--resort", help="Курорт прилёта (можно несколько раз)"),
+    star: list[int] = typer.Option([], "--star", help="Звёздность отеля, напр. --star 4 --star 5"),
+    meal: list[str] = typer.Option([], "--meal", help="Питание: BB/HB/FB/AI/UAI/none"),
+    hotel: list[str] = typer.Option([], "--hotel", help="Конкретный отель (можно несколько раз)"),
+    operator: list[str] = typer.Option([], "--operator", help="Туроператор (для сравнения одного ТО)"),
     charter_only: bool = typer.Option(False, "--charter-only"),
     direct_only: bool = typer.Option(False, "--direct-only"),
+    price_max: float = typer.Option(None, "--price-max", help="Максимальная цена"),
+    sort_by: str = typer.Option("price", "--sort", help="Сортировка: price | popularity"),
 ) -> None:
     """Собрать параметры поиска (запуск провайдеров появится на Фазе 4)."""
     params = SearchParams(
@@ -43,8 +51,16 @@ def search(
         nights_max=nights_max,
         adults=adults,
         children_ages=child_age,
+        search_mode=mode,
+        resorts=resort,
+        hotel_stars=star,
+        meals=meal,
+        hotels=hotel,
+        operators=operator,
         charter_only=charter_only,
         direct_only=direct_only,
+        price_max=price_max,
+        sort_by=sort_by,
     )
     typer.echo("Параметры поиска приняты:")
     typer.echo(params.model_dump_json(indent=2))

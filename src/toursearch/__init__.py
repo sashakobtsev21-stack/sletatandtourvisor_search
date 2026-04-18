@@ -2,6 +2,7 @@
 
 from toursearch.models import (
     ComparisonReport,
+    HotelOffer,
     Offer,
     ProviderResult,
     SearchParams,
@@ -10,6 +11,7 @@ from toursearch.models import (
 __all__ = [
     "SearchParams",
     "Offer",
+    "HotelOffer",
     "ProviderResult",
     "ComparisonReport",
 ]
