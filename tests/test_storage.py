@@ -65,7 +65,7 @@ def test_list_runs_orders_newest_first(tmp_path):
     runs = storage.list_runs()
     assert len(runs) == 2
     assert runs[0].run_id == id2  # свежий сверху
-    assert runs[0].cheapest_operator == "Coral"
+    assert runs[0].cheapest_label == "Coral"
     assert runs[0].cheapest_price == Decimal("80000")
     assert runs[0].fastest_provider == "tourvisor"
     storage.close()
