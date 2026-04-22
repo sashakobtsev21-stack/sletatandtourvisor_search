@@ -11,7 +11,12 @@ import pytest
 pytest.importorskip("playwright")  # провайдер требует опциональную группу 'browser'
 
 from toursearch.providers import get_provider, load_browser_providers
-from toursearch.providers.tourvisor import _parse_price, build_offers
+from toursearch.providers.tourvisor import (
+    _parse_price,
+    _split_name_stars,
+    build_hotel_offers,
+    build_offers,
+)
 
 
 def test_parse_price_strips_spaces_and_currency():
@@ -52,6 +57,29 @@ def test_build_offers_skips_empty_rows():
     ]
     offers = build_offers("tourvisor", rows)
     assert [o.operator for o in offers] == ["Coral"]
+
+
+def test_split_name_stars():
+    assert _split_name_stars("Mert Seaside Hotel 3*") == ("Mert Seaside Hotel", 3)
+    assert _split_name_stars("Rixos Premium 5 *") == ("Rixos Premium", 5)
+    assert _split_name_stars("Some Villa") == ("Some Villa", None)
+
+
+def test_build_hotel_offers():
+    rows = [
+        {"title": "Mert Seaside Hotel 3*", "subtitle": "Мармарис, 20 м до моря", "rating": "3.8", "price": "92 735"},
+        {"title": "Rixos 5*", "subtitle": "Белек", "rating": "9,4", "price": "250 000"},
+        {"title": "NoPrice 4*", "subtitle": "X", "rating": "", "price": ""},  # без цены — пропуск
+    ]
+    offers = build_hotel_offers("tourvisor", rows)
+    assert len(offers) == 2
+    first = offers[0]
+    assert first.hotel_name == "Mert Seaside Hotel"
+    assert first.stars == 3
+    assert first.rating == 3.8
+    assert first.price == Decimal("92735")
+    assert first.label == "Mert Seaside Hotel 3*"
+    assert offers[1].rating == 9.4  # запятая → точка
 
 
 def test_provider_is_registered():
