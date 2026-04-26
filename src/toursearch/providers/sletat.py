@@ -1,0 +1,470 @@
+"""Провайдер площадки Sletat (sletat.ru/b2b) на Playwright — главная площадка.
+
+Селекторы выверены живой инспекцией (см. SITES.md, RESULTS.md). Особенности,
+учтённые здесь:
+- город/страна ВВОДЯТСЯ текстом (не все значения есть в дефолтном списке);
+- по умолчанию сортировка по «Популярности» → переключаем на «Цена»;
+- режим «Отели» (без перелёта) = переключатель switch-search-type.hotels-btn;
+- сигнал завершения = стабилизация `.search-status__tours-count` и числа карточек
+  (спиннеры не считаем — это ленивые картинки);
+- туры → операторы с мин. ценой (панель `.blinchik`); отели → карточки `.search-result__list-item`.
+"""
+
+from __future__ import annotations
+
+import re
+import time
+from datetime import date, datetime
+from decimal import Decimal
+from pathlib import Path
+
+from playwright.async_api import Page, TimeoutError as PWTimeout, async_playwright
+
+from toursearch.models import HotelOffer, Offer, ProviderResult, SearchParams
+from toursearch.providers.base import register_provider
+
+_MONTHS_RU = [
+    "январь", "февраль", "март", "апрель", "май", "июнь",
+    "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+]
+
+# Унифицированные ключи операторов → отображаемые имена на Sletat.
+_OPERATOR_MAP = {
+    "anex": "Anex",
+    "biblioglobus": "Biblio Globus",
+    "funsun": "FUN and SUN",
+    "coral": "Coral",
+    "sunmar": "Sunmar",
+    "pegas": "Pegas Touristik",
+    "tez": "TEZ TOUR",
+    "intourist": "Intourist",
+    "travelata": "Travelata",
+}
+
+# Коды питания → подписи быстрых кнопок Sletat.
+_MEAL_BTN = {"BB": "BB", "HB": "HB", "FB": "FB", "AI": "AI", "UAI": "UAI"}
+
+
+def _parse_price(text: str) -> Decimal | None:
+    digits = re.sub(r"[^\d]", "", text or "")
+    return Decimal(digits) if digits else None
+
+
+def build_operator_offers(provider_name: str, rows: list[dict]) -> list[Offer]:
+    """Из строк панели операторов [{name, price}] → Offer (дедуп, мин. цена)."""
+    best: dict[str, tuple[Decimal, str]] = {}
+    for row in rows:
+        name = (row.get("name") or "").strip()
+        raw = (row.get("price") or "").strip()
+        price = _parse_price(raw)
+        if not name or price is None:
+            continue
+        if name not in best or price < best[name][0]:
+            best[name] = (price, raw)
+    return [
+        Offer(provider=provider_name, operator=n, price=p, currency="RUB", raw_label=r)
+        for n, (p, r) in best.items()
+    ]
+
+
+def build_hotel_offers(provider_name: str, rows: list[dict]) -> list[HotelOffer]:
+    """Из карточек [{name, stars, rating, destination, price, operators}] → HotelOffer."""
+    out: list[HotelOffer] = []
+    for row in rows:
+        name = (row.get("name") or "").strip()
+        price = _parse_price(row.get("price") or "")
+        if not name or price is None:
+            continue
+        rating = None
+        # рейтинг 0.0–10.0 с одним знаком после запятой; текст может слипаться с числом
+        # оценок («8.4230 оценок») → берём только ведущее «X.X».
+        m = re.search(r"(?:10|\d)[.,]\d", row.get("rating") or "")
+        if m:
+            try:
+                rating = float(m.group(0).replace(",", "."))
+            except ValueError:
+                rating = None
+        stars = row.get("stars") or None
+        ops = None
+        mo = re.search(r"(\d+)\s*оператор", row.get("operators") or "")
+        if mo:
+            ops = int(mo.group(1))
+        out.append(
+            HotelOffer(
+                provider=provider_name,
+                hotel_name=name,
+                stars=int(stars) if stars else None,
+                rating=rating,
+                destination=(row.get("destination") or "").strip() or None,
+                price=price,
+                currency="RUB",
+                operators_count=ops,
+                raw_label=(row.get("price") or "").strip(),
+            )
+        )
+    return out
+
+
+@register_provider("sletat")
+class SletatProvider:
+    """Поиск туров/отелей на sletat.ru/b2b."""
+
+    name = "sletat"
+    URL = "https://sletat.ru/b2b/"
+
+    def __init__(self, headless: bool = False, timeout_ms: int = 20_000) -> None:
+        self.headless = headless
+        self.timeout_ms = timeout_ms
+
+    async def search(self, params: SearchParams) -> ProviderResult:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(
+                headless=self.headless,
+                args=["--disable-blink-features=AutomationControlled", "--start-maximized"],
+            )
+            context = await browser.new_context(no_viewport=True, permissions=[])
+            await context.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+            )
+            page = await context.new_page()
+            page.set_default_timeout(self.timeout_ms)
+            start = time.monotonic()
+            try:
+                await page.goto(self.URL, wait_until="domcontentloaded")
+                await page.wait_for_timeout(3500)
+                await self._close_popups(page)
+                if params.search_mode == "hotels":
+                    await self._switch_to_hotels(page)
+                await self._fill_form(page, params)
+                await self._click_search(page)
+                start = time.monotonic()
+                await self._wait_for_completion(page)
+                if params.sort_by == "price":
+                    await self._sort_by_price(page)
+                if params.search_mode == "hotels":
+                    hotel_offers = await self._parse_hotels(page)
+                    offers = []
+                else:
+                    offers = await self._parse_operators(page)
+                    hotel_offers = []
+                return ProviderResult(
+                    provider=self.name,
+                    success=bool(offers or hotel_offers),
+                    duration_seconds=time.monotonic() - start,
+                    search_mode=params.search_mode,
+                    offers=offers,
+                    hotel_offers=hotel_offers,
+                )
+            except Exception as exc:  # noqa: BLE001
+                shot = await self._safe_screenshot(page)
+                return ProviderResult(
+                    provider=self.name,
+                    success=False,
+                    duration_seconds=time.monotonic() - start,
+                    search_mode=params.search_mode,
+                    error=f"{type(exc).__name__}: {exc}",
+                    screenshot_path=shot,
+                )
+            finally:
+                await browser.close()
+
+    # --- подготовка ---
+
+    async def _close_popups(self, page: Page) -> None:
+        for sel in (".icon-remove", "button[data-testid='layout.cookie-alert.accept-btn']"):
+            try:
+                await page.click(sel, timeout=3000)
+                await page.wait_for_timeout(300)
+            except PWTimeout:
+                pass
+
+    async def _switch_to_hotels(self, page: Page) -> None:
+        try:
+            await page.click("[data-testid='b2b.search-form.switch-search-type.hotels-btn']", timeout=5000)
+            await page.wait_for_timeout(1200)
+        except PWTimeout:
+            await page.click("xpath=//*[contains(@class,'tab') and normalize-space(text())='Отели']")
+            await page.wait_for_timeout(1200)
+
+    # --- заполнение формы ---
+
+    async def _fill_form(self, page: Page, params: SearchParams) -> None:
+        # В режиме «Отели» (без перелёта) поля города вылета нет — пропускаем.
+        if params.search_mode != "hotels":
+            await self._select_departure_city(page, params.departure_city)
+        await self._select_country(page, params.destination_country)
+        await self._select_dates(page, params.date_from, params.date_to)
+        await self._set_nights(page, params.nights_min, params.nights_max)
+        await self._select_tourists(page, params.adults, params.children_ages)
+        if params.operators:
+            await self._select_operators(page, params.operators)
+        if params.hotel_stars:
+            await self._select_stars(page, params.hotel_stars)
+        if params.meals:
+            await self._select_meals(page, params.meals)
+        await self._toggle_flight_flags(page, params)
+
+    async def _select_departure_city(self, page: Page, city: str) -> None:
+        await page.click("input.excludeClickOutside")
+        await page.fill("input.excludeClickOutside", "")
+        await page.type("input.excludeClickOutside", city, delay=40)
+        await page.wait_for_timeout(900)
+        await page.click(
+            f"xpath=//div[contains(@class,'city-selector-list')]//li//button[contains(.,'{city}')][1]"
+        )
+        await page.wait_for_timeout(500)
+
+    async def _select_country(self, page: Page, country: str) -> None:
+        await page.click("#ui-select-country-to")
+        await page.wait_for_timeout(500)
+        await page.keyboard.type(country, delay=40)
+        await page.wait_for_timeout(800)
+        await page.click(
+            f"xpath=//span[contains(@class,'slsf-country-to__select-text') and contains(text(),'{country}')][1]"
+        )
+        await page.wait_for_timeout(800)
+
+    async def _select_dates(self, page: Page, date_from: date, date_to: date) -> None:
+        await page.click("div.containerTitle")
+        await page.wait_for_selector("button.rdrDay")
+        await self._goto_month(page, date_from)
+        await self._click_day(page, date_from.day)
+        await page.wait_for_timeout(400)
+        await self._goto_month(page, date_to)
+        await self._click_day(page, date_to.day)
+        await page.wait_for_timeout(300)
+        try:
+            await page.click("button.date-range-date-label", timeout=4000)
+        except PWTimeout:
+            await page.mouse.click(10, 10)
+
+    async def _goto_month(self, page: Page, target: date) -> None:
+        for _ in range(18):
+            name = (await page.locator(".rdrMonthName").first.inner_text()).strip().lower()
+            parts = name.split()
+            cur_month = next((i + 1 for i, m in enumerate(_MONTHS_RU) if m in parts[0]), None)
+            cur_year = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else target.year
+            if cur_month is None:
+                return
+            diff = (target.year - cur_year) * 12 + (target.month - cur_month)
+            if diff == 0:
+                return
+            btn = (
+                "button.navigatorSlideButton.nextButton"
+                if diff > 0
+                else "button.navigatorSlideButton:not(.nextButton)"
+            )
+            await page.click(btn)
+            await page.wait_for_timeout(300)
+
+    async def _click_day(self, page: Page, day: int) -> None:
+        await page.click(
+            f"xpath=(//button[contains(@class,'rdrDay') and not(contains(@class,'rdrDayDisabled'))]"
+            f"[.//span[contains(@class,'customDay')]/span[1][normalize-space(text())='{day}']])[1]"
+        )
+
+    async def _set_nights(self, page: Page, nmin: int, nmax: int) -> None:
+        await page.evaluate(
+            """([mn, mx]) => {
+                const a = document.getElementById('ui-select-nightsMin');
+                const b = document.getElementById('ui-select-nightsMax');
+                if (a && b) {
+                    a.value = String(mn); b.value = String(mx);
+                    [a, b].forEach(e => {
+                        e.dispatchEvent(new Event('input', {bubbles: true}));
+                        e.dispatchEvent(new Event('change', {bubbles: true}));
+                    });
+                }
+            }""",
+            [nmin, nmax],
+        )
+        await page.wait_for_timeout(400)
+
+    async def _select_tourists(self, page: Page, adults: int, children_ages: list[int]) -> None:
+        await page.click("#touristSelector .tourist-current-select")
+        await page.wait_for_timeout(500)
+        label = page.locator(".adult-counter-label")
+        current = int(re.search(r"\d+", await label.inner_text()).group())
+        while current != adults:
+            if current < adults:
+                await page.click("button.adult-counter-btn:not(.adult-counter-btn--minus)")
+                current += 1
+            else:
+                await page.click("button.adult-counter-btn--minus")
+                current -= 1
+            await page.wait_for_timeout(200)
+        for age in children_ages:
+            await page.click("button.child-counter__add-btn")
+            await page.wait_for_selector(".child-counter__list")
+            await page.click(
+                f"xpath=//div[contains(@class,'child-counter__list__item') and "
+                f"starts-with(normalize-space(text()), '{age} ')]"
+            )
+            await page.wait_for_timeout(300)
+        # закрыть блок
+        await page.click("#touristSelector .tourist-current-select")
+        await page.wait_for_timeout(300)
+
+    async def _select_operators(self, page: Page, operators: list[str]) -> None:
+        await page.click(".uis-text_tour-operator")
+        await page.wait_for_timeout(700)
+        # снять «все»
+        try:
+            await page.evaluate(
+                """() => { const c = document.querySelector('.slsf-tour-operator__selected-block input');
+                          if (c && c.checked) c.click(); }"""
+            )
+            await page.wait_for_timeout(400)
+        except Exception:
+            pass
+        for key in operators:
+            name = _OPERATOR_MAP.get(key.lower(), key)
+            try:
+                await page.fill(".uis-text_tour-operator", "")
+                await page.type(".uis-text_tour-operator", name, delay=40)
+                await page.wait_for_timeout(700)
+                await page.click(
+                    f"xpath=//label[contains(@class,'tour-operator')]"
+                    f"[.//span[@class='slsf-text-bold' and contains(normalize-space(.),'{name}')]][1]",
+                    timeout=4000,
+                )
+                await page.wait_for_timeout(300)
+            except PWTimeout:
+                continue
+        await page.keyboard.press("Escape")
+
+    async def _select_stars(self, page: Page, stars: list[int]) -> None:
+        try:
+            await page.click("#hotelCategoryOpenButton", timeout=4000)
+            await page.wait_for_timeout(400)
+            for s in stars:
+                btn = page.locator(
+                    f"xpath=//div[@id='hotelCategoryContainer']//button[contains(@class,'hot-buttons__button')"
+                    f" and contains(normalize-space(text()), '{s}')]"
+                )
+                if await btn.count():
+                    await btn.first.click()
+                    await page.wait_for_timeout(200)
+            await page.keyboard.press("Escape")
+        except PWTimeout:
+            pass
+
+    async def _select_meals(self, page: Page, meals: list[str]) -> None:
+        try:
+            await page.click("#mealsOpenButton", timeout=4000)
+            await page.wait_for_timeout(400)
+            for code in meals:
+                btn_text = _MEAL_BTN.get(code)
+                if not btn_text:
+                    continue
+                btn = page.locator(
+                    f"xpath=//div[@id='mealsContainer']//button[contains(@class,'hot-buttons__button')"
+                    f" and normalize-space(text())='{btn_text}']"
+                )
+                if await btn.count():
+                    await btn.first.click()
+                    await page.wait_for_timeout(200)
+            await page.keyboard.press("Escape")
+        except PWTimeout:
+            pass
+
+    async def _toggle_flight_flags(self, page: Page, params: SearchParams) -> None:
+        async def set_flag(text: str, enable: bool) -> None:
+            if not enable:
+                return
+            loc = page.locator(
+                f"xpath=//label[contains(@class,'uis-checkbox__label_flight-info') and contains(., '{text}')]"
+            )
+            if await loc.count() == 0:
+                return
+            cls = await loc.first.get_attribute("class") or ""
+            if "uis-checkbox__label_checked" not in cls:
+                await loc.first.click()
+                await page.wait_for_timeout(200)
+
+        await set_flag("Чартерные", params.charter_only)
+        await set_flag("Прямые", params.direct_only)
+        await set_flag("С трансфером", params.with_transfer)
+
+    async def _click_search(self, page: Page) -> None:
+        await page.click("[data-testid='b2b.search-form.search-btn']")
+
+    # --- ожидание / сортировка / парсинг ---
+
+    async def _wait_for_completion(self, page: Page, timeout_s: int = 120) -> None:
+        """Завершение = текст статуса и число карточек стабильны (спиннеры не в счёт)."""
+        deadline = time.monotonic() + timeout_s
+        last = None
+        stable = 0
+        while time.monotonic() < deadline:
+            await page.wait_for_timeout(1500)
+            try:
+                items = await page.locator(".search-result__list-item").count()
+            except Exception:
+                items = -1
+            try:
+                status = (await page.locator(".search-status__tours-count").first.inner_text()).strip()
+            except Exception:
+                status = ""
+            try:
+                not_found = await page.locator(".tour-not-found-message").count()
+            except Exception:
+                not_found = 0
+            key = (items, status)
+            stable = stable + 1 if key == last else 0
+            last = key
+            if stable >= 3 and (items > 0 or not_found > 0):
+                return
+
+    async def _sort_by_price(self, page: Page) -> None:
+        try:
+            await page.click(
+                "xpath=//li[contains(@class,'uis-button-group__button') and normalize-space(text())='Цена']",
+                timeout=4000,
+            )
+            await page.wait_for_timeout(2500)
+        except PWTimeout:
+            pass
+
+    async def _parse_operators(self, page: Page) -> list[Offer]:
+        rows = await page.evaluate(
+            """() => {
+                const out = [];
+                document.querySelectorAll('li.blinchik__operator-item').forEach(it => {
+                    const name = (it.querySelector('label')?.textContent || '').trim();
+                    const price = (it.querySelector('.blinchik__price .sr-currency-rub, .sr-currency-rub')?.textContent || '').trim();
+                    if (name) out.push({name, price});
+                });
+                return out;
+            }"""
+        )
+        return build_operator_offers(self.name, rows)
+
+    async def _parse_hotels(self, page: Page) -> list[HotelOffer]:
+        rows = await page.evaluate(
+            """() => {
+                const out = [];
+                document.querySelectorAll('.search-result__list-item').forEach(it => {
+                    const name = (it.querySelector('.search-result__full-hotel-name-subscription, .search-result-text')?.textContent || '').trim();
+                    const cat = it.querySelector('.search-result-category');
+                    let stars = 0;
+                    if (cat) { const m = (cat.className || '').match(/_stars-(\\d)/); if (m) stars = +m[1]; }
+                    const rating = (it.querySelector('.search-result-rating')?.textContent || '').trim();
+                    const destination = (it.querySelector('.search-result__full-group-destination')?.textContent || '').trim();
+                    const price = (it.querySelector('.search-result__full-price')?.textContent || '').trim();
+                    const operators = (it.querySelector('.search-result__full-group-operators-amount')?.textContent || '').trim();
+                    if (name && price) out.push({name, stars, rating, destination, price, operators});
+                });
+                return out;
+            }"""
+        )
+        return build_hotel_offers(self.name, rows)
+
+    async def _safe_screenshot(self, page: Page) -> str | None:
+        try:
+            Path("screenshots").mkdir(exist_ok=True)
+            path = f"screenshots/sletat_{datetime.now():%Y%m%d_%H%M%S}.png"
+            await page.screenshot(path=path, full_page=False)
+            return path
+        except Exception:
+            return None
