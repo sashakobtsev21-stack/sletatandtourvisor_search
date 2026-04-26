@@ -22,4 +22,4 @@ def load_browser_providers() -> None:
     Вынесено в функцию, чтобы базовый импорт пакета не требовал установленного
     Playwright (он в опциональной группе зависимостей 'browser').
     """
-    from toursearch.providers import tourvisor  # noqa: F401
+    from toursearch.providers import sletat, tourvisor  # noqa: F401
