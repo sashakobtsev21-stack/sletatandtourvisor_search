@@ -1,17 +1,16 @@
-"""CLI-точка входа.
-
-На Фазе 0 это заглушка: парсит параметры и показывает, что будет искаться.
-Реальный запуск провайдеров и сравнение подключаются на Фазе 4 (оркестрация).
-"""
+"""CLI-точка входа: запуск сравнения и просмотр истории."""
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 
 import typer
 
 from toursearch.models import SearchParams
-from toursearch.providers import list_providers
+from toursearch.orchestrator import run_search
+from toursearch.reporting import format_report
+from toursearch.storage import Storage
 
 app = typer.Typer(add_completion=False, help="Сравнение поиска туров на разных площадках.")
 
@@ -31,17 +30,22 @@ def search(
     adults: int = typer.Option(2, "--adults"),
     child_age: list[int] = typer.Option([], "--child", help="Возраст ребёнка (можно несколько раз)"),
     mode: str = typer.Option("tours", "--mode", help="Режим: tours | hotels (без перелёта)"),
-    resort: list[str] = typer.Option([], "--resort", help="Курорт прилёта (можно несколько раз)"),
-    star: list[int] = typer.Option([], "--star", help="Звёздность отеля, напр. --star 4 --star 5"),
+    resort: list[str] = typer.Option([], "--resort", help="Курорт прилёта"),
+    star: list[int] = typer.Option([], "--star", help="Звёздность, напр. --star 4 --star 5"),
     meal: list[str] = typer.Option([], "--meal", help="Питание: BB/HB/FB/AI/UAI/none"),
-    hotel: list[str] = typer.Option([], "--hotel", help="Конкретный отель (можно несколько раз)"),
+    hotel: list[str] = typer.Option([], "--hotel", help="Конкретный отель"),
     operator: list[str] = typer.Option([], "--operator", help="Туроператор (для сравнения одного ТО)"),
     charter_only: bool = typer.Option(False, "--charter-only"),
     direct_only: bool = typer.Option(False, "--direct-only"),
     price_max: float = typer.Option(None, "--price-max", help="Максимальная цена"),
     sort_by: str = typer.Option("price", "--sort", help="Сортировка: price | popularity"),
+    provider: list[str] = typer.Option([], "--provider", help="Ограничить площадки (по умолчанию все)"),
+    headless: bool = typer.Option(False, "--headless", help="Скрытый браузер"),
+    save: bool = typer.Option(True, "--save/--no-save", help="Сохранять прогон в БД"),
+    db: str = typer.Option("toursearch.db", "--db", help="Путь к БД истории"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Только показать параметры, без запуска"),
 ) -> None:
-    """Собрать параметры поиска (запуск провайдеров появится на Фазе 4)."""
+    """Запустить сравнение на площадках и вывести отчёт."""
     params = SearchParams(
         departure_city=departure_city,
         destination_country=destination_country,
@@ -62,10 +66,38 @@ def search(
         price_max=price_max,
         sort_by=sort_by,
     )
-    typer.echo("Параметры поиска приняты:")
-    typer.echo(params.model_dump_json(indent=2))
-    typer.echo(f"\nЗарегистрированные провайдеры: {list_providers() or '— (появятся на фазах 2–3)'}")
-    typer.echo("\n[Фаза 0] Запуск поиска ещё не реализован — будет на Фазе 4.")
+    if dry_run:
+        typer.echo(params.model_dump_json(indent=2))
+        raise typer.Exit()
+
+    typer.echo("Запуск поиска на площадках…")
+    report = asyncio.run(run_search(params, providers=provider or None, headless=headless))
+    typer.echo("\n" + format_report(report))
+
+    if save:
+        with Storage(db) as storage:
+            run_id = storage.save_report(report)
+        typer.echo(f"\nПрогон сохранён в {db} (id={run_id}).")
+
+
+@app.command()
+def history(
+    limit: int = typer.Option(20, "--limit"),
+    db: str = typer.Option("toursearch.db", "--db", help="Путь к БД истории"),
+) -> None:
+    """Показать последние прогоны из истории."""
+    with Storage(db) as storage:
+        runs = storage.list_runs(limit=limit)
+    if not runs:
+        typer.echo("История пуста.")
+        return
+    for r in runs:
+        best = (
+            f"{r.cheapest_price:,.0f} ({r.cheapest_label}, {r.cheapest_provider})".replace(",", " ")
+            if r.cheapest_price is not None
+            else "—"
+        )
+        typer.echo(f"#{r.run_id:<4} {r.run_at:%d.%m.%Y %H:%M}  лучшее: {best}  быстрее: {r.fastest_provider}")
 
 
 if __name__ == "__main__":
