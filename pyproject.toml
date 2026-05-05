@@ -28,3 +28,7 @@ packages = ["src/toursearch"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "-m 'not e2e'"
+markers = [
+    "e2e: живые тесты против реальных сайтов (запуск: pytest -m e2e)",
+]

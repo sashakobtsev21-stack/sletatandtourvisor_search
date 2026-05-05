@@ -112,6 +112,19 @@ class TourvisorProvider:
     URL = "https://tourvisor.ru/search.php"
     HOTELS_URL = "https://tourvisor.ru/poisk-otelej"  # форма «Поиск отелей» (без перелёта)
 
+    # Якорные селекторы для health-check гейта (должны присутствовать на форме).
+    HEALTH_URL = URL
+    HEALTH_POPUPS: list[str] = []
+    HEALTH_ANCHORS = {
+        "город вылета": "div.TVDepartureFilter",
+        "страна": "div.TVCountryFilter",
+        "даты вылета": "div.TVFlyDatesFilter",
+        "ночи": "div.TVNightsFilter",
+        "туристы": "div.TVTouristsFilter",
+        "операторы": "div.TVOperatorListFilter",
+        "кнопка поиска": "div.TVSearchButton",
+    }
+
     def __init__(self, headless: bool = False, timeout_ms: int = 20_000) -> None:
         self.headless = headless
         self.timeout_ms = timeout_ms

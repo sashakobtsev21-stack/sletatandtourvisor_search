@@ -7,6 +7,7 @@ from datetime import datetime
 
 import typer
 
+from toursearch.healthcheck import format_health, gate_passed, run_health_check
 from toursearch.models import SearchParams
 from toursearch.orchestrator import run_search
 from toursearch.reporting import format_report
@@ -43,6 +44,7 @@ def search(
     headless: bool = typer.Option(False, "--headless", help="Скрытый браузер"),
     save: bool = typer.Option(True, "--save/--no-save", help="Сохранять прогон в БД"),
     db: str = typer.Option("toursearch.db", "--db", help="Путь к БД истории"),
+    check: bool = typer.Option(True, "--check/--no-check", help="Жёсткий health-check перед прогоном"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Только показать параметры, без запуска"),
 ) -> None:
     """Запустить сравнение на площадках и вывести отчёт."""
@@ -70,6 +72,19 @@ def search(
         typer.echo(params.model_dump_json(indent=2))
         raise typer.Exit()
 
+    if check:
+        typer.echo("Health-check площадок перед прогоном…")
+        health = asyncio.run(run_health_check(providers=provider or None, headless=True))
+        typer.echo(format_health(health))
+        if not gate_passed(health):
+            typer.echo(
+                "\n⛔ Гейт не пройден: структура одной из площадок изменилась — прогон остановлен.\n"
+                "   Почини селекторы в провайдере и запусти снова (или --no-check, чтобы пропустить).",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        typer.echo("")
+
     typer.echo("Запуск поиска на площадках…")
     report = asyncio.run(run_search(params, providers=provider or None, headless=headless))
     typer.echo("\n" + format_report(report))
@@ -78,6 +93,18 @@ def search(
         with Storage(db) as storage:
             run_id = storage.save_report(report)
         typer.echo(f"\nПрогон сохранён в {db} (id={run_id}).")
+
+
+@app.command()
+def healthcheck(
+    provider: list[str] = typer.Option([], "--provider", help="Ограничить площадки"),
+    headless: bool = typer.Option(True, "--headless/--headed"),
+) -> None:
+    """Проверить, что якорные селекторы форм площадок на месте."""
+    results = asyncio.run(run_health_check(providers=provider or None, headless=headless))
+    typer.echo(format_health(results))
+    if not gate_passed(results):
+        raise typer.Exit(code=1)
 
 
 @app.command()
