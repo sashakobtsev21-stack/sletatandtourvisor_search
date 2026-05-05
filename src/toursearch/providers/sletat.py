@@ -112,6 +112,19 @@ class SletatProvider:
     name = "sletat"
     URL = "https://sletat.ru/b2b/"
 
+    # Якорные селекторы для health-check гейта (должны присутствовать на форме).
+    HEALTH_URL = URL
+    HEALTH_POPUPS = [".icon-remove", "button[data-testid='layout.cookie-alert.accept-btn']"]
+    HEALTH_ANCHORS = {
+        "город вылета": "input.excludeClickOutside",
+        "страна": "#ui-select-country-to",
+        "даты": "div.containerTitle",
+        "ночи": "#ui-select-nightsMin",
+        "туристы": "#touristSelector",
+        "операторы": ".uis-text_tour-operator",
+        "кнопка поиска": "[data-testid='b2b.search-form.search-btn']",
+    }
+
     def __init__(self, headless: bool = False, timeout_ms: int = 20_000) -> None:
         self.headless = headless
         self.timeout_ms = timeout_ms
