@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}ТурСравнение{% endblock %}</title>
+  <style>
+    :root { --bg:#0f1733; --accent:#1f6feb; --ok:#1a7f37; --bad:#cf222e; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, Arial, sans-serif; margin: 0; background:#f6f8fb; color:#1c2430; }
+    header { background: var(--bg); color:#fff; padding: 14px 24px; display:flex; gap:20px; align-items:center; }
+    header a { color:#cfe0ff; text-decoration:none; font-weight:600; }
+    header h1 { font-size:18px; margin:0; }
+    main { max-width: 980px; margin: 24px auto; padding: 0 16px; }
+    .card { background:#fff; border:1px solid #e3e8ef; border-radius:10px; padding:18px 20px; margin-bottom:18px; }
+    label { display:block; font-size:13px; color:#54607a; margin:10px 0 4px; }
+    input[type=text], input[type=number], input[type=date], select {
+      width:100%; padding:8px 10px; border:1px solid #c8d0de; border-radius:7px; font-size:14px; }
+    .row { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:12px; }
+    .chips label { display:inline-flex; align-items:center; gap:6px; margin-right:14px; font-size:14px; color:#1c2430; }
+    button { background:var(--accent); color:#fff; border:0; padding:12px 22px; border-radius:8px;
+      font-size:15px; font-weight:600; cursor:pointer; margin-top:14px; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { text-align:left; padding:8px 10px; border-bottom:1px solid #eef1f6; font-size:14px; }
+    .best { color:var(--ok); font-weight:700; }
+    .worst { color:var(--bad); font-weight:600; }
+    .muted { color:#7a869a; font-size:13px; }
+    .pill { display:inline-block; padding:2px 8px; border-radius:20px; font-size:12px; background:#eef3ff; color:#1f4ea8; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🏝️ ТурСравнение</h1>
+    <a href="/">Поиск</a>
+    <a href="/history">История</a>
+  </header>
+  <main>{% block content %}{% endblock %}</main>
+</body>
+</html>

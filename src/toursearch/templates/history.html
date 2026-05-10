@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0">История прогонов</h2>
+  {% if not runs %}
+    <p class="muted">Пока пусто — выполните первый поиск.</p>
+  {% else %}
+  <table>
+    <thead><tr><th>#</th><th>Дата</th><th>Лучшее предложение</th><th>Цена</th><th>Быстрее</th></tr></thead>
+    <tbody>
+    {% for r in runs %}
+      <tr>
+        <td><a href="/run/{{ r.run_id }}">#{{ r.run_id }}</a></td>
+        <td>{{ r.run_at.strftime("%d.%m.%Y %H:%M") }}</td>
+        <td>{{ r.cheapest_label or "—" }} {% if r.cheapest_provider %}<span class="muted">({{ r.cheapest_provider }})</span>{% endif %}</td>
+        <td>{{ r.cheapest_price|price }}</td>
+        <td>{{ r.fastest_provider or "—" }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endblock %}

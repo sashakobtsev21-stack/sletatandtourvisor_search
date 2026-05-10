@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block content %}
+{% set p = report.params %}
+<div class="card">
+  <h2 style="margin-top:0">
+    Результат сравнения —
+    <span class="pill">{{ "ОТЕЛИ (без перелёта)" if p.search_mode == "hotels" else "ТУРЫ" }}</span>
+  </h2>
+  <p class="muted">
+    {{ p.departure_city }} → {{ p.destination_country }},
+    {{ p.date_from.strftime("%d.%m.%Y") }}–{{ p.date_to.strftime("%d.%m.%Y") }},
+    {{ p.nights_min }}–{{ p.nights_max }} ноч., {{ p.adults }} взр.{% if p.children_ages %} + {{ p.children_ages|length }} реб.{% endif %}
+    {% if run_id %}· прогон #{{ run_id }}{% endif %}
+  </p>
+
+  <table>
+    <thead><tr><th>Площадка</th><th>Время</th><th>Мин. цена</th><th>Лучшее предложение</th></tr></thead>
+    <tbody>
+    {% for r in report.results %}
+      <tr>
+        <td><b>{{ r.provider }}</b></td>
+        <td>{% if r.success %}{{ "%.1f"|format(r.duration_seconds) }} с{% else %}—{% endif %}</td>
+        <td>{% if r.cheapest %}{{ r.cheapest.price|price }}{% else %}—{% endif %}</td>
+        <td>{% if r.success %}{{ r.cheapest.label if r.cheapest else "нет результатов" }}{% else %}<span class="worst">ошибка: {{ r.error }}</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+
+  <p style="margin-top:14px">
+    {% if report.cheapest %}<div class="best">🏆 Лучшее: {{ report.cheapest.price|price }} — {{ report.cheapest.label }} ({{ report.cheapest.provider }})</div>{% endif %}
+    {% if report.most_expensive %}<div class="worst">🔺 Худшее: {{ report.most_expensive.price|price }} — {{ report.most_expensive.label }} ({{ report.most_expensive.provider }})</div>{% endif %}
+    {% if report.fastest_provider %}<div class="muted">⚡ Быстрее всех: {{ report.fastest_provider }} · 🐢 медленнее: {{ report.slowest_provider }}</div>{% endif %}
+  </p>
+</div>
+
+{% for r in report.results if r.success %}
+<div class="card">
+  <h3 style="margin-top:0">{{ r.provider }} <span class="muted">({{ "%.1f"|format(r.duration_seconds) }} с)</span></h3>
+  {% if r.hotel_offers %}
+  <table>
+    <thead><tr><th>Отель</th><th>★</th><th>Рейтинг</th><th>Направление</th><th>Цена</th></tr></thead>
+    <tbody>
+    {% for h in r.hotel_offers|sort(attribute="price") %}
+      <tr><td>{{ h.hotel_name }}</td><td>{{ h.stars or "—" }}</td><td>{{ h.rating or "—" }}</td><td class="muted">{{ h.destination or "" }}</td><td>{{ h.price|price }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <table>
+    <thead><tr><th>Туроператор</th><th>Мин. цена</th></tr></thead>
+    <tbody>
+    {% for o in r.offers|sort(attribute="price") %}
+      <tr><td>{{ o.operator }}</td><td>{{ o.price|price }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endfor %}
+
+<p><a href="/">← Новый поиск</a></p>
+{% endblock %}

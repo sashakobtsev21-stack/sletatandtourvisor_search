@@ -96,6 +96,21 @@ def search(
 
 
 @app.command()
+def web(
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8000, "--port"),
+    db: str = typer.Option("toursearch.db", "--db"),
+) -> None:
+    """Запустить веб-интерфейс (FastAPI)."""
+    import uvicorn
+
+    from toursearch.web import create_app
+
+    typer.echo(f"Веб-интерфейс: http://{host}:{port}")
+    uvicorn.run(create_app(db_path=db), host=host, port=port)
+
+
+@app.command()
 def healthcheck(
     provider: list[str] = typer.Option([], "--provider", help="Ограничить площадки"),
     headless: bool = typer.Option(True, "--headless/--headed"),

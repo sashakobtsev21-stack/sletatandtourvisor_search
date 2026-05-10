@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <h2 style="margin-top:0" class="worst">⛔ Health-check не пройден — прогон остановлен</h2>
+  <p class="muted">Структура одной из площадок изменилась. Поиск не запускался, чтобы не получить
+  неверные результаты. Ниже — что именно не найдено; нужно обновить селекторы в провайдере.</p>
+  <table>
+    <thead><tr><th>Площадка</th><th>Статус</th><th>Проблема</th></tr></thead>
+    <tbody>
+    {% for name, r in health.items() %}
+      <tr>
+        <td><b>{{ name }}</b></td>
+        <td>{{ "✅ ок" if r.ok else "❌ сломано" }}</td>
+        <td>{% if r.error %}{{ r.error }}{% elif r.missing %}{{ r.missing|join(", ") }}{% else %}—{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p><a href="/">← Назад</a></p>
+</div>
+{% endblock %}
