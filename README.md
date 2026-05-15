@@ -1,18 +1,92 @@
-# Sletat and Tourvisor — Search Module Autotests
+# toursearch — сравнение поиска туров на нескольких площадках
 
-Automated tests for tour search and comparison on Sletat.ru and Tourvisor platforms.  
-**Tech stack**: Python, pytest, Selenium WebDriver  
-**Validates**: filter accuracy, results loading, error handling  
-**Outputs**: number of tours, minimum price, execution time
+Сервис вводит параметры поиска, открывает несколько онлайн-площадок
+(**Sletat** — главная, **Tourvisor**), выставляет заданные фильтры, дожидается
+полной загрузки результатов, сохраняет их и **сравнивает**: минимальная цена,
+по какому туроператору/отелю, лучший и худший вариант, а также время выполнения
+поиска на каждой площадке.
 
+**Стек:** Python 3.12+, Playwright (async), pydantic v2, SQLite, FastAPI, pytest.
 
-test_data = {
-    "departure_city": "Москва",
-    "destination_country": "Турция",
-    "departure_dates": ("26.06.2026", "28.06.2026"),
-    "nights": "3-5",
-    "tourists": "3 взрослых",
-    "charter": 0,
-    "operators": {"anex": 0, "biblioglobus": 0, "funsun": 0, "travelata": 0, "coral": 0, "sunmar": 0, "pegas": 0},
-    "direct": 0,
-}
+---
+
+## Возможности
+
+- **Два режима поиска:** «Туры» (с перелётом) и «Отели» (без перелёта, только проживание).
+- **Полный набор фильтров:** город вылета, страна и курорт прилёта, даты, ночи,
+  взрослые и дети (с возрастом), звёздность, питание, конкретный отель,
+  туроператоры (в т.ч. один — для сравнения одного ТО на двух сайтах),
+  чартер/прямой рейс, диапазон цен.
+- **Параллельный запуск** площадок (asyncio); падение одной не валит прогон.
+- **Замер времени** от старта поиска до полной загрузки результатов.
+- **Сравнение:** лучший/худший вариант, мин. цена по операторам/отелям.
+- **История** прогонов в SQLite.
+- **Health-check гейт:** перед прогоном проверяет, что структура форм площадок не
+  изменилась; при поломке прогон блокируется с понятным отчётом (защита от
+  «молчаливых» ошибок после редизайна сайта).
+- **Веб-интерфейс** (FastAPI) и **CLI**.
+
+## Установка
+
+```bash
+python -m venv .venv
+. .venv/Scripts/activate          # Windows: .\.venv\Scripts\activate
+pip install -e ".[browser,web,dev]"
+playwright install chromium
+```
+
+## Запуск
+
+### Веб-интерфейс
+```bash
+toursearch web                    # http://127.0.0.1:8000
+```
+Форма всех фильтров → «Сравнить» → отчёт сравнения. Вкладка «История» — прошлые прогоны.
+
+### CLI
+```bash
+# Туры: Москва → Турция, 3–5 ночей, 2 взрослых
+toursearch search --from Москва --to Турция \
+  --date-from 26.06.2026 --date-to 28.06.2026 --nights-min 3 --nights-max 5 --adults 2
+
+# Отели (без перелёта), 4–5★, всё включено, один оператор
+toursearch search --to Турция --date-from 26.06.2026 --date-to 28.06.2026 \
+  --mode hotels --star 4 --star 5 --meal AI --operator anex
+
+toursearch healthcheck            # проверить, что формы площадок не изменились
+toursearch history                # история прогонов
+```
+
+Полезные флаги `search`: `--mode tours|hotels`, `--child <возраст>` (повторяемый),
+`--resort`, `--star`, `--meal`, `--hotel`, `--operator`, `--charter-only`,
+`--direct-only`, `--price-max`, `--provider`, `--headless`, `--no-save`,
+`--no-check` (пропустить гейт), `--dry-run`.
+
+## Архитектура
+
+```
+SearchParams ── orchestrator (asyncio) ── провайдеры (SearchProvider)
+                      │                        ├─ SletatProvider   (Playwright)
+                      │                        └─ TourvisorProvider (Playwright)
+                      ▼
+        ComparisonReport ── reporting (отчёт) + storage (SQLite)
+                      ▲
+        health-check гейт (проверка якорных селекторов перед прогоном)
+```
+
+Добавление новой площадки = реализовать интерфейс `SearchProvider` и
+зарегистрировать его (`@register_provider`). Оркестратор и сравнение её кода не знают.
+
+## Тесты
+
+```bash
+pytest                # unit/интеграционные (быстрые, без сети)
+pytest -m e2e         # живые тесты против реальных сайтов (ловят редизайн)
+```
+
+## Документация
+
+- `PLAN.md` — план миграции и принятые решения.
+- `SITES.md` — карта фильтров и выверенные селекторы обеих площадок.
+- `RESULTS.md` — структура выдачи, динамика загрузки, сигналы завершения, режимы.
+- `scripts/` — скрипты живого анализа/мониторинга сайтов (основа health-check).
