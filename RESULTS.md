@@ -125,10 +125,14 @@ class HotelOffer:
 - **Антибот/капча:** за прогоны не встречены, но возможны при частоте — закладываем
   ретраи и скриншот при сбое.
 - **Загрузка картинок (lazy):** даёт «шум» в счётчике лоадеров — игнорировать.
-- **Tourvisor отели (`/poisk-otelej`):** поля `TVCountryFilter`/`TVNightsFilter` на этой
-  странице **скрыты** — направление задаётся через `TVHotelSearchFilter` («Направление»,
-  ввод текста: страна/курорт/отель). Это отдельный флоу от `search.php`; провайдер Tourvisor
-  пока поддерживает hotels-режим частично (TODO: реализовать ввод «Направление»). Основной
-  hotels-режим — на Sletat (главная площадка), там форма та же, что для туров.
+- **Tourvisor отели (`/poisk-otelej`):** реализовано. Направление задаётся через
+  `TVHotelSearchFilter` («Направление», input `.TVHotelTourSearchInput`): ввод текста →
+  подсказки `.TVListBoxItem` (`.TVSearchInputResultItemTitle`). Поля `TVCountryFilter`/
+  `TVNightsFilter` на этой странице иные/скрыты, поэтому ночи/даты в hotels-режиме —
+  «мягкие» шаги. Результаты — карточки `.TVResultItem` (HotelOffer).
+- **Tourvisor доп-фильтры:** звёздность `TVStarsFilter` — инлайн-кнопки `.TVStarsSelectItem`
+  (минимальный класс, 1..5); питание `TVMealFilter` — радио-дропдаун `.TVInputRadio` по
+  префиксу `t-span.TVRadioGroupSelectItemPrefix` (BB/HB/FB/AI/UAI). Бюджет/курорт по
+  Tourvisor — на перспективу (на Sletat есть полностью).
 - **Tourvisor фильтр операторов:** часть операторов отмечена по умолчанию (промо,
   напр. Biblioglobus) — перед выбором нужных провайдер снимает все отмеченные (исправлено).
