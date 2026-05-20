@@ -180,21 +180,75 @@ class TourvisorProvider:
     # --- заполнение формы ---
 
     async def _fill_form(self, page: Page, params: SearchParams) -> None:
-        # В режиме «Отели» открыта страница /poisk-otelej — вылет уже «Без перелёта»,
-        # выбор города пропускаем.
-        # TODO(hotels): на /poisk-otelej поля TVCountryFilter/TVNightsFilter скрыты,
-        # основной ввод направления — через TVHotelSearchFilter («Направление»).
-        # Требуется отдельный маппинг этого флоу (см. RESULTS.md). Пока режим hotels
-        # на Tourvisor может вернуть ошибку; основной hotels-режим — на Sletat.
-        if params.search_mode != "hotels":
+        hotels = params.search_mode == "hotels"
+
+        async def opt(coro) -> None:
+            # В режиме «Отели» (/poisk-otelej) часть полей иная/скрыта — делаем шаги мягкими.
+            try:
+                await coro
+            except Exception:
+                pass
+
+        if hotels:
+            # Страница /poisk-otelej: вылет «Без перелёта»; направление — через «Направление».
+            await self._select_destination_hotels(page, params.destination_country)
+            await opt(self._select_dates(page, params.date_from, params.date_to))
+            await opt(self._select_nights(page, params.nights_min, params.nights_max))
+        else:
             await self._select_departure_city(page, params.departure_city)
-        await self._select_country(page, params.destination_country)
-        await self._select_dates(page, params.date_from, params.date_to)
-        await self._select_nights(page, params.nights_min, params.nights_max)
+            await self._select_country(page, params.destination_country)
+            await self._select_dates(page, params.date_from, params.date_to)
+            await self._select_nights(page, params.nights_min, params.nights_max)
+
         await self._select_tourists(page, params.adults, params.children_ages)
+        if params.hotel_stars:
+            await opt(self._select_stars(page, params.hotel_stars))
+        if params.meals:
+            await opt(self._select_meal(page, params.meals[0]))
         if params.operators:
-            await self._select_operators(page, params.operators)
-        await self._toggle_charter(page, params.charter_only)
+            if hotels:
+                await opt(self._select_operators(page, params.operators))
+            else:
+                await self._select_operators(page, params.operators)
+        if hotels:
+            await opt(self._toggle_charter(page, params.charter_only))
+        else:
+            await self._toggle_charter(page, params.charter_only)
+
+    async def _select_destination_hotels(self, page: Page, destination: str) -> None:
+        """Направление на /poisk-otelej: ввести страну/курорт/отель и выбрать из подсказок."""
+        await page.click("div.TVHotelSearchFilter")
+        inp = page.locator(".TVHotelTourSearchInput input")
+        await inp.click()
+        await inp.fill("")
+        await inp.type(destination, delay=60)
+        await page.wait_for_timeout(1200)
+        await page.click(
+            f"xpath=//div[contains(@class,'TVListBoxItem')]"
+            f"[.//div[contains(@class,'TVSearchInputResultItemTitle') and contains(text(),'{destination}')]][1]"
+        )
+        await page.wait_for_timeout(600)
+
+    async def _select_stars(self, page: Page, stars: list[int]) -> None:
+        # «Класс отеля» = минимальная звёздность; инлайн-кнопки .TVStarsSelectItem (1..5).
+        target = min(stars)
+        items = page.locator("div.TVStarsFilter .TVStarsSelectItem")
+        if await items.count() >= target:
+            await items.nth(target - 1).click()
+            await page.wait_for_timeout(300)
+
+    async def _select_meal(self, page: Page, code: str) -> None:
+        # Питание — радио-дропдаун; выбираем по префиксу (BB/HB/FB/AI/UAI).
+        await page.click("div.TVMealFilter")
+        await page.wait_for_timeout(600)
+        item = page.locator(
+            f"xpath=//div[contains(@class,'TVInputRadio')]"
+            f"[.//t-span[contains(@class,'TVRadioGroupSelectItemPrefix') and normalize-space(text())='{code}']]"
+        )
+        if await item.count():
+            await item.first.click()
+            await page.wait_for_timeout(300)
+        await page.mouse.click(10, 10)
 
     async def _select_departure_city(self, page: Page, city: str) -> None:
         await page.click("div.TVDepartureFilter")
