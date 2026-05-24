@@ -205,6 +205,10 @@ class TourvisorProvider:
             await opt(self._select_stars(page, params.hotel_stars))
         if params.meals:
             await opt(self._select_meal(page, params.meals[0]))
+        if params.resorts:
+            await opt(self._select_resorts(page, params.resorts))
+        if params.price_min is not None or params.price_max is not None:
+            await opt(self._set_budget(page, params.price_min, params.price_max))
         if params.operators:
             if hotels:
                 await opt(self._select_operators(page, params.operators))
@@ -249,6 +253,34 @@ class TourvisorProvider:
             await item.first.click()
             await page.wait_for_timeout(300)
         await page.mouse.click(10, 10)
+
+    async def _select_resorts(self, page: Page, resorts: list[str]) -> None:
+        # Курорт — дерево чекбоксов TVCheckboxTreeItem → TVCheckBox по названию.
+        await page.click("xpath=//div[contains(@class,'TVResortTreeFilter')]")
+        await page.wait_for_timeout(700)
+        for r in resorts:
+            loc = page.locator(
+                f"xpath=//div[contains(@class,'TVCheckboxTreeItem')]"
+                f"//div[contains(@class,'TVCheckBox') and normalize-space(text())='{r}']"
+            )
+            if await loc.count():
+                await loc.first.click()
+                await page.wait_for_timeout(300)
+        await page.mouse.click(10, 10)
+
+    async def _set_budget(self, page: Page, price_min, price_max) -> None:
+        # Бюджет — инпуты мин/макс цены + кнопка «Выбрать».
+        await page.click("xpath=//div[contains(@class,'TVBudgetFilter')]")
+        await page.wait_for_timeout(500)
+        if price_min is not None:
+            await page.fill("input.TVTourBudgetMinPriceInput", str(int(price_min)))
+        if price_max is not None:
+            await page.fill("input.TVTourBudgetMaxPriceInput", str(int(price_max)))
+        await page.click(
+            "xpath=//div[contains(@class,'TVBudgetSelectTooltipSubmit')]"
+            "//div[contains(@class,'TVButtonControl')]"
+        )
+        await page.wait_for_timeout(300)
 
     async def _select_departure_city(self, page: Page, city: str) -> None:
         await page.click("div.TVDepartureFilter")
