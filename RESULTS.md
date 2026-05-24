@@ -132,7 +132,8 @@ class HotelOffer:
   «мягкие» шаги. Результаты — карточки `.TVResultItem` (HotelOffer).
 - **Tourvisor доп-фильтры:** звёздность `TVStarsFilter` — инлайн-кнопки `.TVStarsSelectItem`
   (минимальный класс, 1..5); питание `TVMealFilter` — радио-дропдаун `.TVInputRadio` по
-  префиксу `t-span.TVRadioGroupSelectItemPrefix` (BB/HB/FB/AI/UAI). Бюджет/курорт по
-  Tourvisor — на перспективу (на Sletat есть полностью).
+  префиксу `t-span.TVRadioGroupSelectItemPrefix` (BB/HB/FB/AI/UAI). Курорт `TVResortTreeFilter`
+  — дерево чекбоксов `.TVCheckboxTreeItem` → `.TVCheckBox` по названию; бюджет `TVBudgetFilter`
+  — инпуты `.TVTourBudgetMinPriceInput`/`.TVTourBudgetMaxPriceInput` + «Выбрать». Реализовано.
 - **Tourvisor фильтр операторов:** часть операторов отмечена по умолчанию (промо,
   напр. Biblioglobus) — перед выбором нужных провайдер снимает все отмеченные (исправлено).
