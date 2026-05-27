@@ -21,6 +21,14 @@ from pathlib import Path
 from playwright.async_api import Page, TimeoutError as PWTimeout, async_playwright
 
 from toursearch.models import HotelOffer, Offer, ProviderResult, SearchParams
+from toursearch.providers._formcheck import (
+    UNKNOWN,
+    FormVerificationError,
+    exact,
+    norm,
+    set_equal,
+    text_contains,
+)
 from toursearch.providers.base import register_provider
 
 _MONTHS_RU = [
@@ -149,6 +157,7 @@ class SletatProvider:
                 if params.search_mode == "hotels":
                     await self._switch_to_hotels(page)
                 await self._fill_form(page, params)
+                await self._verify_and_fix(page, params)
                 await self._click_search(page)
                 start = time.monotonic()
                 await self._wait_for_completion(page)
@@ -309,10 +318,18 @@ class SletatProvider:
         for age in children_ages:
             await page.click("button.child-counter__add-btn")
             await page.wait_for_selector(".child-counter__list")
-            await page.click(
-                f"xpath=//div[contains(@class,'child-counter__list__item') and "
-                f"starts-with(normalize-space(text()), '{age} ')]"
+            # выбираем пункт по распарсенному числу (текст вида «7 лет», «1 год», «2 года»)
+            clicked = await page.evaluate(
+                """(age) => {
+                    const items = [...document.querySelectorAll('.child-counter__list .child-counter__list__item')];
+                    const el = items.find(e => parseInt((e.textContent || '').trim(), 10) === age);
+                    if (el) { el.click(); return true; }
+                    return false;
+                }""",
+                age,
             )
+            if not clicked:
+                raise RuntimeError(f"возраст ребёнка {age} не найден в списке")
             await page.wait_for_timeout(300)
         # закрыть блок
         await page.click("#touristSelector .tourist-current-select")
@@ -401,6 +418,116 @@ class SletatProvider:
 
     async def _click_search(self, page: Page) -> None:
         await page.click("[data-testid='b2b.search-form.search-btn']")
+
+    # --- верификация формы перед поиском ---
+
+    async def _verify_and_fix(self, page: Page, params: SearchParams) -> None:
+        """Сверить значения формы с параметрами; при расхождении переустановить шаг
+        один раз, и если снова не совпало — прервать поиск (не искать по неверному)."""
+        problems = await self._verify_form(page, params)
+        if not problems:
+            return
+        for field, _, _ in problems:
+            try:
+                await self._refill_field(page, params, field)
+            except Exception:
+                pass
+        problems = await self._verify_form(page, params)
+        if problems:
+            raise FormVerificationError(problems)
+
+    async def _safe_val(self, page: Page, selector: str):
+        try:
+            return await page.input_value(selector, timeout=2000)
+        except Exception:
+            return UNKNOWN
+
+    async def _safe_text(self, page: Page, selector: str):
+        # text_content (а не inner_text): значение может быть в скрытом/триггерном узле.
+        try:
+            loc = page.locator(selector)
+            if await loc.count() == 0:
+                return UNKNOWN
+            return await loc.first.text_content()
+        except Exception:
+            return UNKNOWN
+
+    async def _read_checked_operators(self, page: Page) -> set[str] | object:
+        try:
+            await page.click(".uis-text_tour-operator")
+            await page.wait_for_timeout(500)
+            names = await page.evaluate(
+                """() => [...document.querySelectorAll(
+                    'label.uis-checkbox__label_tour-operator.uis-checkbox__label_checked .slsf-text-bold'
+                )].map(e => (e.textContent || '').trim())"""
+            )
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(200)
+            return set(names)
+        except Exception:
+            return UNKNOWN
+
+    async def _verify_form(self, page: Page, params: SearchParams) -> list[tuple[str, object, object]]:
+        problems: list[tuple[str, object, object]] = []
+
+        def check(field, expected, actual, ok: bool) -> None:
+            if actual is UNKNOWN:
+                return
+            if not ok:
+                problems.append((field, expected, actual))
+
+        hotels = params.search_mode == "hotels"
+
+        if not hotels:
+            city = await self._safe_val(page, "input.excludeClickOutside")
+            check("departure", params.departure_city, city, text_contains(params.departure_city, city) if city is not UNKNOWN else True)
+
+        country = await self._safe_val(page, "#ui-select-country-to")
+        if country is UNKNOWN or not norm(country):
+            country = await self._safe_text(page, "#ui-select-country-to")
+        check("country", params.destination_country, country, text_contains(params.destination_country, country) if country is not UNKNOWN else True)
+
+        nmin = await self._safe_val(page, "#ui-select-nightsMin")
+        nmax = await self._safe_val(page, "#ui-select-nightsMax")
+        if nmin is not UNKNOWN and nmax is not UNKNOWN:
+            check("nights", f"{params.nights_min}-{params.nights_max}", f"{nmin}-{nmax}",
+                  exact(params.nights_min, nmin) and exact(params.nights_max, nmax))
+
+        tourists = await self._safe_text(page, ".tourist-current-select")
+        check("tourists", f"{params.adults} взрослых", tourists,
+              text_contains(f"{params.adults} взросл", tourists) if tourists is not UNKNOWN else True)
+
+        if params.operators:
+            expected = {_OPERATOR_MAP.get(o.lower(), o) for o in params.operators}
+            actual = await self._read_checked_operators(page)
+            check("operators", expected, actual, set_equal(expected, actual) if actual is not UNKNOWN else True)
+
+        if params.hotel_stars:
+            stars_txt = await self._safe_text(page, "#hotelCategoryContainer .hotel-category-current-select")
+            ok = stars_txt is UNKNOWN or all(str(s) in norm(stars_txt) for s in params.hotel_stars)
+            check("stars", params.hotel_stars, stars_txt, ok)
+
+        if params.meals:
+            meals_txt = await self._safe_text(page, "#mealsContainer .hotel-category-current-select")
+            check("meals", params.meals[0], meals_txt, text_contains(params.meals[0], meals_txt) if meals_txt is not UNKNOWN else True)
+
+        return problems
+
+    async def _refill_field(self, page: Page, params: SearchParams, field: str) -> None:
+        if field == "departure":
+            await self._select_departure_city(page, params.departure_city)
+        elif field == "country":
+            await self._select_country(page, params.destination_country)
+        elif field == "nights":
+            await self._set_nights(page, params.nights_min, params.nights_max)
+        elif field == "tourists":
+            await self._select_tourists(page, params.adults, params.children_ages)
+        elif field == "operators":
+            await self._select_operators(page, params.operators)
+        elif field == "stars":
+            await self._select_stars(page, params.hotel_stars)
+        elif field == "meals":
+            await self._select_meals(page, params.meals)
 
     # --- ожидание / сортировка / парсинг ---
 
