@@ -16,6 +16,13 @@ from pathlib import Path
 from playwright.async_api import Locator, Page, TimeoutError as PWTimeout, async_playwright
 
 from toursearch.models import HotelOffer, Offer, ProviderResult, SearchParams
+from toursearch.providers._formcheck import (
+    UNKNOWN,
+    FormVerificationError,
+    exact,
+    norm,
+    text_contains,
+)
 from toursearch.providers.base import register_provider
 
 _MONTHS_RU = {
@@ -147,6 +154,7 @@ class TourvisorProvider:
                 await page.goto(url, wait_until="domcontentloaded")
                 await page.wait_for_timeout(1500)
                 await self._fill_form(page, params)
+                await self._verify_and_fix(page, params)
                 await self._click_search(page)
                 start = time.monotonic()  # отсчёт с момента запуска поиска
                 await self._wait_for_completion(page)
@@ -421,6 +429,92 @@ class TourvisorProvider:
         await page.click(
             "xpath=//div[contains(@class,'TVSearchButton') and contains(text(),'Найти')]"
         )
+
+    # --- верификация формы перед поиском ---
+    # Операторы и курорт-дерево НЕ верифицируем: чтение требует переоткрытия панели,
+    # а оно повторно проставляет дефолты (напр. Biblioglobus) и может испортить выбор.
+
+    async def _verify_and_fix(self, page: Page, params: SearchParams) -> None:
+        problems = await self._verify_form(page, params)
+        if not problems:
+            return
+        for field, _, _ in problems:
+            try:
+                await self._refill_field(page, params, field)
+            except Exception:
+                pass
+        problems = await self._verify_form(page, params)
+        if problems:
+            raise FormVerificationError(problems)
+
+    async def _safe_text(self, page: Page, selector: str):
+        try:
+            loc = page.locator(selector)
+            if await loc.count() == 0:
+                return UNKNOWN
+            return await loc.first.text_content()
+        except Exception:
+            return UNKNOWN
+
+    async def _verify_form(self, page: Page, params: SearchParams) -> list[tuple[str, object, object]]:
+        problems: list[tuple[str, object, object]] = []
+        hotels = params.search_mode == "hotels"
+
+        def check(field, expected, actual, ok: bool) -> None:
+            if actual is UNKNOWN:
+                return
+            if not ok:
+                problems.append((field, expected, actual))
+
+        # На /poisk-otelej (отели) форма иная: город/страна/ночи задаются иначе — пропускаем.
+        if not hotels:
+            dep = await self._safe_text(page, "div.TVDepartureFilter")
+            check("departure", params.departure_city, dep, text_contains(params.departure_city, dep) if dep is not UNKNOWN else True)
+            country = await self._safe_text(page, "div.TVCountryFilter")
+            check("country", params.destination_country, country, text_contains(params.destination_country, country) if country is not UNKNOWN else True)
+            nights = await self._safe_text(page, "div.TVNightsFilter")
+            check("nights", f"{params.nights_min} - {params.nights_max}", nights,
+                  text_contains(f"{params.nights_min} - {params.nights_max}", nights) if nights is not UNKNOWN else True)
+
+        tourists = await self._safe_text(page, "div.TVTouristsFilter")
+        check("tourists", f"{params.adults} взрослых", tourists,
+              text_contains(f"{params.adults} взросл", tourists) if tourists is not UNKNOWN else True)
+
+        if params.hotel_stars:
+            try:
+                active = await page.locator("div.TVStarsFilter .TVStarsSelectItem.TVActive").count()
+            except Exception:
+                active = None
+            if active is not None:
+                check("stars", min(params.hotel_stars), active, exact(min(params.hotel_stars), active))
+
+        if params.meals:
+            meal = await self._safe_text(page, "div.TVMealFilter")
+            check("meals", params.meals[0], meal, text_contains(params.meals[0], meal) if meal is not UNKNOWN else True)
+
+        if params.price_max is not None:
+            budget = await self._safe_text(page, "div.TVBudgetFilter")
+            if budget is not UNKNOWN:
+                digits = re.sub(r"[^\d]", "", budget)
+                check("budget", str(int(params.price_max)), budget, str(int(params.price_max)) in digits)
+
+        return problems
+
+    async def _refill_field(self, page: Page, params: SearchParams, field: str) -> None:
+        if field == "departure":
+            await self._select_departure_city(page, params.departure_city)
+        elif field == "country":
+            await self._select_country(page, params.destination_country)
+        elif field == "nights":
+            await self._select_nights(page, params.nights_min, params.nights_max)
+        elif field == "tourists":
+            await self._select_tourists(page, params.adults, params.children_ages)
+        elif field == "stars":
+            await self._select_stars(page, params.hotel_stars)
+        elif field == "meals":
+            await self._select_meal(page, params.meals[0])
+        elif field == "budget":
+            await self._set_budget(page, params.price_min, params.price_max)
 
     # --- ожидание и парсинг ---
 
