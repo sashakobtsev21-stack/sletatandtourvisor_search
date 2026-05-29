@@ -55,3 +55,28 @@ def test_history_renders_saved_run(tmp_path):
     assert r.status_code == 200
     assert "Travelata" in r.text
     assert "Mert" in r.text
+
+
+def test_tests_panel_renders(tmp_path):
+    client = TestClient(create_app(db_path=str(tmp_path / "w.db")))
+    resp = client.get("/tests")
+    assert resp.status_code == 200
+    assert "Запустить выбранные" in resp.text
+    assert "Автотесты" in resp.text
+
+
+def test_tests_run_stream(tmp_path):
+    from toursearch.testkit import REGISTRY
+
+    client = TestClient(create_app(db_path=str(tmp_path / "w.db")))
+    ids = [c.id for c in REGISTRY.cases() if not c.live][:6]
+    prep = client.post("/tests/prepare", json={"ids": ids})
+    assert prep.status_code == 200
+    token = prep.json()["token"]
+    assert prep.json()["count"] == 6
+
+    stream = client.get(f"/tests/stream?token={token}")
+    text = stream.text
+    assert '"type": "begin"' in text
+    assert '"type": "end"' in text
+    assert '"passed": 6' in text

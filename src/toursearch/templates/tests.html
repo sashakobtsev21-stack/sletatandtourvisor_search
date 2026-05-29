@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block content %}
+<style>
+  .toolbar { position: sticky; top: 0; background: #fff; z-index: 5; padding: 12px 0; border-bottom: 1px solid #e3e8ef; }
+  .bar { height: 14px; border-radius: 7px; background: #eef1f6; overflow: hidden; }
+  .bar > span { display: block; height: 100%; width: 0; background: var(--ok); transition: width .2s; }
+  .grp { margin: 6px 0; }
+  .grp summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+  .grp .count { color: #7a869a; font-weight: 400; font-size: 13px; }
+  .case { display: flex; align-items: center; gap: 8px; padding: 2px 0 2px 22px; font-size: 13px; }
+  .case .st { width: 16px; text-align: center; }
+  .pass { color: var(--ok); } .fail { color: var(--bad); } .run { color: var(--accent); }
+  #report { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12.5px; }
+  .stat { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+  .stat b { font-size: 18px; }
+  .live { color: #b25e00; }
+</style>
+
+<div class="card toolbar">
+  <div class="stat">
+    <label><input type="checkbox" id="selectAll"> Выбрать все ({{ total }})</label>
+    <button id="run">▶ Запустить выбранные</button>
+    <span>Прошло: <b class="pass" id="cPass">0</b></span>
+    <span>Упало: <b class="fail" id="cFail">0</b></span>
+    <span>Из <b id="cTotal">0</b></span>
+    <span id="cDur" class="muted"></span>
+  </div>
+  <div class="bar" style="margin-top:10px"><span id="prog"></span></div>
+  <div class="muted" style="margin-top:8px">Сейчас: <span id="current">—</span></div>
+</div>
+
+<div class="card">
+  {% for group, cases in groups %}
+  <details class="grp" {% if cases and cases[0].live %}{% else %}open{% endif %}>
+    <summary>
+      <input type="checkbox" class="grpchk" data-group="{{ loop.index }}">
+      {{ group }} <span class="count">({{ cases|length }})</span>
+    </summary>
+    {% for c in cases %}
+    <div class="case">
+      <input type="checkbox" class="casechk" data-group="{{ loop.parent.loop.index if false else '' }}{{ '' }}"
+             data-g="{{ group }}" value="{{ c.id }}" {% if c.live %}data-live="1"{% endif %}>
+      <span class="st" id="st-{{ c.id }}">·</span>
+      <span class="{{ 'live' if c.live else '' }}">{{ c.name }}{% if c.live %} ⏱{% endif %}</span>
+    </div>
+    {% endfor %}
+  </details>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <h3 style="margin-top:0">Отчёт</h3>
+  <div id="report" class="muted">Выберите тесты и нажмите «Запустить выбранные».</div>
+</div>
+
+<script>
+const $ = (s, r=document) => r.querySelector(s);
+const $$ = (s, r=document) => [...r.querySelectorAll(s)];
+
+// чекбоксы: группа -> кейсы
+$$('.grpchk').forEach(g => g.addEventListener('change', () => {
+  const det = g.closest('details');
+  $$('.casechk', det).forEach(c => c.checked = g.checked);
+}));
+$('#selectAll').addEventListener('change', e => {
+  $$('.casechk').forEach(c => c.checked = e.target.checked);
+  $$('.grpchk').forEach(c => c.checked = e.target.checked);
+});
+
+function selectedIds() { return $$('.casechk').filter(c => c.checked).map(c => c.value); }
+
+$('#run').addEventListener('click', async () => {
+  const ids = selectedIds();
+  if (!ids.length) { alert('Не выбрано ни одного теста'); return; }
+  // сброс статусов
+  $$('.casechk').forEach(c => { const st = $('#st-' + CSS.escape(c.value)); if (st){st.textContent='·'; st.className='st';} });
+  let passed = 0, failed = 0, total = ids.length;
+  $('#cPass').textContent = 0; $('#cFail').textContent = 0; $('#cTotal').textContent = total;
+  $('#prog').style.width = '0%'; $('#prog').style.background = 'var(--ok)';
+  $('#report').textContent = 'Запуск…'; $('#run').disabled = true;
+
+  const r = await fetch('/tests/prepare', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ids})});
+  const { token } = await r.json();
+  const es = new EventSource('/tests/stream?token=' + token);
+  let done = 0;
+  es.onmessage = (m) => {
+    const e = JSON.parse(m.data);
+    if (e.type === 'running') {
+      $('#current').textContent = '[' + e.group + '] ' + e.name;
+      const st = $('#st-' + CSS.escape(e.id)); if (st){st.textContent='▷'; st.className='st run';}
+    } else if (e.type === 'result') {
+      done++;
+      const st = $('#st-' + CSS.escape(e.id));
+      if (e.ok) { passed++; if(st){st.textContent='✓'; st.className='st pass';} }
+      else { failed++; if(st){st.textContent='✗'; st.className='st fail'; st.title=e.error;} }
+      $('#cPass').textContent = passed; $('#cFail').textContent = failed;
+      const pct = Math.round(done/total*100);
+      $('#prog').style.width = pct + '%';
+      if (failed) $('#prog').style.background = 'linear-gradient(90deg,var(--ok),var(--bad))';
+    } else if (e.type === 'end') {
+      es.close(); $('#run').disabled = false; $('#current').textContent = '— готово —';
+      $('#cDur').textContent = e.duration + ' c';
+      let rep = `Итог: прошло ${e.passed} / упало ${e.failed} из ${e.total} за ${e.duration} c\n`;
+      if (e.failures && e.failures.length) {
+        rep += '\nУпавшие тесты:\n' + e.failures.map(f => `  ✗ [${f.group}] ${f.name}\n      ${f.error}`).join('\n');
+      } else rep += '\nВсе выбранные тесты прошли ✅';
+      $('#report').textContent = rep;
+    }
+  };
+  es.onerror = () => { es.close(); $('#run').disabled = false; $('#report').textContent += '\n[поток прерван]'; };
+});
+</script>
+{% endblock %}
