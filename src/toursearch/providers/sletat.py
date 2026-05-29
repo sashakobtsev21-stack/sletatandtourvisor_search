@@ -30,6 +30,7 @@ from toursearch.providers._formcheck import (
     text_contains,
 )
 from toursearch.providers.base import register_provider
+from toursearch.urlcheck import verify_sletat_search_url
 
 _MONTHS_RU = [
     "январь", "февраль", "март", "апрель", "май", "июнь",
@@ -161,6 +162,9 @@ class SletatProvider:
                 await self._click_search(page)
                 start = time.monotonic()
                 await self._wait_for_completion(page)
+                # URL результата кодирует реальные параметры поиска — финальная сверка.
+                search_url = page.url
+                url_problems = verify_sletat_search_url(search_url, params)
                 if params.sort_by == "price":
                     await self._sort_by_price(page)
                 if params.search_mode == "hotels":
@@ -169,6 +173,15 @@ class SletatProvider:
                 else:
                     offers = await self._parse_operators(page)
                     hotel_offers = []
+                if url_problems:
+                    # площадка искала не то, что просили — результаты невалидны
+                    return ProviderResult(
+                        provider=self.name, success=False,
+                        duration_seconds=time.monotonic() - start,
+                        search_mode=params.search_mode, search_url=search_url,
+                        error="URL-параметры не совпали: " + "; ".join(
+                            f"{f}: ожидали {e!r}, получили {a!r}" for f, e, a in url_problems),
+                    )
                 return ProviderResult(
                     provider=self.name,
                     success=bool(offers or hotel_offers),
@@ -176,6 +189,7 @@ class SletatProvider:
                     search_mode=params.search_mode,
                     offers=offers,
                     hotel_offers=hotel_offers,
+                    search_url=search_url,
                 )
             except Exception as exc:  # noqa: BLE001
                 shot = await self._safe_screenshot(page)
@@ -286,21 +300,29 @@ class SletatProvider:
         )
 
     async def _set_nights(self, page: Page, nmin: int, nmax: int) -> None:
-        await page.evaluate(
-            """([mn, mx]) => {
-                const a = document.getElementById('ui-select-nightsMin');
-                const b = document.getElementById('ui-select-nightsMax');
-                if (a && b) {
-                    a.value = String(mn); b.value = String(mx);
-                    [a, b].forEach(e => {
-                        e.dispatchEvent(new Event('input', {bubbles: true}));
-                        e.dispatchEvent(new Event('change', {bubbles: true}));
-                    });
-                }
-            }""",
-            [nmin, nmax],
-        )
-        await page.wait_for_timeout(400)
+        # Ночи — это дропдауны (readonly-инпут открывает список uis-select__options-item).
+        # Прямая установка value НЕ влияет на поиск (в URL уходит дефолт) — выбираем опцию кликом.
+        for input_id, container, value in (
+            ("ui-select-nightsMin", "nights-left", nmin),
+            ("ui-select-nightsMax", "nights-right", nmax),
+        ):
+            await page.click(f"#{input_id}")
+            await page.wait_for_timeout(500)
+            # Кликаем опцию ВНУТРИ нужного списка (min — nights-left, max — nights-right),
+            # иначе матчится чужой видимый дропдаун.
+            clicked = await page.evaluate(
+                """([cls, value]) => {
+                    const cont = document.querySelector('.uis-select__options_nights.' + cls);
+                    if (!cont) return false;
+                    const el = [...cont.querySelectorAll('li')].find(e => e.textContent.trim() === String(value));
+                    if (el) { el.click(); return true; }
+                    return false;
+                }""",
+                [container, value],
+            )
+            if not clicked:
+                raise RuntimeError(f"значение ночей {value} не найдено в списке {container}")
+            await page.wait_for_timeout(300)
 
     async def _select_tourists(self, page: Page, adults: int, children_ages: list[int]) -> None:
         await page.click("#touristSelector .tourist-current-select")

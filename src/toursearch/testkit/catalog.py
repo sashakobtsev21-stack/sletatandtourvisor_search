@@ -458,3 +458,21 @@ G = "Отчёт: формат цены"
 for _n in [1000, 80000, 112741, 605261, 1234567]:
     add(G, f"format_price {_n}", (lambda v=_n: _assert(
         format_price(Offer(provider="p", operator="o", price=Decimal(v))) == f"{v:,.0f} RUB".replace(",", " "))))
+
+
+# ===== Live: сверка URL результата (реальный поиск) =====
+G = "Live: реальные сайты"
+
+
+async def _live_sletat_url(params):
+    from toursearch.providers.sletat import SletatProvider
+    from toursearch.urlcheck import verify_sletat_search_url
+    r = await SletatProvider(headless=True).search(params)
+    _assert(r.search_url, "нет URL результата")
+    probs = verify_sletat_search_url(r.search_url, params)
+    _assert(not probs, f"URL не совпал с параметрами: {probs}")
+
+
+add(G, "Sletat: URL-параметры (ночи 3-5)", lambda: _live_sletat_url(mk(nights_min=3, nights_max=5)), live=True)
+add(G, "Sletat: URL-параметры (ночи 7-10, 3 взр)", lambda: _live_sletat_url(mk(nights_min=7, nights_max=10, adults=3)), live=True)
+add(G, "Sletat: URL-параметры (чартер+прямой)", lambda: _live_sletat_url(mk(charter_only=True, direct_only=True)), live=True)
