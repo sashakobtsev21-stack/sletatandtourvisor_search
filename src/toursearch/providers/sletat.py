@@ -306,7 +306,11 @@ class SletatProvider:
             ("ui-select-nightsMin", "nights-left", nmin),
             ("ui-select-nightsMax", "nights-right", nmax),
         ):
-            await page.click(f"#{input_id}")
+            try:
+                await page.click(f"#{input_id}", timeout=6000)
+            except PWTimeout:
+                # контрол ночей недоступен в этом режиме (напр. иная форма отелей) — пропускаем
+                return
             await page.wait_for_timeout(500)
             # Кликаем опцию ВНУТРИ нужного списка (min — nights-left, max — nights-right),
             # иначе матчится чужой видимый дропдаун.

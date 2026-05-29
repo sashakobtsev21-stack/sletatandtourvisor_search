@@ -29,7 +29,7 @@ Problem = tuple[str, object, object]  # (field, expected, actual)
 # --------------------------- Sletat ---------------------------
 
 _SLETAT_PATH = re.compile(
-    r"/search/from-(?P<city>.+?)-to-(?P<country>.+?)-for-(?P<month>[a-z]+)"
+    r"/search/(?:from-(?P<city>.+?)-)?to-(?P<country>.+?)-for-(?P<month>[a-z]+)"
     r"-nights-(?P<nmin>\d+)\.\.(?P<nmax>\d+)-adults-(?P<adults>\d+)-kids-(?P<kids>[a-z0-9_]+)",
     re.IGNORECASE,
 )
@@ -63,8 +63,10 @@ def verify_sletat_search_url(url: str, params: SearchParams) -> list[Problem]:
             problems.append((field, expected, actual))
 
     if "nmin" in p:
-        eq("nights_min", params.nights_min, int(p["nmin"]))
-        eq("nights_max", params.nights_max, int(p["nmax"]))
+        # В режиме «Отели» ночи задаются диапазоном дат (отдельного контрола нет) — не сверяем.
+        if params.search_mode != "hotels":
+            eq("nights_min", params.nights_min, int(p["nmin"]))
+            eq("nights_max", params.nights_max, int(p["nmax"]))
         eq("adults", params.adults, int(p["adults"]))
         eq("children_count", len(params.children_ages), _kids_count(p["kids"]))
 
