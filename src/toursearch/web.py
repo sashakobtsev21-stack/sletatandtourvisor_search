@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+import uuid
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from toursearch.healthcheck import gate_passed, run_health_check
@@ -15,6 +18,7 @@ from toursearch.models import SearchParams
 from toursearch.orchestrator import run_search
 from toursearch.providers import list_providers, load_browser_providers
 from toursearch.storage import Storage
+from toursearch.testkit import REGISTRY, run_selected
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -113,6 +117,49 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
         return _TEMPLATES.TemplateResponse(
             request, "results.html", {"report": report, "run_id": run_id}
         )
+
+    # ---------------- Автотесты ----------------
+    pending: dict[str, list[str]] = {}
+
+    def _ordered_groups():
+        grouped = REGISTRY.grouped()
+        # группы Live — в конец
+        keys = sorted(grouped, key=lambda g: (g.lower().startswith("live"), g))
+        return [(g, grouped[g]) for g in keys]
+
+    @app.get("/tests", response_class=HTMLResponse)
+    async def tests_page(request: Request):
+        return _TEMPLATES.TemplateResponse(
+            request, "tests.html",
+            {"groups": _ordered_groups(), "total": REGISTRY.count()},
+        )
+
+    @app.post("/tests/prepare")
+    async def tests_prepare(payload: dict):
+        ids = [i for i in payload.get("ids", []) if REGISTRY.get(i)]
+        token = uuid.uuid4().hex
+        pending[token] = ids
+        return {"token": token, "count": len(ids)}
+
+    @app.get("/tests/stream")
+    async def tests_stream(token: str):
+        ids = pending.pop(token, [])
+
+        async def gen():
+            queue: asyncio.Queue = asyncio.Queue()
+
+            async def emit(event: dict) -> None:
+                await queue.put(event)
+
+            task = asyncio.create_task(run_selected(ids, emit))
+            while True:
+                event = await queue.get()
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                if event.get("type") == "end":
+                    break
+            await task
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
 
     return app
 
