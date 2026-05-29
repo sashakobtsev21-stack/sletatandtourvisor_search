@@ -135,6 +135,7 @@ class ProviderResult(BaseModel):
     hotel_offers: list[HotelOffer] = Field(default_factory=list)   # режим «Отели»
     error: str | None = None
     screenshot_path: str | None = None
+    search_url: str | None = None  # URL результата (если площадка его формирует)
 
     def priced_items(self) -> list[PricedItem]:
         """Все предложения с ценой независимо от режима."""
