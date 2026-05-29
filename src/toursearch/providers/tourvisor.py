@@ -24,6 +24,7 @@ from toursearch.providers._formcheck import (
     text_contains,
 )
 from toursearch.providers.base import register_provider
+from toursearch.urlcheck import verify_tourvisor_search_url
 
 _MONTHS_RU = {
     1: "ЯНВАРЬ", 2: "ФЕВРАЛЬ", 3: "МАРТ", 4: "АПРЕЛЬ",
@@ -117,6 +118,7 @@ class TourvisorProvider:
 
     name = "tourvisor"
     URL = "https://tourvisor.ru/search.php"
+    HOMEPAGE_URL = "https://tourvisor.ru/"          # туры: навигирует на /tours/{country}/{city}?params
     HOTELS_URL = "https://tourvisor.ru/poisk-otelej"  # форма «Поиск отелей» (без перелёта)
 
     # Якорные селекторы для health-check гейта (должны присутствовать на форме).
@@ -150,27 +152,52 @@ class TourvisorProvider:
             page.set_default_timeout(self.timeout_ms)
             start = time.monotonic()
             try:
-                url = self.HOTELS_URL if params.search_mode == "hotels" else self.URL
-                await page.goto(url, wait_until="domcontentloaded")
-                await page.wait_for_timeout(1500)
-                await self._fill_form(page, params)
-                await self._verify_and_fix(page, params)
-                await self._click_search(page)
-                start = time.monotonic()  # отсчёт с момента запуска поиска
-                await self._wait_for_completion(page)
                 if params.search_mode == "hotels":
+                    await page.goto(self.HOTELS_URL, wait_until="domcontentloaded")
+                    await page.wait_for_timeout(1500)
+                    await self._fill_form(page, params)
+                    await self._verify_and_fix(page, params)
+                    await self._click_search(page)
+                    start = time.monotonic()
+                    await self._wait_for_completion(page)
                     hotel_offers = await self._parse_hotels(page)
-                    offers = []
-                else:
-                    offers = await self._parse_operators(page)
-                    hotel_offers = []
+                    return ProviderResult(
+                        provider=self.name, success=bool(hotel_offers),
+                        duration_seconds=time.monotonic() - start,
+                        search_mode="hotels", hotel_offers=hotel_offers,
+                    )
+
+                # Туры: главная форма навигирует на /tours/{country}/{city}?params (URL со всеми
+                # базовыми параметрами). Расширенные фильтры применяем уже на /tours/.
+                await page.goto(self.HOMEPAGE_URL, wait_until="domcontentloaded")
+                await page.wait_for_timeout(2500)
+                await self._fill_tours_basic(page, params)
+                await self._verify_and_fix(page, params)
+                start = time.monotonic()
+                await self._click_search(page)
+                try:
+                    await page.wait_for_url("**/tours/**", timeout=30_000)
+                except PWTimeout:
+                    pass
+                await page.wait_for_timeout(1500)
+                await self._apply_tours_advanced(page, params)
+                await self._wait_for_completion(page)
+
+                search_url = page.url
+                url_problems = verify_tourvisor_search_url(search_url, params)
+                offers = await self._parse_operators(page)
+                if url_problems:
+                    return ProviderResult(
+                        provider=self.name, success=False,
+                        duration_seconds=time.monotonic() - start,
+                        search_mode="tours", search_url=search_url,
+                        error="URL-параметры не совпали: " + "; ".join(
+                            f"{f}: ожидали {e!r}, получили {a!r}" for f, e, a in url_problems),
+                    )
                 return ProviderResult(
-                    provider=self.name,
-                    success=bool(offers or hotel_offers),
+                    provider=self.name, success=bool(offers),
                     duration_seconds=time.monotonic() - start,
-                    search_mode=params.search_mode,
-                    offers=offers,
-                    hotel_offers=hotel_offers,
+                    search_mode="tours", offers=offers, search_url=search_url,
                 )
             except Exception as exc:  # noqa: BLE001 — провал одной площадки не валит прогон
                 shot = await self._safe_screenshot(page)
@@ -187,7 +214,53 @@ class TourvisorProvider:
 
     # --- заполнение формы ---
 
+    async def _fill_tours_basic(self, page: Page, params: SearchParams) -> None:
+        """Базовые поля на главной форме (она навигирует на /tours/...).
+
+        На главной есть: вылет, страна, даты, ночи, туристы, звёзды, питание.
+        Бюджет/операторы/курорт — только на /tours/, их применяем после навигации.
+        """
+        async def opt(coro) -> None:
+            try:
+                await coro
+            except Exception:
+                pass
+
+        await self._select_departure_city(page, params.departure_city)
+        await self._select_country(page, params.destination_country)
+        await self._select_dates(page, params.date_from, params.date_to)
+        await self._select_nights(page, params.nights_min, params.nights_max)
+        await self._select_tourists(page, params.adults, params.children_ages)
+        if params.hotel_stars:
+            await opt(self._select_stars(page, params.hotel_stars))
+        if params.meals:
+            await opt(self._select_meal(page, params.meals[0]))
+
+    async def _apply_tours_advanced(self, page: Page, params: SearchParams) -> None:
+        """Расширенные фильтры на странице /tours/ (после навигации) + перезапуск поиска."""
+        async def opt(coro) -> None:
+            try:
+                await coro
+            except Exception:
+                pass
+
+        advanced = bool(params.operators or params.resorts or params.charter_only
+                        or params.price_min is not None or params.price_max is not None)
+        if not advanced:
+            return
+        if params.operators:
+            await opt(self._select_operators(page, params.operators))
+        if params.resorts:
+            await opt(self._select_resorts(page, params.resorts))
+        if params.price_min is not None or params.price_max is not None:
+            await opt(self._set_budget(page, params.price_min, params.price_max))
+        if params.charter_only:
+            await opt(self._toggle_charter(page, params.charter_only))
+        await opt(self._click_search(page))
+        await page.wait_for_timeout(1500)
+
     async def _fill_form(self, page: Page, params: SearchParams) -> None:
+        # Используется для режима «Отели» (/poisk-otelej). Туры идут через _fill_tours_basic.
         hotels = params.search_mode == "hotels"
 
         async def opt(coro) -> None:
@@ -425,10 +498,9 @@ class TourvisorProvider:
             await checkbox.first.click()
 
     async def _click_search(self, page: Page) -> None:
-        # «Найти туры» (search.php) или «Найти» (/poisk-otelej)
-        await page.click(
-            "xpath=//div[contains(@class,'TVSearchButton') and contains(text(),'Найти')]"
-        )
+        # На главной кнопка — иконка без текста, на search.php/poisk-otelej — «Найти туры»/«Найти».
+        # Кликаем видимую кнопку поиска независимо от текста.
+        await page.click("div.TVSearchButton:visible")
 
     # --- верификация формы перед поиском ---
     # Операторы и курорт-дерево НЕ верифицируем: чтение требует переоткрытия панели,
