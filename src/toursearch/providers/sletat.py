@@ -12,11 +12,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
+
+log = logging.getLogger("toursearch.providers.sletat")
 
 from playwright.async_api import Page, TimeoutError as PWTimeout, async_playwright
 
@@ -192,6 +195,8 @@ class SletatProvider:
                     search_url=search_url,
                 )
             except Exception as exc:  # noqa: BLE001
+                log.warning("sletat search failed (mode=%s): %s: %s",
+                            params.search_mode, type(exc).__name__, exc)
                 shot = await self._safe_screenshot(page)
                 return ProviderResult(
                     provider=self.name,

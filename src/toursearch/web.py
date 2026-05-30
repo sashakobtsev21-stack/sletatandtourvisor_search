@@ -33,6 +33,12 @@ _TEMPLATES.env.filters["price"] = _fmt_price
 
 
 def create_app(db_path: str = "toursearch.db") -> FastAPI:
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
     app = FastAPI(title="ТурСравнение")
     load_browser_providers()
 

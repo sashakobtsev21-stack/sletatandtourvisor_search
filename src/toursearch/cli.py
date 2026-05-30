@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime
 
 import typer
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 from toursearch.healthcheck import format_health, gate_passed, run_health_check
 from toursearch.models import SearchParams
