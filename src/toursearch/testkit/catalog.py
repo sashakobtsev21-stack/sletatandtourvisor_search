@@ -186,7 +186,7 @@ for raw in ["—", "", "нет", "руб"]:
 
 # ============================ 6. URL Sletat ============================
 def _sletat_url(p: SearchParams, city="moscow", country="turkey") -> str:
-    kids = "zero" if not p.children_ages else str(len(p.children_ages))
+    kids = "zero" if not p.children_ages else ".".join(str(a) for a in p.children_ages)
     tickets = "true" if p.search_mode == "tours" else "false"
     path = (f"/search/from-{city}-to-{country}-for-june"
             f"-nights-{p.nights_min}..{p.nights_max}-adults-{p.adults}-kids-{kids}")

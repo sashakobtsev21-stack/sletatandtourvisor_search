@@ -13,6 +13,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
+from toursearch import refdata
 from toursearch.healthcheck import gate_passed, run_health_check
 from toursearch.models import SearchParams
 from toursearch.orchestrator import run_search
@@ -45,13 +46,23 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
     def _providers() -> list[str]:
         return list_providers()
 
+    def _form_ctx() -> dict:
+        return {
+            "providers": _providers(),
+            "today": date.today().isoformat(),
+            "departure_cities": refdata.departure_cities(),
+            "countries": refdata.countries(),
+            "operators": refdata.operators(),
+            "nights_options": list(range(1, 22)),
+            "adults_options": list(range(1, 7)),
+            "children_options": list(range(0, 5)),
+            "age_options": list(range(0, 18)),
+            "max_date_span_days": 14,
+        }
+
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request):
-        return _TEMPLATES.TemplateResponse(
-            request,
-            "index.html",
-            {"providers": _providers(), "today": date.today().isoformat()},
-        )
+        return _TEMPLATES.TemplateResponse(request, "index.html", _form_ctx())
 
     @app.post("/search", response_class=HTMLResponse)
     async def do_search(
@@ -64,32 +75,32 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
         nights_min: int = Form(7),
         nights_max: int = Form(10),
         adults: int = Form(2),
-        children: str = Form(""),
-        operators: str = Form(""),
-        meals: str = Form(""),
         price_max: str = Form(""),
         charter_only: bool = Form(False),
         direct_only: bool = Form(False),
     ):
         form = await request.form()
-        stars = [int(s) for s in form.getlist("star")]
         chosen = form.getlist("provider") or None
-        child_ages = [int(x) for x in children.replace(" ", "").split(",") if x.strip().isdigit()]
-        ops = [o.strip() for o in operators.split(",") if o.strip()]
-        meal_codes = [m.strip() for m in meals.split(",") if m.strip()]
+        ops = [o for o in form.getlist("operator") if o]
+        child_ages = [int(x) for x in form.getlist("child_age") if str(x).isdigit()]
+
+        df, dt = date.fromisoformat(date_from), date.fromisoformat(date_to)
+        # Окно вылета — не более 14 дней
+        if (dt - df).days > _form_ctx()["max_date_span_days"]:
+            ctx = _form_ctx()
+            ctx["error"] = "Диапазон дат вылета не должен превышать 14 дней."
+            return _TEMPLATES.TemplateResponse(request, "index.html", ctx)
 
         params = SearchParams(
             departure_city=departure_city,
             destination_country=destination_country,
-            date_from=date.fromisoformat(date_from),
-            date_to=date.fromisoformat(date_to),
+            date_from=df,
+            date_to=dt,
             nights_min=nights_min,
             nights_max=nights_max,
             adults=adults,
             children_ages=child_ages,
             search_mode=mode,
-            hotel_stars=stars,
-            meals=meal_codes,
             operators=ops,
             charter_only=charter_only,
             direct_only=direct_only,

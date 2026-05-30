@@ -2,6 +2,7 @@
 {% block content %}
 <form class="card" method="post" action="/search">
   <h2 style="margin-top:0">Параметры поиска</h2>
+  {% if error %}<div class="worst" style="margin-bottom:10px">⚠️ {{ error }}</div>{% endif %}
 
   <label>Режим поиска</label>
   <div class="chips">
@@ -10,31 +11,54 @@
   </div>
 
   <div class="row">
-    <div><label>Город вылета</label><input type="text" name="departure_city" value="Москва"></div>
-    <div><label>Страна прилёта</label><input type="text" name="destination_country" value="Турция"></div>
+    <div>
+      <label>Город вылета</label>
+      <select name="departure_city">
+        {% for c in departure_cities %}<option {% if c == 'Москва' %}selected{% endif %}>{{ c }}</option>{% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>Страна прилёта</label>
+      <select name="destination_country">
+        {% for c in countries %}<option {% if c == 'Турция' %}selected{% endif %}>{{ c }}</option>{% endfor %}
+      </select>
+    </div>
   </div>
 
   <div class="row">
-    <div><label>Дата вылета</label><input type="date" name="date_from" value="{{ today }}" required></div>
-    <div><label>Дата возврата</label><input type="date" name="date_to" value="{{ today }}" required></div>
-    <div><label>Ночей от</label><input type="number" name="nights_min" value="7" min="1"></div>
-    <div><label>Ночей до</label><input type="number" name="nights_max" value="10" min="1"></div>
+    <div><label>Дата вылета (от)</label><input type="date" name="date_from" id="date_from" value="{{ today }}" required></div>
+    <div><label>Дата вылета (до)</label><input type="date" name="date_to" id="date_to" value="{{ today }}" required></div>
+    <div>
+      <label>Ночей от</label>
+      <select name="nights_min">{% for n in nights_options %}<option {% if n == 7 %}selected{% endif %}>{{ n }}</option>{% endfor %}</select>
+    </div>
+    <div>
+      <label>Ночей до</label>
+      <select name="nights_max">{% for n in nights_options %}<option {% if n == 10 %}selected{% endif %}>{{ n }}</option>{% endfor %}</select>
+    </div>
   </div>
+  <div class="muted" id="dateHint">Диапазон дат вылета — не более {{ max_date_span_days }} дней.</div>
 
   <div class="row">
-    <div><label>Взрослых</label><input type="number" name="adults" value="2" min="1"></div>
-    <div><label>Дети (возраст через запятую)</label><input type="text" name="children" placeholder="напр. 5, 10"></div>
+    <div>
+      <label>Взрослых</label>
+      <select name="adults">{% for a in adults_options %}<option {% if a == 2 %}selected{% endif %}>{{ a }}</option>{% endfor %}</select>
+    </div>
+    <div>
+      <label>Детей</label>
+      <select id="childrenCount">{% for k in children_options %}<option>{{ k }}</option>{% endfor %}</select>
+    </div>
     <div><label>Макс. цена, ₽</label><input type="text" name="price_max" placeholder="любая"></div>
   </div>
-
-  <label>Звёздность отеля</label>
-  <div class="chips">
-    {% for s in [2,3,4,5] %}<label><input type="checkbox" name="star" value="{{ s }}"> {{ s }}★</label>{% endfor %}
-  </div>
+  <div id="childAges" class="row"></div>
 
   <div class="row">
-    <div><label>Питание (коды через запятую: BB/HB/FB/AI/UAI)</label><input type="text" name="meals" placeholder="напр. AI, UAI"></div>
-    <div><label>Туроператоры (через запятую)</label><input type="text" name="operators" placeholder="напр. anex, pegas"></div>
+    <div>
+      <label>Туроператоры (можно несколько; пусто = все)</label>
+      <select name="operator" multiple size="6">
+        {% for op in operators %}<option value="{{ op }}">{{ op }}</option>{% endfor %}
+      </select>
+    </div>
   </div>
 
   <label>Рейсы</label>
@@ -49,7 +73,39 @@
   </div>
 
   <button type="submit">Сравнить</button>
-  <p class="muted">Поиск открывает обе площадки и ждёт полной загрузки результатов — это может занять до ~1.5 мин.
-  Перед прогоном автоматически выполняется health-check форм.</p>
+  <p class="muted">Поиск открывает обе площадки и ждёт полной загрузки — до ~1.5 мин. Перед прогоном выполняется health-check.</p>
 </form>
+
+<script>
+const ages = {{ age_options | tojson }};
+const childCount = document.getElementById('childrenCount');
+const childAges = document.getElementById('childAges');
+function renderAges() {
+  const n = parseInt(childCount.value || '0', 10);
+  childAges.innerHTML = '';
+  for (let i = 0; i < n; i++) {
+    const wrap = document.createElement('div');
+    const opts = ages.map(a => `<option value="${a}">${a}</option>`).join('');
+    wrap.innerHTML = `<label>Возраст ребёнка ${i + 1}</label><select name="child_age">${opts}</select>`;
+    childAges.appendChild(wrap);
+  }
+}
+childCount.addEventListener('change', renderAges);
+
+// Ограничение окна дат ≤ N дней
+const SPAN = {{ max_date_span_days }};
+const df = document.getElementById('date_from'), dt = document.getElementById('date_to');
+function clampDates() {
+  if (!df.value) return;
+  const from = new Date(df.value);
+  const max = new Date(from); max.setDate(max.getDate() + SPAN);
+  dt.min = df.value;
+  dt.max = max.toISOString().slice(0, 10);
+  if (dt.value && new Date(dt.value) < from) dt.value = df.value;
+  if (dt.value && new Date(dt.value) > max) dt.value = dt.max;
+}
+df.addEventListener('change', clampDates);
+dt.addEventListener('change', clampDates);
+clampDates();
+</script>
 {% endblock %}

@@ -30,7 +30,7 @@ Problem = tuple[str, object, object]  # (field, expected, actual)
 
 _SLETAT_PATH = re.compile(
     r"/search/(?:from-(?P<city>.+?)-)?to-(?P<country>.+?)-for-(?P<month>[a-z]+)"
-    r"-nights-(?P<nmin>\d+)\.\.(?P<nmax>\d+)-adults-(?P<adults>\d+)-kids-(?P<kids>[a-z0-9_]+)",
+    r"-nights-(?P<nmin>\d+)\.\.(?P<nmax>\d+)-adults-(?P<adults>\d+)-kids-(?P<kids>[^/?]+)",
     re.IGNORECASE,
 )
 
@@ -46,10 +46,11 @@ def parse_sletat_url(url: str) -> dict:
 
 
 def _kids_count(token: str) -> int:
+    # Токен kids кодирует ВОЗРАСТЫ детей, а не их число: "zero" = 0 детей,
+    # "7" = один ребёнок (7 лет), "5.10"/"5-10" = двое. Считаем группы цифр.
     if not token or token == "zero":
         return 0
-    m = re.match(r"\d+", token)
-    return int(m.group()) if m else 0
+    return len(re.findall(r"\d+", token))
 
 
 def verify_sletat_search_url(url: str, params: SearchParams) -> list[Problem]:
