@@ -25,6 +25,9 @@ from toursearch.testkit import REGISTRY, run_selected
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
+# Sletat ограничивает окно вылета ±13 дней от первой даты (наблюдено вживую).
+MAX_DATE_SPAN_DAYS = 13
+
 
 class _QueueLogHandler(logging.Handler):
     """Перехватывает записи логов toursearch.* и кладёт их в очередь для SSE."""
@@ -80,7 +83,7 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
             "adults_options": list(range(1, 7)),
             "children_options": list(range(0, 5)),
             "age_options": list(range(0, 18)),
-            "max_date_span_days": 14,
+            "max_date_span_days": MAX_DATE_SPAN_DAYS,
         }
 
     @app.get("/", response_class=HTMLResponse)
@@ -109,9 +112,9 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
 
         df, dt = date.fromisoformat(date_from), date.fromisoformat(date_to)
         # Окно вылета — не более 14 дней
-        if (dt - df).days > _form_ctx()["max_date_span_days"]:
+        if (dt - df).days > MAX_DATE_SPAN_DAYS:
             ctx = _form_ctx()
-            ctx["error"] = "Диапазон дат вылета не должен превышать 14 дней."
+            ctx["error"] = f"Диапазон дат вылета не должен превышать {MAX_DATE_SPAN_DAYS} дней (ограничение Sletat)."
             return _TEMPLATES.TemplateResponse(request, "index.html", ctx)
 
         params = SearchParams(
@@ -155,8 +158,8 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
         child_ages = [int(x) for x in f.getlist("child_age") if str(x).isdigit()]
         df = date.fromisoformat(f.get("date_from"))
         dt = date.fromisoformat(f.get("date_to"))
-        if (dt - df).days > 14:
-            return {"error": "Диапазон дат вылета не должен превышать 14 дней."}
+        if (dt - df).days > MAX_DATE_SPAN_DAYS:
+            return {"error": f"Диапазон дат вылета не должен превышать {MAX_DATE_SPAN_DAYS} дней (ограничение Sletat)."}
         params = SearchParams(
             departure_city=f.get("departure_city", "Москва"),
             destination_country=f.get("destination_country", "Турция"),
