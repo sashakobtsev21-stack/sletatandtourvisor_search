@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from toursearch.models import ComparisonReport, ProviderResult, SearchParams
 from toursearch.providers import get_provider, list_providers, load_browser_providers
+
+log = logging.getLogger("toursearch.orchestrator")
 
 
 async def run_search(
@@ -24,6 +27,8 @@ async def run_search(
     if not names:
         raise RuntimeError("Нет зарегистрированных провайдеров")
 
+    log.info("search start: providers=%s mode=%s %s→%s",
+             names, params.search_mode, params.departure_city, params.destination_country)
     instances = [get_provider(name)(headless=headless) for name in names]
     raw = await asyncio.gather(
         *(inst.search(params) for inst in instances), return_exceptions=True
@@ -32,6 +37,7 @@ async def run_search(
     results: list[ProviderResult] = []
     for name, res in zip(names, raw):
         if isinstance(res, Exception):
+            log.warning("provider %s raised: %s: %s", name, type(res).__name__, res)
             results.append(
                 ProviderResult(
                     provider=name,
@@ -42,5 +48,10 @@ async def run_search(
                 )
             )
         else:
+            n = len(res.offers) + len(res.hotel_offers)
+            if res.success:
+                log.info("provider %s: OK %.1fs, %d результатов", name, res.duration_seconds, n)
+            else:
+                log.warning("provider %s: FAIL %.1fs — %s", name, res.duration_seconds, res.error)
             results.append(res)
     return ComparisonReport(params=params, results=results)

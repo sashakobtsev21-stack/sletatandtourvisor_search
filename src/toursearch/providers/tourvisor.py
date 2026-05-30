@@ -7,11 +7,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import time
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+
+log = logging.getLogger("toursearch.providers.tourvisor")
 
 from playwright.async_api import Locator, Page, TimeoutError as PWTimeout, async_playwright
 
@@ -200,6 +203,8 @@ class TourvisorProvider:
                     search_mode="tours", offers=offers, search_url=search_url,
                 )
             except Exception as exc:  # noqa: BLE001 — провал одной площадки не валит прогон
+                log.warning("tourvisor search failed (mode=%s): %s: %s",
+                            params.search_mode, type(exc).__name__, exc)
                 shot = await self._safe_screenshot(page)
                 return ProviderResult(
                     provider=self.name,
