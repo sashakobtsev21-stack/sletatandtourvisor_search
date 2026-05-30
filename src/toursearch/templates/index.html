@@ -146,9 +146,14 @@ form.addEventListener('submit', async (ev) => {
   let token;
   try {
     const r = await fetch('/search/prepare', { method:'POST', body: new FormData(form) });
-    const j = await r.json();
+    const j = await r.json().catch(() => ({}));
     if (j.error) { plog('⚠️ ' + j.error, 'l-err'); btn.disabled = false; document.getElementById('pspin').style.display='none'; return; }
     token = j.token;
+    if (!token) {
+      plog('Сервер вернул неожиданный ответ (нет токена). Похоже, запущена старая версия — '
+           + 'перезапустите сервер: Ctrl+C, затем `.\\.venv\\Scripts\\toursearch.exe web`, и обновите страницу (Ctrl+F5).', 'l-err');
+      btn.disabled = false; document.getElementById('pspin').style.display='none'; return;
+    }
   } catch (e) { plog('Ошибка отправки: ' + e, 'l-err'); btn.disabled = false; return; }
 
   const es = new EventSource('/search/stream?token=' + token);
