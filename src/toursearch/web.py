@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from datetime import date
 from decimal import Decimal
@@ -22,6 +23,20 @@ from toursearch.storage import Storage
 from toursearch.testkit import REGISTRY, run_selected
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+
+class _QueueLogHandler(logging.Handler):
+    """Перехватывает записи логов toursearch.* и кладёт их в очередь для SSE."""
+
+    def __init__(self, queue: "asyncio.Queue") -> None:
+        super().__init__()
+        self.queue = queue
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            self.queue.put_nowait({"type": "log", "level": record.levelname, "msg": record.getMessage()})
+        except Exception:
+            pass
 
 
 def _fmt_price(value) -> str:
@@ -120,6 +135,77 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
         return _TEMPLATES.TemplateResponse(
             request, "results.html", {"report": report, "run_id": run_id}
         )
+
+    # --- поиск с живым логом (SSE) ---
+    search_pending: dict[str, tuple] = {}
+
+    @app.post("/search/prepare")
+    async def search_prepare(request: Request):
+        f = await request.form()
+        chosen = f.getlist("provider") or None
+        ops = [o for o in f.getlist("operator") if o]
+        child_ages = [int(x) for x in f.getlist("child_age") if str(x).isdigit()]
+        df = date.fromisoformat(f.get("date_from"))
+        dt = date.fromisoformat(f.get("date_to"))
+        if (dt - df).days > 14:
+            return {"error": "Диапазон дат вылета не должен превышать 14 дней."}
+        params = SearchParams(
+            departure_city=f.get("departure_city", "Москва"),
+            destination_country=f.get("destination_country", "Турция"),
+            date_from=df, date_to=dt,
+            nights_min=int(f.get("nights_min", 7)), nights_max=int(f.get("nights_max", 10)),
+            adults=int(f.get("adults", 2)), children_ages=child_ages,
+            search_mode=f.get("mode", "tours"), operators=ops,
+            charter_only=bool(f.get("charter_only")), direct_only=bool(f.get("direct_only")),
+            price_max=Decimal(f.get("price_max")) if (f.get("price_max") or "").strip() else None,
+        )
+        token = uuid.uuid4().hex
+        search_pending[token] = (params, chosen)
+        return {"token": token}
+
+    @app.get("/search/stream")
+    async def search_stream(token: str):
+        params, chosen = search_pending.pop(token, (None, None))
+
+        async def gen():
+            if params is None:
+                yield 'data: {"type":"error","msg":"истёк токен — повторите"}\n\n'
+                return
+            queue: asyncio.Queue = asyncio.Queue()
+            handler = _QueueLogHandler(queue)
+            tlog = logging.getLogger("toursearch")
+            tlog.addHandler(handler)
+
+            async def work():
+                try:
+                    await queue.put({"type": "log", "level": "INFO", "msg": "Проверяю формы площадок (health-check)…"})
+                    health = await run_health_check(providers=chosen, headless=True)
+                    if not gate_passed(health):
+                        miss = {k: (v.missing or v.error) for k, v in health.items()}
+                        await queue.put({"type": "gate_failed", "detail": miss})
+                        return
+                    await queue.put({"type": "log", "level": "INFO", "msg": "Гейт пройден. Запускаю поиск на площадках…"})
+                    report = await run_search(params, providers=chosen, headless=True)
+                    with Storage(db_path) as storage:
+                        run_id = storage.save_report(report)
+                    await queue.put({"type": "done", "run_id": run_id})
+                except Exception as exc:  # noqa: BLE001
+                    await queue.put({"type": "error", "msg": f"{type(exc).__name__}: {exc}"})
+                finally:
+                    await queue.put({"type": "_end"})
+
+            task = asyncio.create_task(work())
+            try:
+                while True:
+                    event = await queue.get()
+                    if event.get("type") == "_end":
+                        break
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            finally:
+                tlog.removeHandler(handler)
+                await task
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
 
     @app.get("/history", response_class=HTMLResponse)
     async def history(request: Request):
