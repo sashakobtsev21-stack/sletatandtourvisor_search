@@ -187,14 +187,18 @@ class SletatProvider:
                         error="URL-параметры не совпали: " + "; ".join(
                             f"{f}: ожидали {e!r}, получили {a!r}" for f, e, a in url_problems),
                     )
+                found = bool(offers or hotel_offers)
+                shot = await self._safe_screenshot(page)
                 return ProviderResult(
                     provider=self.name,
-                    success=bool(offers or hotel_offers),
+                    success=found,
                     duration_seconds=time.monotonic() - start,
                     search_mode=params.search_mode,
                     offers=offers,
                     hotel_offers=hotel_offers,
                     search_url=search_url,
+                    screenshot_path=shot,
+                    error=None if found else "Предложений не найдено по заданным параметрам.",
                 )
             except Exception as exc:  # noqa: BLE001
                 log.warning("sletat search failed (mode=%s): %s: %s",

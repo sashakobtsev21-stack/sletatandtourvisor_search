@@ -6,12 +6,13 @@ import asyncio
 import json
 import logging
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from toursearch import refdata
@@ -56,15 +57,22 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
         datefmt="%H:%M:%S",
     )
     app = FastAPI(title="ТурСравнение")
+    Path("screenshots").mkdir(exist_ok=True)
+    app.mount("/screenshots", StaticFiles(directory="screenshots"), name="screenshots")
     load_browser_providers()
 
     def _providers() -> list[str]:
         return list_providers()
 
     def _form_ctx() -> dict:
+        today = date.today()
+        default_from = today + timedelta(days=21)
+        default_to = default_from + timedelta(days=7)
         return {
             "providers": _providers(),
-            "today": date.today().isoformat(),
+            "today": today.isoformat(),
+            "default_from": default_from.isoformat(),
+            "default_to": default_to.isoformat(),
             "departure_cities": refdata.departure_cities(),
             "countries": refdata.countries(),
             "operators": refdata.operators(),
