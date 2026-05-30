@@ -164,10 +164,13 @@ class TourvisorProvider:
                     start = time.monotonic()
                     await self._wait_for_completion(page)
                     hotel_offers = await self._parse_hotels(page)
+                    shot = await self._safe_screenshot(page)
                     return ProviderResult(
                         provider=self.name, success=bool(hotel_offers),
                         duration_seconds=time.monotonic() - start,
                         search_mode="hotels", hotel_offers=hotel_offers,
+                        screenshot_path=shot,
+                        error=None if hotel_offers else "Предложений не найдено по заданным параметрам.",
                     )
 
                 # Туры: главная форма навигирует на /tours/{country}/{city}?params (URL со всеми
@@ -199,10 +202,13 @@ class TourvisorProvider:
                         error="URL-параметры не совпали: " + "; ".join(
                             f"{f}: ожидали {e!r}, получили {a!r}" for f, e, a in url_problems),
                     )
+                shot = await self._safe_screenshot(page)
                 return ProviderResult(
                     provider=self.name, success=bool(offers),
                     duration_seconds=time.monotonic() - start,
                     search_mode="tours", offers=offers, search_url=search_url,
+                    screenshot_path=shot,
+                    error=None if offers else "Предложений не найдено по заданным параметрам.",
                 )
             except Exception as exc:  # noqa: BLE001 — провал одной площадки не валит прогон
                 log.warning("tourvisor search failed (mode=%s): %s: %s",

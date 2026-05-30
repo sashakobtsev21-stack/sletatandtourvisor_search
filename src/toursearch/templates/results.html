@@ -1,15 +1,21 @@
 {% extends "base.html" %}
 {% block content %}
 {% set p = report.params %}
+<style>
+  a.shot { color: var(--accent); text-decoration: underline dotted; cursor: zoom-in; }
+  #shotModal { display:none; position:fixed; inset:0; background:rgba(0,0,0,.82); z-index:50; align-items:center; justify-content:center; }
+  #shotModal img { max-width:95%; max-height:92%; border-radius:8px; box-shadow:0 0 40px #000; }
+  #shotModal .cap { position:fixed; top:12px; left:0; right:0; text-align:center; color:#fff; font-size:13px; }
+</style>
 <div class="card">
   <h2 style="margin-top:0">
     Результат сравнения —
     <span class="pill">{{ "ОТЕЛИ (без перелёта)" if p.search_mode == "hotels" else "ТУРЫ" }}</span>
   </h2>
   <p class="muted">
-    {{ p.departure_city }} → {{ p.destination_country }},
+    {% if p.search_mode != "hotels" %}{{ p.departure_city }} → {% endif %}{{ p.destination_country }},
     {{ p.date_from.strftime("%d.%m.%Y") }}–{{ p.date_to.strftime("%d.%m.%Y") }},
-    {{ p.nights_min }}–{{ p.nights_max }} ноч., {{ p.adults }} взр.{% if p.children_ages %} + {{ p.children_ages|length }} реб.{% endif %}
+    {% if p.search_mode != "hotels" %}{{ p.nights_min }}–{{ p.nights_max }} ноч., {% endif %}{{ p.adults }} взр.{% if p.children_ages %} + {{ p.children_ages|length }} реб.{% endif %}
     {% if run_id %}· прогон #{{ run_id }}{% endif %}
   </p>
 
@@ -18,10 +24,14 @@
     <tbody>
     {% for r in report.results %}
       <tr>
-        <td><b>{{ r.provider }}</b></td>
+        <td><b>{{ r.provider }}</b>{% if r.screenshot_path %} <a href="#" class="shot muted" data-shot="/{{ r.screenshot_path }}" data-cap="{{ r.provider }} — выдача">📷</a>{% endif %}</td>
         <td>{% if r.success %}{{ "%.1f"|format(r.duration_seconds) }} с{% else %}—{% endif %}</td>
-        <td>{% if r.cheapest %}{{ r.cheapest.price|price }}{% else %}—{% endif %}</td>
-        <td>{% if r.success %}{{ r.cheapest.label if r.cheapest else "нет результатов" }}{% else %}<span class="worst">ошибка: {{ r.error }}</span>{% endif %}</td>
+        <td>
+          {% if r.cheapest %}
+            {% if r.screenshot_path %}<a href="#" class="shot" data-shot="/{{ r.screenshot_path }}" data-cap="{{ r.provider }} — выдача">{{ r.cheapest.price|price }}</a>{% else %}{{ r.cheapest.price|price }}{% endif %}
+          {% else %}—{% endif %}
+        </td>
+        <td>{% if r.success %}{{ r.cheapest.label if r.cheapest else "нет результатов" }}{% else %}<span class="worst">{{ r.error or "ошибка" }}</span>{% endif %}</td>
       </tr>
     {% endfor %}
     </tbody>
@@ -29,20 +39,23 @@
 
   <p style="margin-top:14px">
     {% if report.cheapest %}<div class="best">🏆 Лучшее: {{ report.cheapest.price|price }} — {{ report.cheapest.label }} ({{ report.cheapest.provider }})</div>{% endif %}
-    {% if report.most_expensive %}<div class="worst">🔺 Худшее: {{ report.most_expensive.price|price }} — {{ report.most_expensive.label }} ({{ report.most_expensive.provider }})</div>{% endif %}
-    {% if report.fastest_provider %}<div class="muted">⚡ Быстрее всех: {{ report.fastest_provider }} · 🐢 медленнее: {{ report.slowest_provider }}</div>{% endif %}
+    {% if report.fastest_provider %}<div class="muted">⚡ Быстрее всех: {{ report.fastest_provider }}{% if report.slowest_provider != report.fastest_provider %} · 🐢 медленнее: {{ report.slowest_provider }}{% endif %}</div>{% endif %}
   </p>
+  <p class="muted" style="margin:0">💡 Нажмите на цену или 📷 — откроется скриншот выдачи с площадки.</p>
 </div>
 
 {% for r in report.results if r.success %}
 <div class="card">
-  <h3 style="margin-top:0">{{ r.provider }} <span class="muted">({{ "%.1f"|format(r.duration_seconds) }} с)</span></h3>
+  <h3 style="margin-top:0">{{ r.provider }} <span class="muted">({{ "%.1f"|format(r.duration_seconds) }} с)</span>
+    {% if r.screenshot_path %}<a href="#" class="shot" data-shot="/{{ r.screenshot_path }}" data-cap="{{ r.provider }} — выдача" style="font-size:13px">📷 скриншот выдачи</a>{% endif %}
+  </h3>
   {% if r.hotel_offers %}
   <table>
     <thead><tr><th>Отель</th><th>★</th><th>Рейтинг</th><th>Направление</th><th>Цена</th></tr></thead>
     <tbody>
     {% for h in r.hotel_offers|sort(attribute="price") %}
-      <tr><td>{{ h.hotel_name }}</td><td>{{ h.stars or "—" }}</td><td>{{ h.rating or "—" }}</td><td class="muted">{{ h.destination or "" }}</td><td>{{ h.price|price }}</td></tr>
+      <tr><td>{{ h.hotel_name }}</td><td>{{ h.stars or "—" }}</td><td>{{ h.rating or "—" }}</td><td class="muted">{{ h.destination or "" }}</td>
+        <td>{% if r.screenshot_path %}<a href="#" class="shot" data-shot="/{{ r.screenshot_path }}" data-cap="{{ r.provider }} — выдача">{{ h.price|price }}</a>{% else %}{{ h.price|price }}{% endif %}</td></tr>
     {% endfor %}
     </tbody>
   </table>
@@ -51,7 +64,8 @@
     <thead><tr><th>Туроператор</th><th>Мин. цена</th></tr></thead>
     <tbody>
     {% for o in r.offers|sort(attribute="price") %}
-      <tr><td>{{ o.operator }}</td><td>{{ o.price|price }}</td></tr>
+      <tr><td>{{ o.operator }}</td>
+        <td>{% if r.screenshot_path %}<a href="#" class="shot" data-shot="/{{ r.screenshot_path }}" data-cap="{{ r.provider }} — выдача">{{ o.price|price }}</a>{% else %}{{ o.price|price }}{% endif %}</td></tr>
     {% endfor %}
     </tbody>
   </table>
@@ -60,4 +74,17 @@
 {% endfor %}
 
 <p><a href="/">← Новый поиск</a></p>
+
+<div id="shotModal" onclick="this.style.display='none'">
+  <div class="cap" id="shotCap"></div>
+  <img id="shotImg" alt="скриншот выдачи">
+</div>
+<script>
+document.querySelectorAll('a.shot').forEach(a => a.addEventListener('click', (e) => {
+  e.preventDefault();
+  document.getElementById('shotImg').src = a.dataset.shot;
+  document.getElementById('shotCap').textContent = a.dataset.cap || '';
+  document.getElementById('shotModal').style.display = 'flex';
+}));
+</script>
 {% endblock %}

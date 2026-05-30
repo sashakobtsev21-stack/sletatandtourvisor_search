@@ -24,7 +24,7 @@
   </div>
 
   <div class="row">
-    <div>
+    <div id="depCityBlock">
       <label>Город вылета</label>
       <select name="departure_city">
         {% for c in departure_cities %}<option {% if c == 'Москва' %}selected{% endif %}>{{ c }}</option>{% endfor %}
@@ -39,8 +39,8 @@
   </div>
 
   <div class="row">
-    <div><label>Дата вылета (от)</label><input type="date" name="date_from" id="date_from" value="{{ today }}" required></div>
-    <div><label>Дата вылета (до)</label><input type="date" name="date_to" id="date_to" value="{{ today }}" required></div>
+    <div><label>Дата вылета (от)</label><input type="date" name="date_from" id="date_from" value="{{ default_from }}" min="{{ today }}" required></div>
+    <div><label>Дата вылета (до)</label><input type="date" name="date_to" id="date_to" value="{{ default_to }}" min="{{ today }}" required></div>
     <div>
       <label>Ночей от</label>
       <select name="nights_min">{% for n in nights_options %}<option {% if n == 7 %}selected{% endif %}>{{ n }}</option>{% endfor %}</select>
@@ -74,10 +74,12 @@
     </div>
   </div>
 
-  <label>Рейсы</label>
-  <div class="chips">
-    <label><input type="checkbox" name="charter_only" value="true"> Только чартер</label>
-    <label><input type="checkbox" name="direct_only" value="true"> Только прямые</label>
+  <div id="flightsBlock">
+    <label>Рейсы</label>
+    <div class="chips">
+      <label><input type="checkbox" name="charter_only" value="true"> Только чартер</label>
+      <label><input type="checkbox" name="direct_only" value="true"> Только прямые</label>
+    </div>
   </div>
 
   <label>Площадки для сравнения</label>
@@ -127,6 +129,17 @@ function clampDates() {
 df.addEventListener('change', clampDates);
 dt.addEventListener('change', clampDates);
 clampDates();
+
+// Режим «Отели» (без перелёта): нет города вылета и фильтров рейсов
+const depBlock = document.getElementById('depCityBlock');
+const flightsBlock = document.getElementById('flightsBlock');
+function applyMode() {
+  const hotels = document.querySelector('input[name=mode]:checked').value === 'hotels';
+  depBlock.style.display = hotels ? 'none' : '';
+  flightsBlock.style.display = hotels ? 'none' : '';
+}
+document.querySelectorAll('input[name=mode]').forEach(r => r.addEventListener('change', applyMode));
+applyMode();
 
 // Сабмит формы → живой лог через SSE → переход к результатам
 const form = document.getElementById('searchForm');
