@@ -272,6 +272,11 @@ class SletatProvider:
         await page.wait_for_timeout(800)
 
     async def _select_dates(self, page: Page, date_from: date, date_to: date) -> None:
+        # Sletat ограничивает окно вылета ±13 дней от первой даты — дальше дни disabled.
+        if (date_to - date_from).days > 13:
+            raise ValueError(
+                f"Диапазон дат вылета {(date_to - date_from).days} дн. превышает лимит Sletat (13)"
+            )
         await page.click("div.containerTitle")
         await page.wait_for_selector("button.rdrDay")
         await self._goto_month(page, date_from)
