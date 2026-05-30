@@ -174,6 +174,7 @@ class TourvisorProvider:
                 # базовыми параметрами). Расширенные фильтры применяем уже на /tours/.
                 await page.goto(self.HOMEPAGE_URL, wait_until="domcontentloaded")
                 await page.wait_for_timeout(2500)
+                log.info("Tourvisor: сайт открыт, задаю параметры…")
                 await self._fill_tours_basic(page, params)
                 await self._verify_and_fix(page, params)
                 start = time.monotonic()
@@ -183,6 +184,7 @@ class TourvisorProvider:
                 except PWTimeout:
                     pass
                 await page.wait_for_timeout(1500)
+                log.info("Tourvisor: поиск запущен, жду полной загрузки результатов…")
                 await self._apply_tours_advanced(page, params)
                 await self._wait_for_completion(page)
 

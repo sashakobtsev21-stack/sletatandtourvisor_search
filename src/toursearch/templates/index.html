@@ -1,6 +1,19 @@
 {% extends "base.html" %}
 {% block content %}
-<form class="card" method="post" action="/search">
+<style>
+  .layout { display:flex; gap:16px; align-items:flex-start; }
+  .layout > form { flex:1 1 60%; }
+  #progress { flex:1 1 40%; position:sticky; top:12px; }
+  #searchlog { height:340px; overflow:auto; background:#0f1733; color:#cfe0ff;
+    font-family:ui-monospace,monospace; font-size:12px; border-radius:8px; padding:8px 10px; }
+  #searchlog .l-info { color:#cfe0ff; } #searchlog .l-warning { color:#ffd479; }
+  #searchlog .l-ok { color:#6ee7a8; } #searchlog .l-err { color:#ff9b9b; }
+  .spin { width:16px; height:16px; border:3px solid #cdd7e5; border-top-color:var(--accent);
+    border-radius:50%; display:inline-block; animation:sp .8s linear infinite; vertical-align:middle; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+</style>
+<div class="layout">
+<form class="card" method="post" action="/search" id="searchForm">
   <h2 style="margin-top:0">Параметры поиска</h2>
   {% if error %}<div class="worst" style="margin-bottom:10px">⚠️ {{ error }}</div>{% endif %}
 
@@ -76,6 +89,13 @@
   <p class="muted">Поиск открывает обе площадки и ждёт полной загрузки — до ~1.5 мин. Перед прогоном выполняется health-check.</p>
 </form>
 
+<div id="progress" class="card" hidden>
+  <h3 style="margin-top:0"><span class="spin" id="pspin"></span> Выполнение поиска</h3>
+  <div id="searchlog"></div>
+  <p class="muted" id="pnote" style="margin-bottom:0">Идёт поиск… по завершении откроются результаты.</p>
+</div>
+</div>
+
 <script>
 const ages = {{ age_options | tojson }};
 const childCount = document.getElementById('childrenCount');
@@ -107,5 +127,50 @@ function clampDates() {
 df.addEventListener('change', clampDates);
 dt.addEventListener('change', clampDates);
 clampDates();
+
+// Сабмит формы → живой лог через SSE → переход к результатам
+const form = document.getElementById('searchForm');
+const progress = document.getElementById('progress');
+const slog = document.getElementById('searchlog');
+function plog(msg, cls='l-info') {
+  const d = document.createElement('div'); d.className = cls; d.textContent = msg;
+  slog.appendChild(d); slog.scrollTop = slog.scrollHeight;
+}
+form.addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const btn = form.querySelector('button[type=submit]'); btn.disabled = true;
+  progress.hidden = false; slog.innerHTML = '';
+  document.getElementById('pspin').style.display = 'inline-block';
+  document.getElementById('pnote').textContent = 'Идёт поиск… по завершении откроются результаты.';
+  plog('Отправляю параметры…');
+  let token;
+  try {
+    const r = await fetch('/search/prepare', { method:'POST', body: new FormData(form) });
+    const j = await r.json();
+    if (j.error) { plog('⚠️ ' + j.error, 'l-err'); btn.disabled = false; document.getElementById('pspin').style.display='none'; return; }
+    token = j.token;
+  } catch (e) { plog('Ошибка отправки: ' + e, 'l-err'); btn.disabled = false; return; }
+
+  const es = new EventSource('/search/stream?token=' + token);
+  es.onmessage = (m) => {
+    const e = JSON.parse(m.data);
+    if (e.type === 'log') {
+      const cls = e.level === 'WARNING' ? 'l-warning' : 'l-info';
+      plog((e.level === 'WARNING' ? '⚠ ' : '› ') + e.msg, cls);
+    } else if (e.type === 'gate_failed') {
+      es.close(); document.getElementById('pspin').style.display='none'; btn.disabled = false;
+      plog('⛔ Health-check не пройден — поиск остановлен:', 'l-err');
+      for (const [k, v] of Object.entries(e.detail)) plog('   ' + k + ': ' + JSON.stringify(v), 'l-err');
+      document.getElementById('pnote').textContent = 'Структура площадки изменилась — нужно обновить селекторы.';
+    } else if (e.type === 'done') {
+      es.close(); plog('✓ Готово — открываю результаты…', 'l-ok');
+      window.location = '/run/' + e.run_id;
+    } else if (e.type === 'error') {
+      es.close(); document.getElementById('pspin').style.display='none'; btn.disabled = false;
+      plog('Ошибка: ' + e.msg, 'l-err');
+    }
+  };
+  es.onerror = () => { es.close(); document.getElementById('pspin').style.display='none'; btn.disabled = false; plog('[поток прерван]', 'l-err'); };
+});
 </script>
 {% endblock %}

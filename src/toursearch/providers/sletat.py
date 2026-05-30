@@ -158,12 +158,14 @@ class SletatProvider:
                 await page.goto(self.URL, wait_until="domcontentloaded")
                 await page.wait_for_timeout(3500)
                 await self._close_popups(page)
+                log.info("Sletat: сайт открыт, задаю параметры (%s)…", params.search_mode)
                 if params.search_mode == "hotels":
                     await self._switch_to_hotels(page)
                 await self._fill_form(page, params)
                 await self._verify_and_fix(page, params)
                 await self._click_search(page)
                 start = time.monotonic()
+                log.info("Sletat: поиск запущен, жду полной загрузки результатов…")
                 await self._wait_for_completion(page)
                 # URL результата кодирует реальные параметры поиска — финальная сверка.
                 search_url = page.url
