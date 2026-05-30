@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import tempfile
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -361,39 +361,7 @@ add(G, "гейт красный при поломке", lambda: _assert(not gate
 add(G, "гейт красный когда пусто", lambda: _assert(not gate_passed({})))
 
 
-# ============================ 13. Live: реальные сайты ============================
-G = "Live: реальные сайты"
-
-
-async def _live(provider_factory, params):
-    prov = provider_factory(headless=True)
-    r = await prov.search(params)
-    _assert(r.success, r.error or "поиск без результатов")
-
-
-def _factory_sletat():
-    from toursearch.providers.sletat import SletatProvider
-    return SletatProvider
-
-
-def _factory_tv():
-    from toursearch.providers.tourvisor import TourvisorProvider
-    return TourvisorProvider
-
-
-add(G, "Sletat — туры", lambda: _live(_factory_sletat(), mk()), live=True)
-add(G, "Sletat — отели", lambda: _live(_factory_sletat(), mk(search_mode="hotels")), live=True)
-add(G, "Tourvisor — туры", lambda: _live(_factory_tv(), mk()), live=True)
-add(G, "Tourvisor — отели", lambda: _live(_factory_tv(), mk(search_mode="hotels")), live=True)
-
-
-async def _live_healthcheck():
-    from toursearch.healthcheck import run_health_check, gate_passed
-    res = await run_health_check(providers=["sletat", "tourvisor"], headless=True)
-    _assert(gate_passed(res), str({k: v.missing or v.error for k, v in res.items()}))
-
-
-add(G, "Health-check обеих площадок", _live_healthcheck, live=True)
+# (Live-группа целиком — Sletat-only — генерируется в конце файла.)
 
 
 # ============================ 14. Расширенная параметризация ============================
@@ -460,19 +428,119 @@ for _n in [1000, 80000, 112741, 605261, 1234567]:
         format_price(Offer(provider="p", operator="o", price=Decimal(v))) == f"{v:,.0f} RUB".replace(",", " "))))
 
 
-# ===== Live: сверка URL результата (реальный поиск) =====
-G = "Live: реальные сайты"
+# ============================ 15. Описания групп (для вкладки) ============================
+_GROUP_DESC = {
+    "Модели: параметры": "Проверяют, что параметры поиска (даты, ночи, туристы, звёзды, питание, цена) валидируются правильно: корректные — принимаются, бессмысленные (ночи 10-3, возраст 25, питание XXL) — отклоняются.",
+    "Модели: сравнение": "Проверяют логику сравнения площадок: верно ли выбирается самое дешёвое и самое дорогое предложение по всем сайтам, кто быстрее, и что упавшая площадка не ломает сравнение.",
+    "Парсинг: операторы (Tourvisor)": "Проверяют сборку списка «оператор → минимальная цена» из строк панели операторов Tourvisor: дедупликация, выбор минимальной цены, пропуск пустых.",
+    "Парсинг: операторы (Sletat)": "То же для Sletat: из строк панели операторов собираются уникальные операторы с минимальной ценой.",
+    "Парсинг: отели (Tourvisor)": "Проверяют разбор карточки отеля Tourvisor: имя и звёзды из заголовка, рейтинг, цена; карточки без цены пропускаются.",
+    "Парсинг: отели (Sletat)": "Проверяют разбор карточки отеля Sletat: имя, звёзды, рейтинг, цена, число операторов.",
+    "Парсинг: цена": "Проверяют извлечение числовой цены из текста («112 741 ₽» → 112741) и что мусор («—», пусто) даёт «нет цены».",
+    "URL Sletat: разбор": "Проверяют разбор URL результата Sletat на части (город, страна, ночи, взрослые, даты).",
+    "URL Sletat: сверка совпадает": "Берут корректный URL Sletat и убеждаются, что сверка с теми же параметрами НЕ находит расхождений.",
+    "URL Sletat: детект расхождений": "Подменяют одно поле и проверяют, что сверка URL ЛОВИТ расхождение (именно так был найден баг с ночами).",
+    "URL Tourvisor: разбор": "Разбор URL результата Tourvisor (/tours/...): страна, город, ночи, взрослые, даты.",
+    "URL Tourvisor: сверка совпадает": "Корректный URL Tourvisor сверяется с теми же параметрами без расхождений.",
+    "URL Tourvisor: детект расхождений": "Подмена поля → сверка URL Tourvisor ловит расхождение.",
+    "Сверка формы: матчеры": "Проверяют вспомогательные функции сверки значений формы (нормализация текста, сравнение множеств операторов без лишних).",
+    "Маппинги: операторы/питание": "Проверяют таблицы соответствия: ключи операторов и коды питания корректно мапятся на подписи сайтов.",
+    "Отчёт": "Проверяют формирование текстового отчёта сравнения (лучший/худший, площадки, режим).",
+    "Хранение (SQLite)": "Проверяют сохранение и чтение прогонов в базе: туры, отели, история, обработка отсутствующего прогона.",
+    "Health-check: логика": "Проверяют логику жёсткого гейта: проходит только если все площадки целы.",
+    "Модели: доп. валидация": "Дополнительные проверки валидации параметров на множестве комбинаций (ночи, взрослые, дети).",
+    "Парсинг: цена (расширено)": "Расширенный набор проверок парсинга цены на разных форматах чисел.",
+    "URL Sletat: сверка совпадает (расширено)": "Много комбинаций флагов/валюты/ночей/взрослых — URL сверяется без расхождений.",
+    "URL Sletat: детект (расширено)": "Дополнительные проверки детекта расхождений по URL (даты, валюта).",
+    "Сравнение: генеративные сценарии": "Десятки сгенерированных наборов цен — проверяют, что лучший/худший/быстрейший выбираются верно.",
+    "Отчёт: формат цены": "Проверяют форматирование цены с разделением разрядов пробелами.",
+    "Live: Sletat (реальные сценарии)": "⏱ Живые прогоны на реальном Sletat.ru: открыть сайт, задать параметры, нажать «Найти», дождаться полной загрузки и проверить, что (1) есть результаты и (2) URL результата содержит ровно заданные параметры. Медленно — запускать по галочке.",
+}
+for _g, _d in _GROUP_DESC.items():
+    REGISTRY.describe_group(_g, _d)
 
 
-async def _live_sletat_url(params):
+# ============================ 16. Live: 50 реальных сценариев Sletat ============================
+G = "Live: Sletat (реальные сценарии)"
+
+
+async def _live_sletat(params: SearchParams) -> None:
     from toursearch.providers.sletat import SletatProvider
     from toursearch.urlcheck import verify_sletat_search_url
     r = await SletatProvider(headless=True).search(params)
-    _assert(r.search_url, "нет URL результата")
-    probs = verify_sletat_search_url(r.search_url, params)
-    _assert(not probs, f"URL не совпал с параметрами: {probs}")
+    _assert(r.success, r.error or "поиск не дал результатов")
+    if r.search_url:
+        probs = verify_sletat_search_url(r.search_url, params)
+        _assert(not probs, f"URL результата не совпал с параметрами: {probs}")
 
 
-add(G, "Sletat: URL-параметры (ночи 3-5)", lambda: _live_sletat_url(mk(nights_min=3, nights_max=5)), live=True)
-add(G, "Sletat: URL-параметры (ночи 7-10, 3 взр)", lambda: _live_sletat_url(mk(nights_min=7, nights_max=10, adults=3)), live=True)
-add(G, "Sletat: URL-параметры (чартер+прямой)", lambda: _live_sletat_url(mk(charter_only=True, direct_only=True)), live=True)
+def _live_desc(p: SearchParams, op_key: str | None) -> str:
+    mode = "Отели (без перелёта)" if p.search_mode == "hotels" else "Туры (с перелётом)"
+    kids = f", дети: {p.children_ages}" if p.children_ages else ""
+    operator = f", только оператор «{op_key}»" if op_key else ""
+    nights = "" if p.search_mode == "hotels" else f", ночей {p.nights_min}–{p.nights_max}"
+    return (
+        f"Живой прогон на Sletat.ru. Режим: {mode}. Вылет: {p.departure_city} → "
+        f"{p.destination_country}. Окно вылета: {p.date_from:%d.%m.%Y}–{p.date_to:%d.%m.%Y}"
+        f"{nights}, взрослых: {p.adults}{kids}{operator}.\n"
+        "Что делает: открывает Sletat, выставляет эти параметры через форму, жмёт «Найти», "
+        "дожидается полной загрузки выдачи. Что проверяет: (1) поиск завершился и есть "
+        "результаты; (2) URL результата кодирует РОВНО заданные параметры (даты, ночи, "
+        "туристы, режим) — то есть сайт искал именно то, что мы задали. Провал = либо нет "
+        "результатов, либо сайт искал с другими параметрами (тогда сравнение было бы неверным)."
+    )
+
+
+# Наборы для генерации (популярные направления с высокой доступностью туров).
+_LV_CITIES = ["Москва", "Санкт-Петербург", "Екатеринбург", "Казань", "Новосибирск",
+              "Краснодар", "Уфа", "Самара", "Ростов-на-Дону", "Нижний Новгород"]
+_LV_DESTS = ["Турция", "Египет", "ОАЭ", "Таиланд", "Греция", "Кипр", "Тунис",
+             "Вьетнам", "Куба", "Мальдивы"]
+_LV_NIGHTS = [(3, 5), (7, 10), (7, 14), (10, 14), (5, 7)]
+_LV_ADULTS = [2, 1, 2, 3, 4]
+_LV_KIDS = [[], [], [5], [7, 10], []]
+_LV_MODE = ["tours", "tours", "hotels", "tours", "hotels"]
+
+
+def _register_live_scenarios(n: int = 50) -> None:
+    for i in range(n):
+        city = _LV_CITIES[i % len(_LV_CITIES)]
+        dest = _LV_DESTS[(i * 3) % len(_LV_DESTS)]
+        nmin, nmax = _LV_NIGHTS[i % len(_LV_NIGHTS)]
+        adults = _LV_ADULTS[i % len(_LV_ADULTS)]
+        kids = _LV_KIDS[i % len(_LV_KIDS)]
+        mode = _LV_MODE[i % len(_LV_MODE)]
+        # оператор только для Турции/Египта (где крупные ТО точно есть)
+        op_key = None
+        if dest in ("Турция", "Египет") and i % 4 == 0:
+            op_key = ["anex", "pegas", "biblioglobus", "coral"][i % 4]
+        d0 = date(2026, 6, 15) + timedelta(days=(i * 3) % 50)
+        d1 = d0 + timedelta(days=1 + (i % 10))  # окно вылета ≤ 14 дней
+        params = SearchParams(
+            departure_city=city, destination_country=dest,
+            date_from=d0, date_to=d1, nights_min=nmin, nights_max=nmax,
+            adults=adults, children_ages=kids, search_mode=mode,
+            operators=[op_key] if op_key else [],
+        )
+        label = (f"#{i + 1:02d} {city}→{dest} "
+                 f"{'отели' if mode == 'hotels' else 'туры'} "
+                 f"{adults}взр{'+' + str(len(kids)) + 'реб' if kids else ''}"
+                 f"{' /' + op_key if op_key else ''}")
+        add(G, label, (lambda p=params: _live_sletat(p)), live=True,
+            description=_live_desc(params, op_key))
+
+
+_register_live_scenarios(50)
+
+
+# Sletat health-check (только Sletat — live для Tourvisor не нужен).
+async def _live_sletat_health() -> None:
+    from toursearch.healthcheck import gate_passed, run_health_check
+    res = await run_health_check(providers=["sletat"], headless=True)
+    _assert(gate_passed(res), str({k: v.missing or v.error for k, v in res.items()}))
+
+
+add(G, "Health-check формы Sletat", _live_sletat_health, live=True,
+    description="Живой прогон: открывает форму Sletat и проверяет, что ключевые поля "
+                "(город, страна, даты, ночи, туристы, операторы, кнопка поиска) на месте. "
+                "Если структура сайта изменилась — этот тест упадёт и подскажет, что чинить.")

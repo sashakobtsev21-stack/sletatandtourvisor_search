@@ -131,7 +131,7 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
         grouped = REGISTRY.grouped()
         # группы Live — в конец
         keys = sorted(grouped, key=lambda g: (g.lower().startswith("live"), g))
-        return [(g, grouped[g]) for g in keys]
+        return [(g, REGISTRY.group_description(g), grouped[g]) for g in keys]
 
     @app.get("/tests", response_class=HTMLResponse)
     async def tests_page(request: Request):

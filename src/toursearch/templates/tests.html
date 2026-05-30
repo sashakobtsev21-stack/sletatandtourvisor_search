@@ -1,47 +1,62 @@
 {% extends "base.html" %}
 {% block content %}
 <style>
-  .toolbar { position: sticky; top: 0; background: #fff; z-index: 5; padding: 12px 0; border-bottom: 1px solid #e3e8ef; }
-  .bar { height: 14px; border-radius: 7px; background: #eef1f6; overflow: hidden; }
-  .bar > span { display: block; height: 100%; width: 0; background: var(--ok); transition: width .2s; }
-  .grp { margin: 6px 0; }
-  .grp summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
-  .grp .count { color: #7a869a; font-weight: 400; font-size: 13px; }
-  .case { display: flex; align-items: center; gap: 8px; padding: 2px 0 2px 22px; font-size: 13px; }
-  .case .st { width: 16px; text-align: center; }
-  .pass { color: var(--ok); } .fail { color: var(--bad); } .run { color: var(--accent); }
-  #report { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12.5px; }
-  .stat { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
-  .stat b { font-size: 18px; }
-  .live { color: #b25e00; }
+  .toolbar { position: sticky; top: 0; background:#fff; z-index:5; padding:12px 0; border-bottom:1px solid #e3e8ef; }
+  .bar { height:16px; border-radius:8px; background:#eef1f6; overflow:hidden; }
+  .bar > span { display:block; height:100%; width:0; background:var(--ok); transition:width .2s; }
+  .stat { display:flex; gap:18px; align-items:center; flex-wrap:wrap; }
+  .stat b { font-size:18px; }
+  #pct { font-size:26px; font-weight:800; min-width:78px; }
+  .spin { width:16px; height:16px; border:3px solid #cdd7e5; border-top-color:var(--accent); border-radius:50%; display:inline-block; animation:sp .8s linear infinite; vertical-align:middle; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+  .grp { margin:8px 0; border:1px solid #eef1f6; border-radius:8px; padding:4px 10px; }
+  .grp > summary { cursor:pointer; font-weight:700; padding:6px 0; }
+  .grp .gcount { color:#7a869a; font-weight:400; font-size:13px; }
+  .gdesc { color:#54607a; font-size:13px; margin:4px 0 8px; padding-left:20px; }
+  .case { display:flex; align-items:center; gap:8px; padding:3px 0 3px 20px; font-size:13.5px; flex-wrap:wrap; }
+  .case .st { width:16px; text-align:center; }
+  .case .info { border:1px solid #c8d0de; background:#f6f8fb; color:#1f4ea8; border-radius:50%; width:18px; height:18px; line-height:15px; font-weight:700; cursor:pointer; padding:0; font-size:12px; }
+  .case-desc { flex-basis:100%; white-space:pre-wrap; background:#f8fafc; border-left:3px solid var(--accent); padding:8px 10px; margin:4px 0 4px 24px; font-size:12.5px; color:#2a3550; border-radius:0 6px 6px 0; }
+  .pass { color:var(--ok); } .fail { color:var(--bad); } .run { color:var(--accent); }
+  .live { color:#b25e00; }
+  #log { height:160px; overflow:auto; background:#0f1733; color:#cfe0ff; font-family:ui-monospace,monospace; font-size:12px; border-radius:8px; padding:8px 10px; }
+  #log .l-pass { color:#6ee7a8; } #log .l-fail { color:#ff9b9b; } #log .l-run { color:#9ec1ff; }
+  #report { white-space:pre-wrap; font-family:ui-monospace,monospace; font-size:12.5px; }
 </style>
 
 <div class="card toolbar">
   <div class="stat">
     <label><input type="checkbox" id="selectAll"> Выбрать все ({{ total }})</label>
     <button id="run">▶ Запустить выбранные</button>
-    <span>Прошло: <b class="pass" id="cPass">0</b></span>
-    <span>Упало: <b class="fail" id="cFail">0</b></span>
-    <span>Из <b id="cTotal">0</b></span>
+    <span id="pct">0%</span>
+    <span class="spin" id="spin" style="display:none"></span>
+    <span>прошло <b class="pass" id="cPass">0</b> · упало <b class="fail" id="cFail">0</b> · из <b id="cTotal">0</b></span>
     <span id="cDur" class="muted"></span>
   </div>
   <div class="bar" style="margin-top:10px"><span id="prog"></span></div>
-  <div class="muted" style="margin-top:8px">Сейчас: <span id="current">—</span></div>
+  <div class="muted" style="margin-top:6px">Сейчас: <span id="current">—</span></div>
 </div>
 
 <div class="card">
-  {% for group, cases in groups %}
-  <details class="grp" {% if cases and cases[0].live %}{% else %}open{% endif %}>
+  <h3 style="margin-top:0">Действия (лог выполнения)</h3>
+  <div id="log">Лог появится здесь во время прогона…</div>
+</div>
+
+<div class="card">
+  {% for group, gdesc, cases in groups %}
+  <details class="grp">
     <summary>
-      <input type="checkbox" class="grpchk" data-group="{{ loop.index }}">
-      {{ group }} <span class="count">({{ cases|length }})</span>
+      <input type="checkbox" class="grpchk" onclick="event.stopPropagation()">
+      {{ group }} <span class="gcount">({{ cases|length }})</span>
     </summary>
+    {% if gdesc %}<div class="gdesc">{{ gdesc }}</div>{% endif %}
     {% for c in cases %}
     <div class="case">
-      <input type="checkbox" class="casechk" data-group="{{ loop.parent.loop.index if false else '' }}{{ '' }}"
-             data-g="{{ group }}" value="{{ c.id }}" {% if c.live %}data-live="1"{% endif %}>
+      <input type="checkbox" class="casechk" value="{{ c.id }}" {% if c.live %}data-live="1"{% endif %}>
       <span class="st" id="st-{{ c.id }}">·</span>
       <span class="{{ 'live' if c.live else '' }}">{{ c.name }}{% if c.live %} ⏱{% endif %}</span>
+      {% if c.description %}<button type="button" class="info" title="Что проверяет этот тест">!</button>
+      <div class="case-desc" hidden>{{ c.description }}</div>{% endif %}
     </div>
     {% endfor %}
   </details>
@@ -50,64 +65,76 @@
 
 <div class="card">
   <h3 style="margin-top:0">Отчёт</h3>
-  <div id="report" class="muted">Выберите тесты и нажмите «Запустить выбранные».</div>
+  <div id="report" class="muted">Выберите тесты (или «Выбрать все») и нажмите «Запустить выбранные».</div>
 </div>
 
 <script>
 const $ = (s, r=document) => r.querySelector(s);
 const $$ = (s, r=document) => [...r.querySelectorAll(s)];
 
-// чекбоксы: группа -> кейсы
+// «!» — показать/скрыть описание теста
+$$('.info').forEach(b => b.addEventListener('click', () => {
+  const d = b.parentElement.querySelector('.case-desc');
+  if (d) d.hidden = !d.hidden;
+}));
+// чекбокс группы → все её тесты
 $$('.grpchk').forEach(g => g.addEventListener('change', () => {
-  const det = g.closest('details');
-  $$('.casechk', det).forEach(c => c.checked = g.checked);
+  $$('.casechk', g.closest('details')).forEach(c => c.checked = g.checked);
 }));
 $('#selectAll').addEventListener('change', e => {
   $$('.casechk').forEach(c => c.checked = e.target.checked);
   $$('.grpchk').forEach(c => c.checked = e.target.checked);
 });
 
-function selectedIds() { return $$('.casechk').filter(c => c.checked).map(c => c.value); }
+function logLine(html, cls='') {
+  const log = $('#log');
+  const div = document.createElement('div');
+  if (cls) div.className = cls;
+  div.innerHTML = html;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
 
 $('#run').addEventListener('click', async () => {
-  const ids = selectedIds();
+  const ids = $$('.casechk').filter(c => c.checked).map(c => c.value);
   if (!ids.length) { alert('Не выбрано ни одного теста'); return; }
-  // сброс статусов
   $$('.casechk').forEach(c => { const st = $('#st-' + CSS.escape(c.value)); if (st){st.textContent='·'; st.className='st';} });
-  let passed = 0, failed = 0, total = ids.length;
-  $('#cPass').textContent = 0; $('#cFail').textContent = 0; $('#cTotal').textContent = total;
-  $('#prog').style.width = '0%'; $('#prog').style.background = 'var(--ok)';
-  $('#report').textContent = 'Запуск…'; $('#run').disabled = true;
+  let passed=0, failed=0, done=0, total=ids.length;
+  $('#cPass').textContent=0; $('#cFail').textContent=0; $('#cTotal').textContent=total;
+  $('#pct').textContent='0%'; $('#prog').style.width='0%'; $('#prog').style.background='var(--ok)';
+  $('#log').innerHTML=''; $('#report').textContent='Запуск…'; $('#run').disabled=true; $('#spin').style.display='inline-block';
 
   const r = await fetch('/tests/prepare', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ids})});
   const { token } = await r.json();
   const es = new EventSource('/tests/stream?token=' + token);
-  let done = 0;
   es.onmessage = (m) => {
     const e = JSON.parse(m.data);
     if (e.type === 'running') {
       $('#current').textContent = '[' + e.group + '] ' + e.name;
+      logLine('▷ [' + e.group + '] ' + e.name, 'l-run');
       const st = $('#st-' + CSS.escape(e.id)); if (st){st.textContent='▷'; st.className='st run';}
     } else if (e.type === 'result') {
       done++;
       const st = $('#st-' + CSS.escape(e.id));
-      if (e.ok) { passed++; if(st){st.textContent='✓'; st.className='st pass';} }
-      else { failed++; if(st){st.textContent='✗'; st.className='st fail'; st.title=e.error;} }
-      $('#cPass').textContent = passed; $('#cFail').textContent = failed;
+      if (e.ok) { passed++; if(st){st.textContent='✓'; st.className='st pass';} logLine('  ✓ OK', 'l-pass'); }
+      else { failed++; if(st){st.textContent='✗'; st.className='st fail'; st.title=e.error;} logLine('  ✗ ' + (e.error||''), 'l-fail'); }
+      $('#cPass').textContent=passed; $('#cFail').textContent=failed;
       const pct = Math.round(done/total*100);
+      $('#pct').textContent = pct + '%';
       $('#prog').style.width = pct + '%';
-      if (failed) $('#prog').style.background = 'linear-gradient(90deg,var(--ok),var(--bad))';
+      if (failed) $('#prog').style.background='linear-gradient(90deg,var(--ok),var(--bad))';
     } else if (e.type === 'end') {
-      es.close(); $('#run').disabled = false; $('#current').textContent = '— готово —';
-      $('#cDur').textContent = e.duration + ' c';
+      es.close(); $('#run').disabled=false; $('#spin').style.display='none';
+      $('#current').textContent='— готово —'; $('#pct').textContent='100%'; $('#cDur').textContent=e.duration+' c';
       let rep = `Итог: прошло ${e.passed} / упало ${e.failed} из ${e.total} за ${e.duration} c\n`;
-      if (e.failures && e.failures.length) {
-        rep += '\nУпавшие тесты:\n' + e.failures.map(f => `  ✗ [${f.group}] ${f.name}\n      ${f.error}`).join('\n');
-      } else rep += '\nВсе выбранные тесты прошли ✅';
+      rep += (e.failures && e.failures.length)
+        ? '\nУпавшие тесты:\n' + e.failures.map(f => `  ✗ [${f.group}] ${f.name}\n      ${f.error}`).join('\n')
+        : '\nВсе выбранные тесты прошли ✅';
       $('#report').textContent = rep;
+      logLine('— завершено за ' + e.duration + ' c —');
     }
   };
-  es.onerror = () => { es.close(); $('#run').disabled = false; $('#report').textContent += '\n[поток прерван]'; };
+  es.onerror = () => { es.close(); $('#run').disabled=false; $('#spin').style.display='none'; logLine('[поток прерван]','l-fail'); };
 });
 </script>
 {% endblock %}
