@@ -8,6 +8,9 @@ const BACKEND = process.env.TOURSEARCH_API || "http://127.0.0.1:8000";
 
 export default defineConfig({
   plugins: [react()],
+  // Относительные пути ассетов — чтобы собранный dist раздавался FastAPI
+  // под префиксом /app (StaticFiles) без переписывания ссылок.
+  base: "./",
   server: {
     port: 5173,
     proxy: {
