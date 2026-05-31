@@ -66,6 +66,16 @@ def test_api_runs_and_run_detail(tmp_path):
     assert client.get("/api/runs/999999").status_code == 404
 
 
+def test_api_health_anchors(tmp_path):
+    client = TestClient(create_app(db_path=str(tmp_path / "w.db")))
+    data = client.get("/api/health/anchors").json()
+    by_provider = {p["provider"]: p["checks"] for p in data}
+    assert "sletat" in by_provider and "tourvisor" in by_provider
+    # человекочитаемые подписи проверок (а не селекторы)
+    assert any("страна" in c for c in by_provider["sletat"])
+    assert all(isinstance(c, str) for c in by_provider["tourvisor"])
+
+
 def test_api_tests_catalog(tmp_path):
     client = TestClient(create_app(db_path=str(tmp_path / "w.db")))
     cat = client.get("/api/tests/catalog").json()

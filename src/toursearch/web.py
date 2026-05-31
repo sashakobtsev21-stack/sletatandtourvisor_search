@@ -19,7 +19,7 @@ from toursearch import refdata
 from toursearch.healthcheck import gate_passed, run_health_check
 from toursearch.models import SearchParams
 from toursearch.orchestrator import run_search
-from toursearch.providers import list_providers, load_browser_providers
+from toursearch.providers import get_provider, list_providers, load_browser_providers
 from toursearch.storage import Storage
 from toursearch.testkit import REGISTRY, run_selected
 
@@ -303,6 +303,17 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
         return StreamingResponse(gen(), media_type="text/event-stream")
 
     # --- JSON API для React-дашборда ---
+    @app.get("/api/health/anchors")
+    async def api_health_anchors():
+        # Что именно проверяет health-check каждой площадки — список «якорных»
+        # элементов формы (по их человеческим подписям).
+        out = []
+        for name in list_providers():
+            cls = get_provider(name)
+            anchors = getattr(cls, "HEALTH_ANCHORS", {})
+            out.append({"provider": name, "checks": list(anchors.keys())})
+        return out
+
     @app.get("/api/runs")
     async def api_runs(limit: int = 50):
         with Storage(db_path) as storage:

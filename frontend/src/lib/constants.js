@@ -43,7 +43,7 @@ export const PROVIDERS = ["sletat", "tourvisor"];
 // Числовые опции селектов.
 export const NIGHTS = Array.from({ length: 21 }, (_, i) => i + 1); // 1..21
 export const ADULTS = [1, 2, 3, 4, 5, 6];
-export const CHILDREN = [0, 1, 2, 3];
+export const CHILDREN = Array.from({ length: 11 }, (_, i) => i); // 0..10
 export const CHILD_AGES = Array.from({ length: 18 }, (_, i) => i); // 0..17
 
 // Sletat ограничивает окно вылета 13 днями (синхронизировано с бэкендом).

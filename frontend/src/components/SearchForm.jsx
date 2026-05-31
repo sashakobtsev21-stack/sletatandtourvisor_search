@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Plane, Globe2, CalendarDays, MoonStar, Users, Baby,
   Wallet, Building2, Search, ChevronRight, Hotel, Sparkles,
+  ShieldCheck, ChevronDown, CheckCircle2, Loader2,
 } from "lucide-react";
 import GlassCard from "./ui/GlassCard.jsx";
 import { Field, Input, Select } from "./ui/Field.jsx";
@@ -79,6 +80,7 @@ export default function SearchForm({ onSubmit, isSearching = false }) {
   return (
     <GlassCard
       as={motion.form}
+      overflow="visible"
       onSubmit={handleSubmit}
       variants={staggerContainer}
       initial="hidden"
@@ -145,13 +147,13 @@ export default function SearchForm({ onSubmit, isSearching = false }) {
 
       {/* Даты. В отелях это даты проживания (заезд→выезд) — ими же задаются ночи. */}
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
-        <Field label={isHotels ? "Заезд (проживание с)" : "Дата вылета (от)"} icon={CalendarDays} htmlFor="date_from">
+        <Field label={isHotels ? "Заезд" : "Дата вылета (от)"} icon={CalendarDays} htmlFor="date_from">
           <Input
             id="date_from" name="date_from" type="date" icon min={today} defaultValue={today} required
             onChange={(e) => setDateFrom(e.target.value || today)}
           />
         </Field>
-        <Field label={isHotels ? "Выезд (проживание по)" : "Дата вылета (до)"} icon={CalendarDays} htmlFor="date_to">
+        <Field label={isHotels ? "Выезд" : "Дата вылета (до)"} icon={CalendarDays} htmlFor="date_to">
           <Input id="date_to" name="date_to" type="date" icon min={dateToMin} defaultValue={today} required />
         </Field>
       </div>
@@ -326,10 +328,91 @@ export default function SearchForm({ onSubmit, isSearching = false }) {
         )}
       </motion.button>
 
-      <motion.p variants={fadeUp} className="mt-3 text-center text-[11px] text-muted">
-        Перед прогоном выполняется health-check каждой площадки.
-      </motion.p>
+      <HealthCheckInfo />
     </GlassCard>
+  );
+}
+
+/**
+ * HealthCheckInfo — раскрывающийся блок: что именно проверяет health-check.
+ * Список «якорных» элементов формы каждой площадки тянется с /api/health/anchors.
+ */
+function HealthCheckInfo() {
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  const handleToggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next && data == null && !loading) {
+      setLoading(true);
+      fetch("/api/health/anchors")
+        .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+        .then(setData)
+        .catch(() => setData([]))
+        .finally(() => setLoading(false));
+    }
+  };
+
+  return (
+    <motion.div variants={fadeUp} className="mt-3">
+      <button
+        type="button"
+        onClick={handleToggle}
+        aria-expanded={open}
+        className="flex w-full items-center justify-center gap-1.5 text-[11px] text-muted transition-colors hover:text-ink"
+      >
+        <ShieldCheck className="size-3.5 text-ocean" />
+        Перед прогоном выполняется health-check каждой площадки
+        <ChevronDown className={`size-3.5 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <div className="mt-2 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs text-muted">
+              <p className="mb-2">
+                Health-check открывает форму каждой площадки и убеждается, что ключевые
+                элементы на месте. Если структура сайта изменилась — прогон блокируется,
+                чтобы не искать «вслепую».
+              </p>
+              {loading && (
+                <div className="flex items-center gap-2 text-muted">
+                  <Loader2 className="size-3.5 animate-spin" /> загружаю список проверок…
+                </div>
+              )}
+              {data && data.length > 0 && (
+                <div className="grid gap-2.5 sm:grid-cols-2">
+                  {data.map((p) => (
+                    <div key={p.provider}>
+                      <div className="mb-1 font-semibold capitalize text-ink">{p.provider}</div>
+                      <ul className="space-y-0.5">
+                        {p.checks.map((c) => (
+                          <li key={c} className="flex items-center gap-1.5">
+                            <CheckCircle2 className="size-3 shrink-0 text-emerald-400/80" />
+                            {c}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {data && data.length === 0 && !loading && (
+                <p className="text-muted">Не удалось загрузить список проверок.</p>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
   );
 }
 
