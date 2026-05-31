@@ -124,23 +124,16 @@ export default function SearchForm({ onSubmit, isSearching = false }) {
       </motion.div>
 
       {/* Откуда (только туры) + Куда.
-          Простой условный рендер без AnimatePresence/height-анимации: при быстром
-          переключении Туры↔Отели поле «Откуда» не может застрять на height:0.
-          Плавность даёт собственный initial→animate (fade-in) при появлении. */}
+          ВАЖНО: тут только обычный условный рендер, без motion-обёрток с
+          initial:opacity:0 / height:0 — при переключении Туры↔Отели они застревали
+          в скрытом состоянии (поле в DOM, но невидимо). Field сам даёт появление. */}
       <div className="grid gap-4 sm:grid-cols-2">
         {!isHotels && (
-          <motion.div
-            key="dep-city"
-            initial={{ opacity: 0, y: -6 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.25, ease: "easeOut" }}
-          >
-            <Field label="Откуда?" icon={Plane} htmlFor="departure_city">
-              <Select id="departure_city" name="departure_city" icon defaultValue="Москва">
-                {DEPARTURE_CITIES.map((c) => <option key={c}>{c}</option>)}
-              </Select>
-            </Field>
-          </motion.div>
+          <Field label="Откуда?" icon={Plane} htmlFor="departure_city">
+            <Select id="departure_city" name="departure_city" icon defaultValue="Москва">
+              {DEPARTURE_CITIES.map((c) => <option key={c}>{c}</option>)}
+            </Select>
+          </Field>
         )}
 
         <Field label="Куда?" icon={Globe2} htmlFor="destination_country">
@@ -169,29 +162,20 @@ export default function SearchForm({ onSubmit, isSearching = false }) {
       </motion.p>
 
       {/* Ночи — только для туров. В отелях ночи = диапазон дат проживания (контрола нет). */}
-      <AnimatePresence initial={false}>
-        {!isHotels && (
-          <motion.div
-            key="nights"
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={spring}
-            className="mt-4 grid gap-4 overflow-hidden sm:grid-cols-2"
-          >
-            <Field label="Ночей от" icon={MoonStar} htmlFor="nights_min">
-              <Select id="nights_min" name="nights_min" icon defaultValue={7}>
-                {NIGHTS.map((n) => <option key={n}>{n}</option>)}
-              </Select>
-            </Field>
-            <Field label="Ночей до" icon={MoonStar} htmlFor="nights_max">
-              <Select id="nights_max" name="nights_max" icon defaultValue={10}>
-                {NIGHTS.map((n) => <option key={n}>{n}</option>)}
-              </Select>
-            </Field>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {!isHotels && (
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <Field label="Ночей от" icon={MoonStar} htmlFor="nights_min">
+            <Select id="nights_min" name="nights_min" icon defaultValue={7}>
+              {NIGHTS.map((n) => <option key={n}>{n}</option>)}
+            </Select>
+          </Field>
+          <Field label="Ночей до" icon={MoonStar} htmlFor="nights_max">
+            <Select id="nights_max" name="nights_max" icon defaultValue={10}>
+              {NIGHTS.map((n) => <option key={n}>{n}</option>)}
+            </Select>
+          </Field>
+        </div>
+      )}
 
       {/* Туристы + бюджет */}
       <div className="mt-4 grid gap-4 sm:grid-cols-3">
@@ -215,41 +199,27 @@ export default function SearchForm({ onSubmit, isSearching = false }) {
         </Field>
       </div>
 
-      {/* Возраст детей — раскрывается анимированно по количеству */}
-      <AnimatePresence>
-        {childrenCount > 0 && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={spring}
-            className="mt-4 grid gap-3 overflow-hidden sm:grid-cols-3"
-          >
-            {childAges.map((age, i) => (
-              <motion.div
-                key={i}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.05 }}
+      {/* Возраст детей — по количеству. Обычный условный рендер (без height-анимации,
+          которая оставляла селекты невидимыми, но кликабельными). */}
+      {childrenCount > 0 && (
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          {childAges.map((age, i) => (
+            <Field key={i} label={`Возраст ребёнка ${i + 1}`} icon={Baby}>
+              <Select
+                icon
+                value={age}
+                onChange={(e) =>
+                  setChildAges((prev) =>
+                    prev.map((v, idx) => (idx === i ? Number(e.target.value) : v))
+                  )
+                }
               >
-                <Field label={`Возраст ребёнка ${i + 1}`} icon={Baby}>
-                  <Select
-                    icon
-                    value={age}
-                    onChange={(e) =>
-                      setChildAges((prev) =>
-                        prev.map((v, idx) => (idx === i ? Number(e.target.value) : v))
-                      )
-                    }
-                  >
-                    {CHILD_AGES.map((a) => <option key={a} value={a}>{a}</option>)}
-                  </Select>
-                </Field>
-              </motion.div>
-            ))}
-          </motion.div>
-        )}
-      </AnimatePresence>
+                {CHILD_AGES.map((a) => <option key={a} value={a}>{a}</option>)}
+              </Select>
+            </Field>
+          ))}
+        </div>
+      )}
 
       {/* Туроператоры — мультивыбор чипами */}
       <motion.div variants={fadeUp} className="mt-5">
@@ -285,24 +255,15 @@ export default function SearchForm({ onSubmit, isSearching = false }) {
       </motion.div>
 
       {/* Фильтры рейсов — только для туров */}
-      <AnimatePresence initial={false}>
-        {!isHotels && (
-          <motion.div
-            key="flights"
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={spring}
-            className="mt-5 overflow-hidden"
-          >
-            <label className="mb-2 block text-xs font-medium tracking-wide text-muted">Рейсы</label>
-            <div className="flex flex-wrap gap-5">
-              <Checkbox name="charter_only" label="Только чартер" />
-              <Checkbox name="direct_only" label="Только прямые" />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {!isHotels && (
+        <div className="mt-5">
+          <label className="mb-2 block text-xs font-medium tracking-wide text-muted">Рейсы</label>
+          <div className="flex flex-wrap gap-5">
+            <Checkbox name="charter_only" label="Только чартер" />
+            <Checkbox name="direct_only" label="Только прямые" />
+          </div>
+        </div>
+      )}
 
       {/* Площадки для сравнения */}
       <motion.div variants={fadeUp} className="mt-5">
