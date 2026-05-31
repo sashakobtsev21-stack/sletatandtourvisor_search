@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Plane, Globe2, CalendarDays, MoonStar, Users, Baby,
@@ -42,11 +42,33 @@ export default function SearchForm({ onSubmit, isSearching = false }) {
   const [providers, setProviders] = useState([...PROVIDERS]);
   const [operators, setOperators] = useState([]);
   const [dateFrom, setDateFrom] = useState(defaultFrom);
+  const [dateTo, setDateTo] = useState(defaultTo);
 
   const isHotels = mode === "hotels";
-  // В отелях выезд минимум на день позже заезда (ночи = выезд − заезд),
-  // в турах — не раньше заезда. И в любом случае не раньше завтра.
+  // Выезд: в отелях ≥ заезд+1 (ночи = выезд − заезд), в турах ≥ заезд; и не
+  // дальше заезд + лимит окна. Это границы для пикера.
   const dateToMin = isHotels ? addDays(dateFrom, 1) : dateFrom;
+  const dateToMax = addDays(dateFrom, MAX_DATE_SPAN_DAYS);
+
+  // Зажать дату «до» в допустимый диапазон относительно «от».
+  const clampTo = (from, to, hotels) => {
+    const lo = hotels ? addDays(from, 1) : from;
+    const hi = addDays(from, MAX_DATE_SPAN_DAYS);
+    if (!to || to < lo) return lo;
+    if (to > hi) return hi;
+    return to;
+  };
+  const onFromChange = (v) => {
+    const nf = v && v >= minDate ? v : minDate; // не раньше завтра
+    setDateFrom(nf);
+    setDateTo((prev) => clampTo(nf, prev, isHotels)); // «до» подстраивается под «от»
+  };
+  const onToChange = (v) => setDateTo(clampTo(dateFrom, v, isHotels));
+
+  // При переключении Туры↔Отели подправить «до» (в отелях выезд ≥ заезд+1).
+  useEffect(() => {
+    setDateTo((prev) => clampTo(dateFrom, prev, isHotels));
+  }, [isHotels]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Перестроить набор возрастов при изменении количества детей.
   const handleChildrenCount = (n) => {
@@ -155,12 +177,15 @@ export default function SearchForm({ onSubmit, isSearching = false }) {
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <Field label={isHotels ? "Заезд" : "Дата вылета (от)"} icon={CalendarDays} htmlFor="date_from">
           <Input
-            id="date_from" name="date_from" type="date" icon min={minDate} defaultValue={defaultFrom} required
-            onChange={(e) => setDateFrom(e.target.value || defaultFrom)}
+            id="date_from" name="date_from" type="date" icon min={minDate} value={dateFrom} required
+            onChange={(e) => onFromChange(e.target.value)}
           />
         </Field>
         <Field label={isHotels ? "Выезд" : "Дата вылета (до)"} icon={CalendarDays} htmlFor="date_to">
-          <Input id="date_to" name="date_to" type="date" icon min={dateToMin} defaultValue={defaultTo} required />
+          <Input
+            id="date_to" name="date_to" type="date" icon min={dateToMin} max={dateToMax} value={dateTo} required
+            onChange={(e) => onToChange(e.target.value)}
+          />
         </Field>
       </div>
       <motion.p variants={fadeUp} className="mt-1.5 text-[11px] text-muted">

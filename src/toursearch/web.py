@@ -217,21 +217,26 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
         child_ages = [int(x) for x in f.getlist("child_age") if str(x).isdigit()]
         df = date.fromisoformat(f.get("date_from"))
         dt = date.fromisoformat(f.get("date_to"))
+        if dt < df:
+            return {"error": "Дата «до» не может быть раньше даты «от»."}
         if (dt - df).days > MAX_DATE_SPAN_DAYS:
             return {"error": f"Диапазон дат вылета не должен превышать {MAX_DATE_SPAN_DAYS} дней (ограничение Sletat)."}
         nmin = int(f.get("nights_min", 7))
         nmax = int(f.get("nights_max", 10))
         nmin, nmax = min(nmin, nmax), max(nmin, nmax)
-        params = SearchParams(
-            departure_city=f.get("departure_city", "Москва"),
-            destination_country=f.get("destination_country", "Турция"),
-            date_from=df, date_to=dt,
-            nights_min=nmin, nights_max=nmax,
-            adults=int(f.get("adults", 2)), children_ages=child_ages,
-            search_mode=f.get("mode", "tours"), operators=ops,
-            charter_only=bool(f.get("charter_only")), direct_only=bool(f.get("direct_only")),
-            price_max=Decimal(f.get("price_max")) if (f.get("price_max") or "").strip() else None,
-        )
+        try:
+            params = SearchParams(
+                departure_city=f.get("departure_city", "Москва"),
+                destination_country=f.get("destination_country", "Турция"),
+                date_from=df, date_to=dt,
+                nights_min=nmin, nights_max=nmax,
+                adults=int(f.get("adults", 2)), children_ages=child_ages,
+                search_mode=f.get("mode", "tours"), operators=ops,
+                charter_only=bool(f.get("charter_only")), direct_only=bool(f.get("direct_only")),
+                price_max=Decimal(f.get("price_max")) if (f.get("price_max") or "").strip() else None,
+            )
+        except ValueError as exc:
+            return {"error": f"Некорректные параметры поиска: {exc}"}
         token = uuid.uuid4().hex
         search_pending[token] = (params, chosen)
         return {"token": token}
