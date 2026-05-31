@@ -26,7 +26,9 @@ async def _frame_pump(name: str, page, on_frame: FrameCallback, interval_ms: int
     """
     while True:
         try:
-            data = await page.screenshot(type="jpeg", quality=45, full_page=False)
+            # quality повыше — текст формы площадки читабелен в live-окне (окно
+            # показывает кадр на всю ширину через object-cover).
+            data = await page.screenshot(type="jpeg", quality=62, full_page=False)
             await on_frame(name, base64.b64encode(data).decode("ascii"))
         except Exception:
             pass

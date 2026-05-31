@@ -68,8 +68,9 @@ export default function LiveViews({ providers = [], frames = {}, phases = {}, ac
                   </span>
                 </div>
 
-                {/* Тело: кадр или состояние по фазе. min-h-0 + object-contain —
-                    содержимое вписывается, обе площадки помещаются на экран. */}
+                {/* Тело: кадр или состояние по фазе. Кадр заполняет окно целиком
+                    (object-cover + привязка к верху, где форма площадки) — без
+                    тёмных полей по бокам и крупнее/читабельнее. */}
                 <div className="relative min-h-0 flex-1 overflow-hidden bg-[#070b1c]/60">
                   {/* Рендерим РОВНО одну фазу. Без AnimatePresence: React сам
                       размонтирует предыдущее состояние, поэтому окно не может
@@ -81,7 +82,7 @@ export default function LiveViews({ providers = [], frames = {}, phases = {}, ac
                       transition={{ duration: 0.3 }}
                       src={`data:image/jpeg;base64,${frames[p]}`}
                       alt={`${p} live`}
-                      className="absolute inset-0 m-auto max-h-full max-w-full rounded-lg object-contain p-2"
+                      className="absolute inset-0 size-full object-cover object-top"
                     />
                   )}
                   {phase === "waiting" && (
