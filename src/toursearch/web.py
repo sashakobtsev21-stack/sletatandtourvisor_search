@@ -10,7 +10,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -50,6 +50,52 @@ def _fmt_price(value) -> str:
 
 
 _TEMPLATES.env.filters["price"] = _fmt_price
+
+
+# --- сериализация отчёта в JSON для React-дашборда ---
+
+def _offer_dict(o) -> dict:
+    return {"operator": o.operator, "price": str(o.price), "currency": o.currency, "label": o.label}
+
+
+def _hotel_dict(h) -> dict:
+    return {
+        "hotel_name": h.hotel_name, "stars": h.stars, "rating": h.rating,
+        "destination": h.destination, "price": str(h.price), "currency": h.currency,
+        "operators_count": h.operators_count, "label": h.label,
+    }
+
+
+def _result_dict(r) -> dict:
+    c = r.cheapest
+    return {
+        "provider": r.provider, "success": r.success,
+        "duration_seconds": r.duration_seconds, "search_mode": r.search_mode,
+        "error": r.error, "screenshot_path": r.screenshot_path, "search_url": r.search_url,
+        "offers": [_offer_dict(o) for o in sorted(r.offers, key=lambda x: x.price)],
+        "hotel_offers": [_hotel_dict(h) for h in sorted(r.hotel_offers, key=lambda x: x.price)],
+        "cheapest": ({"label": c.label, "price": str(c.price), "currency": c.currency} if c else None),
+    }
+
+
+def _report_dict(report, run_id: int | None = None) -> dict:
+    p = report.params
+    best = report.cheapest
+    return {
+        "run_id": run_id,
+        "run_at": report.run_at.isoformat(),
+        "params": {
+            "search_mode": p.search_mode, "departure_city": p.departure_city,
+            "destination_country": p.destination_country,
+            "date_from": p.date_from.isoformat(), "date_to": p.date_to.isoformat(),
+            "nights_min": p.nights_min, "nights_max": p.nights_max,
+            "adults": p.adults, "children_ages": p.children_ages,
+        },
+        "results": [_result_dict(r) for r in report.results],
+        "best": ({"price": str(best.price), "label": best.label, "provider": best.provider} if best else None),
+        "fastest_provider": report.fastest_provider,
+        "slowest_provider": report.slowest_provider,
+    }
 
 
 def create_app(db_path: str = "toursearch.db") -> FastAPI:
@@ -256,6 +302,31 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
+    # --- JSON API для React-дашборда ---
+    @app.get("/api/runs")
+    async def api_runs(limit: int = 50):
+        with Storage(db_path) as storage:
+            runs = storage.list_runs(limit=limit)
+        return [
+            {
+                "run_id": r.run_id, "run_at": r.run_at.isoformat(),
+                "cheapest_label": r.cheapest_label,
+                "cheapest_price": str(r.cheapest_price) if r.cheapest_price is not None else None,
+                "cheapest_provider": r.cheapest_provider,
+                "fastest_provider": r.fastest_provider,
+            }
+            for r in runs
+        ]
+
+    @app.get("/api/runs/{run_id}")
+    async def api_run(run_id: int):
+        with Storage(db_path) as storage:
+            try:
+                report = storage.get_report(run_id)
+            except KeyError:
+                raise HTTPException(status_code=404, detail=f"Прогон #{run_id} не найден")
+        return _report_dict(report, run_id)
+
     @app.get("/history", response_class=HTMLResponse)
     async def history(request: Request):
         with Storage(db_path) as storage:
@@ -278,6 +349,20 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
         # группы Live — в конец
         keys = sorted(grouped, key=lambda g: (g.lower().startswith("live"), g))
         return [(g, REGISTRY.group_description(g), grouped[g]) for g in keys]
+
+    @app.get("/api/tests/catalog")
+    async def api_tests_catalog():
+        groups = [
+            {
+                "group": g, "description": desc,
+                "cases": [
+                    {"id": c.id, "name": c.name, "live": c.live, "description": c.description}
+                    for c in cases
+                ],
+            }
+            for g, desc, cases in _ordered_groups()
+        ]
+        return {"groups": groups, "total": REGISTRY.count()}
 
     @app.get("/tests", response_class=HTMLResponse)
     async def tests_page(request: Request):
