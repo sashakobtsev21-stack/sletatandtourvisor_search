@@ -52,7 +52,13 @@ def test_api_runs_and_run_detail(tmp_path):
     client = TestClient(create_app(db_path=db))
 
     runs = client.get("/api/runs").json()
-    assert any(r["run_id"] == rid and r["cheapest_label"] == "Travelata" for r in runs)
+    row = next(r for r in runs if r["run_id"] == rid)
+    assert row["cheapest_label"] == "Travelata"
+    # параметры прогона — для заголовка истории и кнопки «Повторить»
+    assert row["params"]["departure_city"] == "Москва"
+    assert row["params"]["destination_country"] == "Турция"
+    assert row["params"]["nights_min"] == 3 and row["params"]["adults"] == 2
+    assert set(row["params"]["providers"]) == {"sletat", "tourvisor"}
 
     detail = client.get(f"/api/runs/{rid}").json()
     assert detail["run_id"] == rid
