@@ -32,7 +32,7 @@ from toursearch.providers._formcheck import (
     set_equal,
     text_contains,
 )
-from toursearch.providers.base import register_provider
+from toursearch.providers.base import register_provider, start_frame_pump, stop_frame_pump
 from toursearch.urlcheck import verify_sletat_search_url
 
 _MONTHS_RU = [
@@ -140,6 +140,8 @@ class SletatProvider:
     def __init__(self, headless: bool = False, timeout_ms: int = 20_000) -> None:
         self.headless = headless
         self.timeout_ms = timeout_ms
+        # Колбэк живых кадров (устанавливается оркестратором); None = не транслировать.
+        self.on_frame = None
 
     async def search(self, params: SearchParams) -> ProviderResult:
         async with async_playwright() as pw:
@@ -153,6 +155,7 @@ class SletatProvider:
             )
             page = await context.new_page()
             page.set_default_timeout(self.timeout_ms)
+            pump = start_frame_pump(self.name, page, self.on_frame)
             start = time.monotonic()
             try:
                 await page.goto(self.URL, wait_until="domcontentloaded")
@@ -213,6 +216,7 @@ class SletatProvider:
                     screenshot_path=shot,
                 )
             finally:
+                await stop_frame_pump(pump)
                 await browser.close()
 
     # --- подготовка ---

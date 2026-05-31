@@ -7,9 +7,48 @@
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+import asyncio
+import base64
+from typing import Awaitable, Callable, Protocol, runtime_checkable
 
 from toursearch.models import ProviderResult, SearchParams
+
+# Колбэк живого кадра: (имя площадки, jpeg в base64) → корутина.
+FrameCallback = Callable[[str, str], Awaitable[None]]
+
+
+async def _frame_pump(name: str, page, on_frame: FrameCallback, interval_ms: int = 1400) -> None:
+    """Периодически снимать скриншот вкладки и отдавать его как base64 jpeg.
+
+    Лёгкие кадры (jpeg, низкое качество, только видимая область) — чтобы показать
+    в вебе «в реальном времени», что сейчас происходит на площадке. Любые ошибки
+    скриншота (навигация/закрытая страница) глотаем — это не должно ронять поиск.
+    """
+    while True:
+        try:
+            data = await page.screenshot(type="jpeg", quality=45, full_page=False)
+            await on_frame(name, base64.b64encode(data).decode("ascii"))
+        except Exception:
+            pass
+        await asyncio.sleep(interval_ms / 1000)
+
+
+def start_frame_pump(name: str, page, on_frame: FrameCallback | None) -> "asyncio.Task | None":
+    """Запустить фоновую отдачу живых кадров (если колбэк задан)."""
+    if on_frame is None:
+        return None
+    return asyncio.create_task(_frame_pump(name, page, on_frame))
+
+
+async def stop_frame_pump(task: "asyncio.Task | None") -> None:
+    """Остановить отдачу живых кадров."""
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except BaseException:
+        pass
 
 
 @runtime_checkable
