@@ -157,6 +157,7 @@ class TourvisorProvider:
             page.set_default_timeout(self.timeout_ms)
             pump = start_frame_pump(self.name, page, self.on_frame)
             start = time.monotonic()
+            nav_url: str | None = None  # URL поиска, как только произошёл переход на /tours/
             try:
                 if params.search_mode == "hotels":
                     await page.goto(self.HOTELS_URL, wait_until="domcontentloaded")
@@ -189,6 +190,8 @@ class TourvisorProvider:
                     await page.wait_for_url("**/tours/**", timeout=30_000)
                 except PWTimeout:
                     pass
+                if "/tours/" in page.url:
+                    nav_url = page.url  # ссылка на поиск появляется после перехода на /tours/
                 await page.wait_for_timeout(1500)
                 log.info("Tourvisor: поиск запущен, жду полной загрузки результатов…")
                 await self._apply_tours_advanced(page, params)
@@ -217,6 +220,9 @@ class TourvisorProvider:
                 log.warning("tourvisor search failed (mode=%s): %s: %s",
                             params.search_mode, type(exc).__name__, exc)
                 shot = await self._safe_screenshot(page)
+                # если поиск уже начинался (был переход на /tours/) — отдаём ссылку на него
+                if nav_url is None and "/tours/" in (page.url or ""):
+                    nav_url = page.url
                 return ProviderResult(
                     provider=self.name,
                     success=False,
@@ -224,6 +230,7 @@ class TourvisorProvider:
                     search_mode=params.search_mode,
                     error=f"{type(exc).__name__}: {exc}",
                     screenshot_path=shot,
+                    search_url=nav_url,
                 )
             finally:
                 await stop_frame_pump(pump)
@@ -383,10 +390,27 @@ class TourvisorProvider:
     async def _select_departure_city(self, page: Page, city: str) -> None:
         await page.click("div.TVDepartureFilter")
         await page.wait_for_selector("div.TVDepartureTableBody")
-        await page.click(
-            f"xpath=//div[contains(@class,'TVDepartureTableBody')]"
-            f"//div[contains(text(),'{city}')][1]"
+        await page.wait_for_timeout(400)
+        # Клик по городу через JS с нормализацией (пробелы/разные дефисы), а не xpath
+        # contains(text()): надёжнее против «Ростов‑на‑Дону» с неразрывным дефисом и т.п.
+        clicked = await page.evaluate(
+            """(city) => {
+                const norm = s => (s || '').replace(/\\s+/g, ' ')
+                    .replace(/[\\u2010-\\u2015\\u2212]/g, '-').trim().toLowerCase();
+                const want = norm(city);
+                const body = document.querySelector('.TVDepartureTableBody');
+                if (!body) return false;
+                const leaves = [...body.querySelectorAll('*')].filter(e => e.children.length === 0);
+                let el = leaves.find(e => norm(e.textContent) === want)
+                      || leaves.find(e => norm(e.textContent).includes(want));
+                if (el) { el.click(); return true; }
+                return false;
+            }""",
+            city,
         )
+        if not clicked:
+            raise RuntimeError(f"Город вылета «{city}» недоступен на Tourvisor")
+        await page.wait_for_timeout(400)
 
     async def _select_country(self, page: Page, country: str) -> None:
         await page.click("div.TVCountryFilter")
@@ -695,10 +719,16 @@ class TourvisorProvider:
         return build_offers(self.name, rows)
 
     async def _safe_screenshot(self, page: Page) -> str | None:
+        # Только верхняя видимая область (форма поиска + «нашлось N»), без длинной
+        # ленты результатов — так скриншот читабелен.
         try:
             Path("screenshots").mkdir(exist_ok=True)
+            try:
+                await page.evaluate("window.scrollTo(0, 0)")
+            except Exception:
+                pass
             path = f"screenshots/tourvisor_{datetime.now():%Y%m%d_%H%M%S}.png"
-            await page.screenshot(path=path, full_page=True)
+            await page.screenshot(path=path, full_page=False)
             return path
         except Exception:
             return None
