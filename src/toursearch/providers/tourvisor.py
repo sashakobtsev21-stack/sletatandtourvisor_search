@@ -455,33 +455,38 @@ class TourvisorProvider:
         await page.wait_for_selector(
             "xpath=//div[contains(@class,'TVCountryAirportList') and not(contains(@class,'TVHide'))]"
         )
-        await page.wait_for_timeout(300)
-        # Список стран прокручиваемый — нужная страна (напр. «Мальдивы») может быть ниже
-        # видимой части. Скроллим контейнер по шагам, ищем по нормализованному тексту.
+        await page.wait_for_timeout(400)
+        # Список стран сгруппирован («Популярные» + алфавит) и подгружается лениво
+        # (scrollHeight растёт при прокрутке). Страна-строка — `.TVComplexListItemContent`
+        # с СОБСТВЕННЫМ текстом = названию страны (у `.TVComplexListItem` в textContent
+        # ещё и города — поэтому раньше «Мальдивы» не находились). Скроллим контейнер,
+        # пока не найдём строку с точным собственным текстом, и кликаем её.
         clicked = await page.evaluate(
             """async (country) => {
                 const sleep = ms => new Promise(r => setTimeout(r, ms));
                 const norm = s => (s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
                 const want = norm(country);
-                const lists = [...document.querySelectorAll('.TVCountryAirportList')]
-                    .filter(e => !(e.className || '').includes('TVHide'));
-                const cont = lists[lists.length - 1];
+                const conts = [...document.querySelectorAll('div')]
+                    .filter(e => e.scrollHeight - e.clientHeight > 40 && /Country|AirportList/i.test(e.className || ''));
+                const cont = conts.sort((a, b) => b.scrollHeight - a.scrollHeight)[0]
+                          || document.querySelector('.TVCountryAirportList');
                 if (!cont) return false;
-                const find = () => {
-                    const items = [...cont.querySelectorAll('.TVComplexListItem')];
-                    return items.find(e => norm(e.textContent) === want)
-                        || items.find(e => norm(e.textContent).includes(want));
-                };
+                const ownText = el => norm([...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join(''));
+                // Поиск по ВСЕМУ документу (страна может быть в другом контейнере/вкладке),
+                // а скроллим найденный контейнер cont, чтобы дотянуть лениво подгружаемые.
+                const find = () => [...document.querySelectorAll('.TVComplexListItemContent, .TVComplexListItem')]
+                    .find(e => ownText(e) === want);
                 let el = find();
                 if (!el) {
-                    cont.scrollTop = 0; await sleep(40);
-                    const step = Math.max(60, cont.clientHeight - 24);
-                    for (let i = 0; i < 60; i++) {
-                        el = find();
-                        if (el) break;
-                        const atEnd = cont.scrollTop + cont.clientHeight >= cont.scrollHeight - 2;
-                        cont.scrollTop += step; await sleep(45);
-                        if (atEnd) { el = find(); break; }
+                    cont.scrollTop = 0; await sleep(60);
+                    const step = Math.max(80, cont.clientHeight - 40);
+                    let lastTop = -1;
+                    for (let i = 0; i < 150; i++) {
+                        el = find(); if (el) break;
+                        cont.scrollTop = cont.scrollTop + step; await sleep(60);
+                        el = find(); if (el) break;
+                        if (cont.scrollTop === lastTop) break;  // дальше не прокручивается = конец
+                        lastTop = cont.scrollTop;
                     }
                 }
                 if (el) { el.scrollIntoView({block: 'center'}); el.click(); return true; }

@@ -331,6 +331,11 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
                     "cheapest_price": str(r.cheapest_price) if r.cheapest_price is not None else None,
                     "cheapest_provider": r.cheapest_provider,
                     "fastest_provider": r.fastest_provider,
+                    # статус площадок — чтобы помечать прогоны с ошибками
+                    "provider_status": [
+                        {"provider": res.provider, "ok": res.success, "error": res.error}
+                        for res in rep.results
+                    ],
                     # параметры прогона — для заголовка истории и кнопки «Повторить»
                     "params": {
                         "search_mode": p.search_mode,
