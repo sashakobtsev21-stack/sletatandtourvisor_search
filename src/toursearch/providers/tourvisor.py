@@ -561,9 +561,12 @@ class TourvisorProvider:
             check("nights", f"{params.nights_min} - {params.nights_max}", nights,
                   text_contains(f"{params.nights_min} - {params.nights_max}", nights) if nights is not UNKNOWN else True)
 
+        # Подпись на форме сокращённая («Туристы3 взр 2 реб») — сверяем по ведущему числу (взрослые).
         tourists = await self._safe_text(page, "div.TVTouristsFilter")
-        check("tourists", f"{params.adults} взрослых", tourists,
-              text_contains(f"{params.adults} взросл", tourists) if tourists is not UNKNOWN else True)
+        if tourists is not UNKNOWN:
+            m = re.search(r"\d+", tourists or "")
+            actual_adults = int(m.group()) if m else None
+            check("tourists", params.adults, actual_adults, actual_adults == params.adults)
 
         if params.hotel_stars:
             try:
