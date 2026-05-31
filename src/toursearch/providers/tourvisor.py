@@ -179,10 +179,12 @@ class TourvisorProvider:
                 if params.search_mode == "hotels":
                     await page.goto(self.HOTELS_URL, wait_until="domcontentloaded")
                     await page.wait_for_timeout(1500)
+                    log.info("Tourvisor: сайт открыт (отели), задаю параметры…")
                     await self._fill_form(page, params)
                     await self._verify_and_fix(page, params)
                     await self._click_search(page)
                     start = time.monotonic()
+                    log.info("Tourvisor: поиск запущен, жду полной загрузки результатов…")
                     await self._wait_for_completion(page)
                     hotel_offers = await self._parse_hotels(page)
                     # Операторы (best-effort): панель операторов, если есть; отель — по цене.
@@ -491,9 +493,21 @@ class TourvisorProvider:
             raise RuntimeError(f"Страна «{country}» недоступна на Tourvisor")
         await page.wait_for_timeout(500)
 
+    async def _open_dates_filter(self, page: Page) -> None:
+        """Открыть календарь дат. Туры — `.TVFlyDatesFilter`; отели (/poisk-otelej) —
+        `.TVTripDurationFilter` («Даты проживания»), т.к. там `.TVFlyDatesFilter` скрыт
+        (класс `TVHide`) и клик по нему молча падал → оставались дефолтные даты."""
+        for sel in ("div.TVFlyDatesFilter:visible", "div.TVTripDurationFilter:visible"):
+            loc = page.locator(sel)
+            if await loc.count():
+                await loc.first.click()
+                return
+        await page.click("div.TVTripDurationFilter")
+
     async def _select_dates(self, page: Page, date_from, date_to) -> None:
-        await page.click("div.TVFlyDatesFilter")
-        await page.wait_for_selector("xpath=//div[contains(@class,'TVFlyDatesSelectTooltip')]")
+        await self._open_dates_filter(page)
+        # Календарь одинаков в обоих режимах; ждём заголовок месяца (а не tours-only tooltip).
+        await page.wait_for_selector(".TVCalendarTitleControlMonth", timeout=10_000)
         await self._scroll_to_month(page, date_from.month, date_from.year)
         await self._click_day(page, date_from.day)
         await page.wait_for_timeout(400)

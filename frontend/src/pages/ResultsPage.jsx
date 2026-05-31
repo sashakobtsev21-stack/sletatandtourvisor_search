@@ -13,6 +13,7 @@ export default function ResultsPage({ runId }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [shot, setShot] = useState(null); // {src, cap} для модалки скриншота
+  const [zoom, setZoom] = useState(false); // приближён ли скриншот в модалке
 
   useEffect(() => {
     let alive = true;
@@ -90,7 +91,7 @@ export default function ResultsPage({ runId }) {
                       {r.screenshot_path ? (
                         <button
                           type="button"
-                          onClick={() => setShot({ src: `/${r.screenshot_path}`, cap: `${r.provider} — выдача` })}
+                          onClick={() => { setZoom(false); setShot({ src: `/${r.screenshot_path}`, cap: `${r.provider} — выдача` }); }}
                           className="flex items-center gap-1 text-ocean transition-colors hover:text-brand-soft"
                         >
                           <ImageIcon className="size-3.5" /> скриншот
@@ -156,10 +157,9 @@ export default function ResultsPage({ runId }) {
                       Туроператоры
                     </h4>
                     <ProviderTable
-                      head={["Оператор", "Отель", "Цена", "Скорость"]}
+                      head={["Оператор", "Цена", "Скорость"]}
                       rows={r.operator_offers.map((o) => [
                         o.operator,
-                        o.hotel_name || "—",
                         formatPrice(o.price, o.currency),
                         o.load_seconds != null ? `${o.load_seconds} с` : "—",
                       ])}
@@ -175,20 +175,28 @@ export default function ResultsPage({ runId }) {
         ))}
       </div>
 
-      {/* Модалка скриншота */}
+      {/* Модалка скриншота — с приближением (клик по фото) */}
       <AnimatePresence>
         {shot && (
           <motion.div
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             onClick={() => setShot(null)}
-            className="fixed inset-0 z-50 flex cursor-zoom-out items-center justify-center bg-black/85 p-6"
+            className="fixed inset-0 z-50 overflow-auto bg-black/90 p-4"
           >
-            <span className="absolute top-4 left-0 right-0 text-center text-sm text-white/80">{shot.cap}</span>
-            <motion.img
-              initial={{ scale: 0.96 }} animate={{ scale: 1 }}
-              src={shot.src} alt={shot.cap}
-              className="max-h-[92%] max-w-[95%] rounded-lg shadow-2xl"
-            />
+            <div className="pointer-events-none sticky top-0 z-10 pb-2 text-center text-sm text-white/80">
+              {shot.cap} · клик по изображению — {zoom ? "отдалить" : "приблизить"}, клик по фону — закрыть
+            </div>
+            <div className={`flex min-h-full ${zoom ? "items-start justify-start" : "items-center justify-center"}`}>
+              <img
+                src={shot.src} alt={shot.cap}
+                onClick={(e) => { e.stopPropagation(); setZoom((z) => !z); }}
+                className={
+                  zoom
+                    ? "max-w-none cursor-zoom-out rounded-lg shadow-2xl"
+                    : "max-h-[88vh] max-w-[94vw] cursor-zoom-in rounded-lg object-contain shadow-2xl"
+                }
+              />
+            </div>
           </motion.div>
         )}
       </AnimatePresence>
