@@ -417,28 +417,57 @@ class SletatProvider:
     async def _select_operators(self, page: Page, operators: list[str]) -> None:
         await page.click(".uis-text_tour-operator")
         await page.wait_for_timeout(700)
-        # снять «все»
+        # Снять «Все туроператоры» (по умолчанию отмечено) — это первый чекбокс списка
+        # БЕЗ имени оператора (или с текстом «Все»). Клик настоящий (Playwright),
+        # т.к. JS-клик по React-чекбоксу не всегда срабатывает.
         try:
-            await page.evaluate(
-                """() => { const c = document.querySelector('.slsf-tour-operator__selected-block input');
-                          if (c && c.checked) c.click(); }"""
+            master_idx = await page.evaluate(
+                """() => {
+                    const labels = [...document.querySelectorAll("label[class*='tour-operator']")];
+                    return labels.findIndex(l => {
+                        const nm = ((l.querySelector('.slsf-white-space-nowrap') || l).textContent || '').trim();
+                        return !nm || /^все/i.test(nm);
+                    });
+                }"""
             )
-            await page.wait_for_timeout(400)
+            if master_idx is not None and master_idx >= 0:
+                master = page.locator("label[class*='tour-operator']").nth(master_idx)
+                inp = master.locator("input")
+                if await inp.count() and await inp.is_checked():
+                    await master.click()
+                    await page.wait_for_timeout(500)
         except Exception:
             pass
-        for key in operators:
-            name = _OPERATOR_MAP.get(key.lower(), key)
+        # Имя оператора теперь в `.slsf-white-space-nowrap` (раньше было `.slsf-text-bold`).
+        # Матч ищем в JS (без проблем с кавычками в именах вроде Let's Fly), а клик —
+        # настоящий, через Playwright (JS-клик по React-чекбоксу не всегда срабатывает).
+        for name in operators:
             try:
                 await page.fill(".uis-text_tour-operator", "")
                 await page.type(".uis-text_tour-operator", name, delay=40)
                 await page.wait_for_timeout(700)
-                await page.click(
-                    f"xpath=//label[contains(@class,'tour-operator')]"
-                    f"[.//span[@class='slsf-text-bold' and contains(normalize-space(.),'{name}')]][1]",
-                    timeout=4000,
+                idx = await page.evaluate(
+                    """(name) => {
+                        const norm = s => (s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                        const want = norm(name);
+                        const opName = l => norm((l.querySelector('.slsf-white-space-nowrap') || l).textContent);
+                        const enabled = l => !/disabled/.test(l.className || '');
+                        const labels = [...document.querySelectorAll("label[class*='tour-operator']")];
+                        let i = labels.findIndex(l => enabled(l) && opName(l) === want);
+                        if (i < 0) i = labels.findIndex(l => enabled(l) && opName(l).includes(want));
+                        return i;
+                    }""",
+                    name,
                 )
-                await page.wait_for_timeout(300)
-            except PWTimeout:
+                if idx is None or idx < 0:
+                    log.info("Sletat: оператор «%s» не найден/недоступен — пропуск", name)
+                    continue
+                label = page.locator("label[class*='tour-operator']").nth(idx)
+                cls = await label.get_attribute("class") or ""
+                if "checked" not in cls:
+                    await label.click()
+                    await page.wait_for_timeout(300)
+            except Exception:
                 continue
         await page.keyboard.press("Escape")
 
@@ -512,8 +541,13 @@ class SletatProvider:
             except Exception:
                 pass
         problems = await self._verify_form(page, params)
+        # Операторы — мягкий фильтр: их выбор best-effort (панель виртуализована),
+        # поэтому расхождение по операторам НЕ прерывает поиск, только логируется.
+        blocking = [p for p in problems if p[0] != "operators"]
+        if blocking:
+            raise FormVerificationError(blocking)
         if problems:
-            raise FormVerificationError(problems)
+            log.warning("Sletat: операторы применены не полностью (best-effort): %s", problems)
 
     async def _safe_val(self, page: Page, selector: str):
         try:
@@ -536,9 +570,10 @@ class SletatProvider:
             await page.click(".uis-text_tour-operator")
             await page.wait_for_timeout(500)
             names = await page.evaluate(
-                """() => [...document.querySelectorAll(
-                    'label.uis-checkbox__label_tour-operator.uis-checkbox__label_checked .slsf-text-bold'
-                )].map(e => (e.textContent || '').trim())"""
+                """() => [...document.querySelectorAll("label[class*='tour-operator']")]
+                    .filter(l => { const i = l.querySelector('input'); return i && i.checked; })
+                    .map(l => ((l.querySelector('.slsf-white-space-nowrap') || l).textContent || '').trim())
+                    .filter(Boolean)"""
             )
             await page.keyboard.press("Escape")
             await page.wait_for_timeout(200)
