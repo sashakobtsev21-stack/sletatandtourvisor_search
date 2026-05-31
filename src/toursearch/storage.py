@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS provider_results (
     duration_seconds REAL NOT NULL,
     search_mode      TEXT NOT NULL DEFAULT 'tours',
     error            TEXT,
-    screenshot_path  TEXT
+    screenshot_path  TEXT,
+    search_url       TEXT
 );
 CREATE TABLE IF NOT EXISTS offers (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -105,8 +106,8 @@ class Storage:
         for result in report.results:
             rcur = self._conn.execute(
                 """INSERT INTO provider_results
-                   (run_id, provider, success, duration_seconds, search_mode, error, screenshot_path)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   (run_id, provider, success, duration_seconds, search_mode, error, screenshot_path, search_url)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     run_id,
                     result.provider,
@@ -115,6 +116,7 @@ class Storage:
                     result.search_mode,
                     result.error,
                     result.screenshot_path,
+                    result.search_url,
                 ),
             )
             pr_id = int(rcur.lastrowid)
@@ -204,6 +206,7 @@ class Storage:
                     hotel_offers=hotel_offers,
                     error=pr["error"],
                     screenshot_path=pr["screenshot_path"],
+                    search_url=pr["search_url"] if "search_url" in pr.keys() else None,
                 )
             )
         return ComparisonReport(
