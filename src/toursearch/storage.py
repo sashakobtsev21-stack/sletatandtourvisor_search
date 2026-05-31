@@ -85,6 +85,16 @@ class Storage:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
+        self._migrate()
+        self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Добавить недостающие колонки в старых БД (CREATE TABLE IF NOT EXISTS их не меняет)."""
+        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(provider_results)")}
+        if "search_mode" not in cols:
+            self._conn.execute("ALTER TABLE provider_results ADD COLUMN search_mode TEXT DEFAULT 'tours'")
+        if "search_url" not in cols:
+            self._conn.execute("ALTER TABLE provider_results ADD COLUMN search_url TEXT")
         self._conn.commit()
 
     def close(self) -> None:

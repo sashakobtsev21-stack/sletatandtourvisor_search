@@ -44,13 +44,16 @@
   <p class="muted" style="margin:0">💡 Нажмите на цену или 📷 — откроется скриншот выдачи с площадки.</p>
 </div>
 
-{% for r in report.results if r.success %}
+{% for r in report.results %}
 <div class="card">
   <h3 style="margin-top:0">{{ r.provider }} <span class="muted">({{ "%.1f"|format(r.duration_seconds) }} с)</span>
-    {% if r.screenshot_path %}<a href="#" class="shot" data-shot="/{{ r.screenshot_path }}" data-cap="{{ r.provider }} — выдача" style="font-size:13px">📷 скриншот выдачи</a>{% endif %}
+    {% if r.screenshot_path %}<a href="#" class="shot" data-shot="/{{ r.screenshot_path }}" data-cap="{{ r.provider }} — выдача" style="font-size:13px">📷 скриншот {{ "выдачи" if r.success else "на момент ошибки" }}</a>{% endif %}
     {% if r.search_url %} · <a href="{{ r.search_url }}" target="_blank" rel="noopener" style="font-size:13px">🔗 открыть поиск на сайте</a>{% endif %}
   </h3>
-  {% if r.hotel_offers %}
+  {% if not r.success %}
+  <p class="worst" style="margin:0">⚠️ {{ r.error or "поиск не дал результатов" }}</p>
+  {% if not r.screenshot_path and not r.search_url %}<p class="muted" style="margin:4px 0 0">Скриншот недоступен.</p>{% endif %}
+  {% elif r.hotel_offers %}
   <table>
     <thead><tr><th>Отель</th><th>★</th><th>Рейтинг</th><th>Направление</th><th>Цена</th></tr></thead>
     <tbody>
