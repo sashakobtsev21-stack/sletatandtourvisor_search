@@ -14,10 +14,11 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
+      "/api": { target: BACKEND, changeOrigin: true },
       "/search": { target: BACKEND, changeOrigin: true },
+      "/tests": { target: BACKEND, changeOrigin: true },
       "/run": { target: BACKEND, changeOrigin: true },
       "/screenshots": { target: BACKEND, changeOrigin: true },
-      "/history": { target: BACKEND, changeOrigin: true },
     },
   },
 });
