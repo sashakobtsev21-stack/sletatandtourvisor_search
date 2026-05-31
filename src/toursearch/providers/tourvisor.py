@@ -50,6 +50,17 @@ _OPERATOR_MAP = {
     "pegas": "Pegas Touristik",
 }
 
+# Алиасы для случаев, которые нечёткий матчинг не покрывает (разные алфавиты/написание):
+# имя на Sletat (нормализованное) → имя на Tourvisor. Остальное матчится нечётко.
+_TV_OPERATOR_ALIASES = {
+    "спектрум": "Spectrum",
+}
+
+
+def _operator_norm(s: str) -> str:
+    import re as _re
+    return _re.sub(r"[^a-zа-я0-9]", "", (s or "").lower())
+
 # Подписи городов вылета на Tourvisor сокращённые и отличаются от Sletat.
 _DEPARTURE_MAP = {
     "Санкт-Петербург": "С.Петербург",
@@ -598,19 +609,43 @@ class TourvisorProvider:
                 break
             await cur.click()
             await page.wait_for_timeout(200)
-        # Отмечаем нужные
-        for key in operators:
-            name = _OPERATOR_MAP.get(key.lower(), key)
-            el = page.locator(
-                f"xpath=//div[contains(@class,'TVOperatorsList')]"
-                f"//div[contains(@class,'TVCheckBox') and normalize-space(text())='{name}' "
-                f"and not(contains(@class,'TVDisabled'))]"
-            )
-            if await el.count() == 0:
+        # Отмечаем нужные. Имена операторов на Sletat и Tourvisor различаются
+        # («FUN and SUN» ↔ «FUN&SUN (TUI)», «Biblio Globus» ↔ «Biblioglobus»), поэтому
+        # сопоставляем НЕЧЁТКО: нормализуем (нижний регистр, убрать скобки/«and»/«и» и
+        # всё, кроме букв/цифр) и матчим по точному ключу, затем по вхождению.
+        # Применяем алиасы (Спектрум→Spectrum и т.п.) до нечёткого матчинга.
+        wanted = [_TV_OPERATOR_ALIASES.get(_operator_norm(o), o) for o in operators]
+        indices = await page.evaluate(
+            """(wanted) => {
+                const norm = s => (s || '').toLowerCase()
+                    .replace(/\\(.*?\\)/g, '')
+                    .replace(/\\band\\b|\\bи\\b/g, '')
+                    .replace(/[^a-zа-я0-9]/gi, '');
+                const boxes = [...document.querySelectorAll('div.TVOperatorsList .TVCheckBox')];
+                const ok = i => i >= 0 && !/TVDisabled/.test(boxes[i].className || '');
+                return wanted.map(w => {
+                    const wk = norm(w);
+                    if (!wk) return -1;
+                    let idx = boxes.findIndex(b => !/TVDisabled/.test(b.className||'') && norm(b.textContent) === wk);
+                    if (idx < 0) idx = boxes.findIndex(b => {
+                        if (/TVDisabled/.test(b.className||'')) return false;
+                        const bk = norm(b.textContent);
+                        return bk && (bk.includes(wk) || wk.includes(bk));
+                    });
+                    return ok(idx) ? idx : -1;
+                });
+            }""",
+            wanted,
+        )
+        boxes = page.locator("div.TVOperatorsList .TVCheckBox")
+        for op, idx in zip(operators, indices):
+            if idx is None or idx < 0:
+                log.info("Tourvisor: оператор «%s» не найден в списке — пропуск", op)
                 continue
-            cls = await el.first.get_attribute("class") or ""
+            box = boxes.nth(idx)
+            cls = await box.get_attribute("class") or ""
             if "TVChecked" not in cls:
-                await el.first.click()
+                await box.click()
                 await page.wait_for_timeout(300)
 
     async def _toggle_charter(self, page: Page, charter_only: bool) -> None:
