@@ -50,6 +50,17 @@ _OPERATOR_MAP = {
     "pegas": "Pegas Touristik",
 }
 
+# Подписи городов вылета на Tourvisor сокращённые и отличаются от Sletat.
+_DEPARTURE_MAP = {
+    "Санкт-Петербург": "С.Петербург",
+    "Нижний Новгород": "Н.Новгород",
+    "Минеральные Воды": "Мин.Воды",
+    "Набережные Челны": "Наб.Челны",
+    "Петропавловск-Камчатский": "П.Камчатский",
+    "Южно-Сахалинск": "Ю.Сахалинск",
+    "Ростов-на-Дону": "Ростов-на-Дону",
+}
+
 
 def _parse_price(text: str) -> Decimal | None:
     digits = re.sub(r"[^\d]", "", text)
@@ -152,10 +163,10 @@ class TourvisorProvider:
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(
                 headless=self.headless,
-                args=["--disable-blink-features=AutomationControlled", "--window-size=1920,1080"],
+                args=["--disable-blink-features=AutomationControlled", "--window-size=1600,1080"],
             )
-            # Широкий вьюпорт: сайт помещается по ширине и в live-кадрах, и в скриншоте выдачи.
-            context = await browser.new_context(viewport={"width": 1920, "height": 1080})
+            # Вьюпорт 1600: сайт целиком по ширине, но крупнее (читабельнее) в live-окне и скриншоте.
+            context = await browser.new_context(viewport={"width": 1600, "height": 1080})
             await context.add_init_script(
                 "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
             )
@@ -397,22 +408,30 @@ class TourvisorProvider:
         await page.click("div.TVDepartureFilter")
         await page.wait_for_selector("div.TVDepartureTableBody")
         await page.wait_for_timeout(400)
-        # Клик по городу через JS с нормализацией (пробелы/разные дефисы), а не xpath
-        # contains(text()): надёжнее против «Ростов‑на‑Дону» с неразрывным дефисом и т.п.
+        # Кандидаты подписи: сокращённое имя Tourvisor (если знаем), полное имя и
+        # последнее слово (С.Петербург ← «Петербург», Н.Новгород ← «Новгород»).
+        candidates = [c for c in (_DEPARTURE_MAP.get(city), city) if c]
+        last = city.replace("-", " ").split()[-1]
+        if len(last) >= 4 and last not in candidates:
+            candidates.append(last)
+        # Клик через JS с нормализацией (пробелы/разные дефисы), а не xpath contains(text()).
         clicked = await page.evaluate(
-            """(city) => {
+            """(cands) => {
                 const norm = s => (s || '').replace(/\\s+/g, ' ')
                     .replace(/[\\u2010-\\u2015\\u2212]/g, '-').trim().toLowerCase();
-                const want = norm(city);
+                const wants = cands.map(norm).filter(Boolean);
                 const body = document.querySelector('.TVDepartureTableBody');
                 if (!body) return false;
-                const leaves = [...body.querySelectorAll('*')].filter(e => e.children.length === 0);
-                let el = leaves.find(e => norm(e.textContent) === want)
-                      || leaves.find(e => norm(e.textContent).includes(want));
-                if (el) { el.click(); return true; }
+                const leaves = [...body.querySelectorAll('*')]
+                    .filter(e => e.children.length === 0 && norm(e.textContent));
+                for (const want of wants) {
+                    let el = leaves.find(e => norm(e.textContent) === want)
+                          || leaves.find(e => norm(e.textContent).includes(want));
+                    if (el) { el.click(); return true; }
+                }
                 return false;
             }""",
-            city,
+            candidates,
         )
         if not clicked:
             raise RuntimeError(f"Город вылета «{city}» недоступен на Tourvisor")

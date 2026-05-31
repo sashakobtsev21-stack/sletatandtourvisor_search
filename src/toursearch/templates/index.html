@@ -2,13 +2,13 @@
 {% block content %}
 <style>
   /* Широкая раскладка только на странице поиска (переопределяем main из base.html) */
-  main { max-width: 1700px; }
+  main { max-width: 1900px; }
   /* Три колонки: live слева, форма ПО ЦЕНТРУ (фиксированная — не двигается),
      лог справа. Боковые колонки flex:1 и равны → форма всегда строго посередине,
      даже когда боковые пустые (до запуска поиска). */
   .layout { display:flex; gap:16px; align-items:flex-start; justify-content:center; }
   #liveCol  { flex:1 1 0; min-width:0; position:sticky; top:12px; }
-  #centerCol { flex:0 0 440px; max-width:440px; }
+  #centerCol { flex:0 0 420px; max-width:420px; }
   #rightCol { flex:1 1 0; min-width:0; position:sticky; top:12px; }
   #centerCol > .card, #rightCol > .card { width:100%; }
   .liveviews { display:none; flex-direction:column; gap:12px; }  /* показываем при запуске */
@@ -80,11 +80,11 @@
     <div><label>Дата вылета (до)</label><input type="date" name="date_to" id="date_to" value="{{ default_to }}" min="{{ today }}" required></div>
     <div>
       <label>Ночей от</label>
-      <select name="nights_min">{% for n in nights_options %}<option {% if n == 7 %}selected{% endif %}>{{ n }}</option>{% endfor %}</select>
+      <select name="nights_min" id="nights_min">{% for n in nights_options %}<option {% if n == 7 %}selected{% endif %}>{{ n }}</option>{% endfor %}</select>
     </div>
     <div>
       <label>Ночей до</label>
-      <select name="nights_max">{% for n in nights_options %}<option {% if n == 10 %}selected{% endif %}>{{ n }}</option>{% endfor %}</select>
+      <select name="nights_max" id="nights_max">{% for n in nights_options %}<option {% if n == 10 %}selected{% endif %}>{{ n }}</option>{% endfor %}</select>
     </div>
   </div>
   <div class="muted" id="dateHint">Диапазон дат вылета — не более {{ max_date_span_days }} дней.</div>
@@ -125,7 +125,17 @@
   </div>
 
   <button type="submit">Сравнить</button>
-  <p class="muted">Поиск открывает обе площадки и ждёт полной загрузки — до ~1.5 мин. Перед прогоном выполняется health-check.</p>
+  <p class="muted">Поиск открывает обе площадки и ждёт полной загрузки. Перед прогоном выполняется health-check.</p>
+  <details class="muted" style="margin-top:6px">
+    <summary style="cursor:pointer">Что такое health-check?</summary>
+    <div style="margin-top:6px;line-height:1.45">
+      Это быстрая автопроверка перед поиском. Открываем форму каждой площадки и убеждаемся,
+      что ключевые поля на месте: город вылета, страна, даты, ночи, туристы, список туроператоров
+      и кнопка «Найти». Если структура сайта изменилась и какого-то элемента нет — поиск
+      <b>не запускается</b>, чтобы не выдать неверный результат, а в логе будет видно, какой именно
+      элемент пропал и где нужно поправить селекторы.
+    </div>
+  </details>
 </form>
 </div>
 
@@ -176,6 +186,16 @@ function clampDates() {
 df.addEventListener('change', clampDates);
 dt.addEventListener('change', clampDates);
 clampDates();
+
+// «Ночей от» не может быть больше «Ночей до» — подтягиваем второе поле
+const nmin = document.getElementById('nights_min'), nmax = document.getElementById('nights_max');
+function clampNights(src) {
+  const a = parseInt(nmin.value, 10), b = parseInt(nmax.value, 10);
+  if (a > b) { if (src === 'min') nmax.value = nmin.value; else nmin.value = nmax.value; }
+}
+nmin.addEventListener('change', () => clampNights('min'));
+nmax.addEventListener('change', () => clampNights('max'));
+clampNights('min');
 
 // Режим «Отели» (без перелёта): нет города вылета и фильтров рейсов
 const depBlock = document.getElementById('depCityBlock');
