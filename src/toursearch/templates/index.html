@@ -3,13 +3,12 @@
 <style>
   /* Широкая раскладка только на странице поиска (переопределяем main из base.html) */
   main { max-width: 1900px; }
-  /* Три колонки: live слева, форма ПО ЦЕНТРУ (фиксированная — не двигается),
-     лог справа. Боковые колонки flex:1 и равны → форма всегда строго посередине,
-     даже когда боковые пустые (до запуска поиска). */
+  /* Три колонки: live слева (тянется), форма ПО ЦЕНТРУ (шире — поля пакуются
+     в меньшее число рядов и форма влезает по высоте без прокрутки), лог справа (уже). */
   .layout { display:flex; gap:16px; align-items:flex-start; justify-content:center; }
   #liveCol  { flex:1 1 0; min-width:0; position:sticky; top:12px; }
-  #centerCol { flex:0 0 420px; max-width:420px; }
-  #rightCol { flex:1 1 0; min-width:0; position:sticky; top:12px; }
+  #centerCol { flex:0 0 560px; max-width:560px; }
+  #rightCol { flex:0 0 440px; min-width:0; position:sticky; top:12px; }
   #centerCol > .card, #rightCol > .card { width:100%; }
   .liveviews { display:none; flex-direction:column; gap:16px; }  /* показываем при запуске */
   #searchlog { height:340px; overflow:auto; background:#0f1733; color:#cfe0ff;
