@@ -691,7 +691,7 @@ class TourvisorProvider:
         try:
             Path("screenshots").mkdir(exist_ok=True)
             path = f"screenshots/tourvisor_{datetime.now():%Y%m%d_%H%M%S}.png"
-            await page.screenshot(path=path, full_page=False)
+            await page.screenshot(path=path, full_page=True)
             return path
         except Exception:
             return None

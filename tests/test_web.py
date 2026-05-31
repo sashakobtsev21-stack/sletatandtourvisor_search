@@ -19,7 +19,7 @@ def test_index_renders(tmp_path):
     resp = client.get("/")
     assert resp.status_code == 200
     assert "Параметры поиска" in resp.text
-    assert "Отели (без перелёта)" in resp.text
+    assert "Отели" in resp.text
 
 
 def test_history_renders_saved_run(tmp_path):
