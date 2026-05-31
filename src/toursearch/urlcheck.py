@@ -72,8 +72,13 @@ def verify_sletat_search_url(url: str, params: SearchParams) -> list[Problem]:
         eq("children_count", len(params.children_ages), _kids_count(p["kids"]))
 
     if "datefrom" in q:
+        # datefrom = дата заезда — совпадает с date_from в обоих режимах.
         eq("date_from", params.date_from.strftime("%d/%m/%Y"), q["datefrom"])
-    if "dateto" in q:
+    if "dateto" in q and params.search_mode != "hotels":
+        # В режиме «Отели» dateto — это дата ВЫЕЗДА (заезд + ночи, минимум 1 ночь),
+        # а не конец окна вылета: Sletat выводит ночи из диапазона дат и при совпадении
+        # date_from==date_to ставит checkout = date+1. Поэтому dateto тут не сверяем
+        # (как и ночи выше) — иначе валидный поиск ложно падает.
         eq("date_to", params.date_to.strftime("%d/%m/%Y"), q["dateto"])
     if "currency" in q:
         eq("currency", params.currency, q["currency"])

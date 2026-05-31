@@ -18,9 +18,10 @@ screenshots/
 traces/
 _dump/
 
-# IDE
+# IDE / агентское тулинг
 .idea/
 .vscode/
+.claude/
 
 # ОС
 .DS_Store

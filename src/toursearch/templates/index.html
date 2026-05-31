@@ -78,13 +78,13 @@
   </div>
 
   <div class="row">
-    <div><label>Дата вылета (от)</label><input type="date" name="date_from" id="date_from" value="{{ default_from }}" min="{{ today }}" required></div>
-    <div><label>Дата вылета (до)</label><input type="date" name="date_to" id="date_to" value="{{ default_to }}" min="{{ today }}" required></div>
-    <div>
+    <div><label id="dateFromLabel">Дата вылета (от)</label><input type="date" name="date_from" id="date_from" value="{{ default_from }}" min="{{ today }}" required></div>
+    <div><label id="dateToLabel">Дата вылета (до)</label><input type="date" name="date_to" id="date_to" value="{{ default_to }}" min="{{ today }}" required></div>
+    <div id="nightsMinBlock">
       <label>Ночей от</label>
       <select name="nights_min" id="nights_min">{% for n in nights_options %}<option {% if n == 7 %}selected{% endif %}>{{ n }}</option>{% endfor %}</select>
     </div>
-    <div>
+    <div id="nightsMaxBlock">
       <label>Ночей до</label>
       <select name="nights_max" id="nights_max">{% for n in nights_options %}<option {% if n == 10 %}selected{% endif %}>{{ n }}</option>{% endfor %}</select>
     </div>
@@ -176,13 +176,18 @@ childCount.addEventListener('change', renderAges);
 // Ограничение окна дат ≤ N дней
 const SPAN = {{ max_date_span_days }};
 const df = document.getElementById('date_from'), dt = document.getElementById('date_to');
+function isHotels() { return document.querySelector('input[name=mode]:checked').value === 'hotels'; }
 function clampDates() {
   if (!df.value) return;
   const from = new Date(df.value);
   const max = new Date(from); max.setDate(max.getDate() + SPAN);
-  dt.min = df.value;
+  // Туры: date_to — конец окна вылета (>= заезда). Отели: date_to — дата ВЫЕЗДА,
+  // ночи = выезд − заезд, поэтому выезд минимум на 1 день позже заезда.
+  const minOut = new Date(from);
+  if (isHotels()) minOut.setDate(minOut.getDate() + 1);
+  dt.min = minOut.toISOString().slice(0, 10);
   dt.max = max.toISOString().slice(0, 10);
-  if (dt.value && new Date(dt.value) < from) dt.value = df.value;
+  if (dt.value && new Date(dt.value) < minOut) dt.value = dt.min;
   if (dt.value && new Date(dt.value) > max) dt.value = dt.max;
 }
 df.addEventListener('change', clampDates);
@@ -199,13 +204,27 @@ nmin.addEventListener('change', () => clampNights('min'));
 nmax.addEventListener('change', () => clampNights('max'));
 clampNights('min');
 
-// Режим «Отели» (без перелёта): нет города вылета и фильтров рейсов
+// Режим «Отели» (без перелёта): нет города вылета, фильтров рейсов и выбора ночей —
+// ночи задаются датами проживания (заезд → выезд), как на Sletat.
 const depBlock = document.getElementById('depCityBlock');
 const flightsBlock = document.getElementById('flightsBlock');
+const nightsMinBlock = document.getElementById('nightsMinBlock');
+const nightsMaxBlock = document.getElementById('nightsMaxBlock');
+const dateFromLabel = document.getElementById('dateFromLabel');
+const dateToLabel = document.getElementById('dateToLabel');
+const dateHint = document.getElementById('dateHint');
 function applyMode() {
-  const hotels = document.querySelector('input[name=mode]:checked').value === 'hotels';
+  const hotels = isHotels();
   depBlock.style.display = hotels ? 'none' : '';
   flightsBlock.style.display = hotels ? 'none' : '';
+  nightsMinBlock.style.display = hotels ? 'none' : '';
+  nightsMaxBlock.style.display = hotels ? 'none' : '';
+  dateFromLabel.textContent = hotels ? 'Заезд (проживание с)' : 'Дата вылета (от)';
+  dateToLabel.textContent = hotels ? 'Выезд (проживание по)' : 'Дата вылета (до)';
+  dateHint.textContent = hotels
+    ? 'Ночи задаются датами проживания: выезд − заезд (не более ' + SPAN + ' ночей).'
+    : 'Диапазон дат вылета — не более ' + SPAN + ' дней.';
+  clampDates();
 }
 document.querySelectorAll('input[name=mode]').forEach(r => r.addEventListener('change', applyMode));
 applyMode();
