@@ -46,6 +46,20 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
   const [operators, setOperators] = useState(initial?.operators ?? []);
   const [dateFrom, setDateFrom] = useState(initial?.date_from ?? defaultFrom);
   const [dateTo, setDateTo] = useState(initial?.date_to ?? defaultTo);
+  const [nightsMin, setNightsMin] = useState(initial?.nights_min ?? 7);
+  const [nightsMax, setNightsMax] = useState(initial?.nights_max ?? 10);
+
+  // Ночи: «от» не больше «до» — при изменении одного подтягиваем второй.
+  const onNightsMin = (v) => {
+    const n = Number(v);
+    setNightsMin(n);
+    if (n > nightsMax) setNightsMax(n);
+  };
+  const onNightsMax = (v) => {
+    const n = Number(v);
+    setNightsMax(n);
+    if (n < nightsMin) setNightsMin(n);
+  };
 
   const isHotels = mode === "hotels";
   // Выезд: в отелях ≥ заезд+1 (ночи = выезд − заезд), в турах ≥ заезд; и не
@@ -201,12 +215,12 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
       {!isHotels && (
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <Field label="Ночей от" icon={MoonStar} htmlFor="nights_min">
-            <Select id="nights_min" name="nights_min" icon defaultValue={initial?.nights_min ?? 7}>
+            <Select id="nights_min" name="nights_min" icon value={nightsMin} onChange={(e) => onNightsMin(e.target.value)}>
               {NIGHTS.map((n) => <option key={n}>{n}</option>)}
             </Select>
           </Field>
           <Field label="Ночей до" icon={MoonStar} htmlFor="nights_max">
-            <Select id="nights_max" name="nights_max" icon defaultValue={initial?.nights_max ?? 10}>
+            <Select id="nights_max" name="nights_max" icon value={nightsMax} onChange={(e) => onNightsMax(e.target.value)}>
               {NIGHTS.map((n) => <option key={n}>{n}</option>)}
             </Select>
           </Field>

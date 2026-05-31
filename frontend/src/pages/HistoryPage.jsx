@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import {
   History as HistoryIcon, Plane, Hotel, RotateCw, ChevronRight, Loader2, Search,
+  CheckCircle2, AlertTriangle,
 } from "lucide-react";
 import GlassCard from "../components/ui/GlassCard.jsx";
 import { staggerContainer, fadeUp } from "../lib/animations.js";
@@ -97,7 +98,22 @@ export default function HistoryPage() {
                     </span>
                   </div>
                   <div className="mt-0.5 truncate text-xs text-muted">{detail}</div>
-                  <div className="mt-0.5 text-[11px] text-muted/70">{formatDateTime(r.run_at)}</div>
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] text-muted/70">{formatDateTime(r.run_at)}</span>
+                    {(r.provider_status ?? []).map((s) => (
+                      <span
+                        key={s.provider}
+                        title={s.ok ? "успешно" : (s.error || "ошибка")}
+                        className={[
+                          "inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold capitalize",
+                          s.ok ? "bg-emerald-500/15 text-emerald-300" : "bg-rose-500/15 text-rose-300",
+                        ].join(" ")}
+                      >
+                        {s.ok ? <CheckCircle2 className="size-2.5" /> : <AlertTriangle className="size-2.5" />}
+                        {s.provider}
+                      </span>
+                    ))}
+                  </div>
                 </div>
                 <div className="hidden shrink-0 text-right sm:block">
                   <div className="font-bold tabular-nums text-ink">{formatPrice(r.cheapest_price)}</div>
