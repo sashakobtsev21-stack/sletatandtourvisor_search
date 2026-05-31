@@ -2,8 +2,10 @@
 {% block content %}
 <style>
   .layout { display:flex; gap:16px; align-items:flex-start; }
-  .layout > form { flex:1 1 60%; }
-  #progress { flex:1 1 40%; position:sticky; top:12px; }
+  /* live-окна слева (широкие, чтобы сайт помещался по ширине), форма+лог справа */
+  #liveCol { flex:1 1 60%; position:sticky; top:12px; display:none; }
+  #rightCol { flex:1 1 40%; min-width:360px; max-width:640px; }
+  #rightCol > .card { width:100%; }
   #searchlog { height:340px; overflow:auto; background:#0f1733; color:#cfe0ff;
     font-family:ui-monospace,monospace; font-size:12px; border-radius:8px; padding:8px 10px; }
   #searchlog .l-info { color:#cfe0ff; } #searchlog .l-warning { color:#ffd479; }
@@ -15,18 +17,33 @@
     font-size:13px; cursor:pointer; }
   #stopBtn:hover { background:#c93b40; }
   #stopBtn:disabled { background:#c9ced8; cursor:default; }
-  .liveviews { margin-top:12px; display:flex; flex-direction:column; gap:10px; }
+  .liveviews { display:flex; flex-direction:column; gap:12px; }
   .liveview { border:1px solid #e3e7ee; border-radius:8px; overflow:hidden; background:#0f1733; }
-  .liveview .lv-cap { font-size:12px; color:#cfe0ff; padding:5px 9px; background:#16204a;
+  .liveview .lv-cap { font-size:13px; color:#cfe0ff; padding:6px 10px; background:#16204a;
     display:flex; align-items:center; gap:6px; }
-  .liveview .lv-body { height:380px; display:flex; align-items:center; justify-content:center; position:relative; }
-  .liveview img { max-width:100%; max-height:380px; display:none; }
-  .liveview .lv-wait { color:#8da2c9; font-size:13px; }
+  .liveview .lv-body { min-height:120px; display:flex; align-items:center; justify-content:center;
+    position:relative; padding:6px; }
+  .liveview img { width:100%; height:auto; display:none; border-radius:4px; }
+  .liveview .lv-wait { color:#8da2c9; font-size:13px; padding:24px 0; }
   .lv-dot { width:9px; height:9px; border-radius:50%; background:#ff5a5f; display:inline-block;
     animation:blink 1s steps(2,start) infinite; }
   @keyframes blink { 50% { opacity:.25; } }
 </style>
 <div class="layout">
+<div id="liveCol">
+  <div class="liveviews">
+    {% for p in providers %}
+    <div class="liveview" id="lv-{{ p }}">
+      <div class="lv-cap"><span class="lv-dot"></span> {{ p }} — в реальном времени</div>
+      <div class="lv-body">
+        <span class="lv-wait" id="wait-{{ p }}">ожидание первого кадра…</span>
+        <img id="frame-{{ p }}" alt="{{ p }} live">
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+<div id="rightCol">
 <form class="card" method="post" action="/search" id="searchForm">
   <h2 style="margin-top:0">Параметры поиска</h2>
   {% if error %}<div class="worst" style="margin-bottom:10px">⚠️ {{ error }}</div>{% endif %}
@@ -116,18 +133,7 @@
   </div>
   <div id="searchlog"></div>
   <p class="muted" id="pnote" style="margin:8px 0 0">Идёт поиск… по завершении откроются результаты.</p>
-
-  <div class="liveviews">
-    {% for p in providers %}
-    <div class="liveview" id="lv-{{ p }}">
-      <div class="lv-cap"><span class="lv-dot"></span> {{ p }} — в реальном времени</div>
-      <div class="lv-body">
-        <span class="lv-wait" id="wait-{{ p }}">ожидание первого кадра…</span>
-        <img id="frame-{{ p }}" alt="{{ p }} live">
-      </div>
-    </div>
-    {% endfor %}
-  </div>
+</div>
 </div>
 </div>
 
@@ -195,8 +201,10 @@ function finishUI() {
   stopBtn.disabled = true;
 }
 function showLiveViews() {
-  // показываем окна только для выбранных площадок, остальные прячем
+  // показываем левую колонку и окна только для выбранных площадок
   const chosen = new Set([...document.querySelectorAll('input[name=provider]:checked')].map(c => c.value));
+  const liveCol = document.getElementById('liveCol');
+  if (liveCol) liveCol.style.display = chosen.size ? 'block' : 'none';
   document.querySelectorAll('.liveview').forEach(v => {
     const name = v.id.replace('lv-', '');
     v.style.display = chosen.has(name) ? '' : 'none';

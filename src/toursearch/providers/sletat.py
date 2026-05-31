@@ -647,10 +647,16 @@ class SletatProvider:
         return build_hotel_offers(self.name, rows)
 
     async def _safe_screenshot(self, page: Page) -> str | None:
+        # Только верхняя видимая область (форма поиска + «нашли N туров»), без длинной
+        # ленты результатов — так скриншот читабелен.
         try:
             Path("screenshots").mkdir(exist_ok=True)
+            try:
+                await page.evaluate("window.scrollTo(0, 0)")
+            except Exception:
+                pass
             path = f"screenshots/sletat_{datetime.now():%Y%m%d_%H%M%S}.png"
-            await page.screenshot(path=path, full_page=True)
+            await page.screenshot(path=path, full_page=False)
             return path
         except Exception:
             return None
