@@ -13,12 +13,17 @@ import {
   NIGHTS, ADULTS, CHILDREN, CHILD_AGES, MAX_DATE_SPAN_DAYS,
 } from "../lib/constants.js";
 
-const today = new Date().toISOString().slice(0, 10);
 const addDays = (iso, n) => {
   const d = new Date(iso);
   d.setDate(d.getDate() + n);
   return d.toISOString().slice(0, 10);
 };
+const today = new Date().toISOString().slice(0, 10);
+// Минимально доступная дата — ЗАВТРА (сегодня выбирать нельзя).
+const minDate = addDays(today, 1);
+// Дефолтное окно: завтра … +7 дней.
+const defaultFrom = minDate;
+const defaultTo = addDays(minDate, 7);
 
 /**
  * SearchForm — центральная колонка. Форма параметров поиска тура.
@@ -36,10 +41,11 @@ export default function SearchForm({ onSubmit, isSearching = false }) {
   const [childAges, setChildAges] = useState([]);
   const [providers, setProviders] = useState([...PROVIDERS]);
   const [operators, setOperators] = useState([]);
-  const [dateFrom, setDateFrom] = useState(today);
+  const [dateFrom, setDateFrom] = useState(defaultFrom);
 
   const isHotels = mode === "hotels";
-  // В отелях выезд минимум на день позже заезда (ночи = выезд − заезд).
+  // В отелях выезд минимум на день позже заезда (ночи = выезд − заезд),
+  // в турах — не раньше заезда. И в любом случае не раньше завтра.
   const dateToMin = isHotels ? addDays(dateFrom, 1) : dateFrom;
 
   // Перестроить набор возрастов при изменении количества детей.
@@ -149,12 +155,12 @@ export default function SearchForm({ onSubmit, isSearching = false }) {
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <Field label={isHotels ? "Заезд" : "Дата вылета (от)"} icon={CalendarDays} htmlFor="date_from">
           <Input
-            id="date_from" name="date_from" type="date" icon min={today} defaultValue={today} required
-            onChange={(e) => setDateFrom(e.target.value || today)}
+            id="date_from" name="date_from" type="date" icon min={minDate} defaultValue={defaultFrom} required
+            onChange={(e) => setDateFrom(e.target.value || defaultFrom)}
           />
         </Field>
         <Field label={isHotels ? "Выезд" : "Дата вылета (до)"} icon={CalendarDays} htmlFor="date_to">
-          <Input id="date_to" name="date_to" type="date" icon min={dateToMin} defaultValue={today} required />
+          <Input id="date_to" name="date_to" type="date" icon min={dateToMin} defaultValue={defaultTo} required />
         </Field>
       </div>
       <motion.p variants={fadeUp} className="mt-1.5 text-[11px] text-muted">
