@@ -34,15 +34,18 @@ const defaultTo = addDays(minDate, 7);
  *
  * props.onSubmit(payload) — вызывается с собранными параметрами при сабмите.
  * props.isSearching — блокирует кнопку, пока идёт поиск.
+ * props.initial — параметры для предзаполнения (повтор прогона из истории).
  */
-export default function SearchForm({ onSubmit, isSearching = false }) {
-  const [mode, setMode] = useState("tours"); // tours | hotels
-  const [childrenCount, setChildrenCount] = useState(0);
-  const [childAges, setChildAges] = useState([]);
-  const [providers, setProviders] = useState([...PROVIDERS]);
-  const [operators, setOperators] = useState([]);
-  const [dateFrom, setDateFrom] = useState(defaultFrom);
-  const [dateTo, setDateTo] = useState(defaultTo);
+export default function SearchForm({ onSubmit, isSearching = false, initial = null }) {
+  const [mode, setMode] = useState(initial?.search_mode ?? "tours"); // tours | hotels
+  const [childrenCount, setChildrenCount] = useState(initial?.children_ages?.length ?? 0);
+  const [childAges, setChildAges] = useState(initial?.children_ages ?? []);
+  const [providers, setProviders] = useState(
+    initial?.providers?.length ? [...initial.providers] : [...PROVIDERS]
+  );
+  const [operators, setOperators] = useState(initial?.operators ?? []);
+  const [dateFrom, setDateFrom] = useState(initial?.date_from ?? defaultFrom);
+  const [dateTo, setDateTo] = useState(initial?.date_to ?? defaultTo);
 
   const isHotels = mode === "hotels";
   // Выезд: в отелях ≥ заезд+1 (ночи = выезд − заезд), в турах ≥ заезд; и не
@@ -160,14 +163,14 @@ export default function SearchForm({ onSubmit, isSearching = false }) {
       <div className="grid gap-4 sm:grid-cols-2">
         {!isHotels && (
           <Field label="Откуда?" icon={Plane} htmlFor="departure_city">
-            <Select id="departure_city" name="departure_city" icon defaultValue="Москва">
+            <Select id="departure_city" name="departure_city" icon defaultValue={initial?.departure_city ?? "Москва"}>
               {DEPARTURE_CITIES.map((c) => <option key={c}>{c}</option>)}
             </Select>
           </Field>
         )}
 
         <Field label="Куда?" icon={Globe2} htmlFor="destination_country">
-          <Select id="destination_country" name="destination_country" icon defaultValue="Турция">
+          <Select id="destination_country" name="destination_country" icon defaultValue={initial?.destination_country ?? "Турция"}>
             {COUNTRIES.map((c) => <option key={c}>{c}</option>)}
           </Select>
         </Field>
@@ -198,12 +201,12 @@ export default function SearchForm({ onSubmit, isSearching = false }) {
       {!isHotels && (
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <Field label="Ночей от" icon={MoonStar} htmlFor="nights_min">
-            <Select id="nights_min" name="nights_min" icon defaultValue={7}>
+            <Select id="nights_min" name="nights_min" icon defaultValue={initial?.nights_min ?? 7}>
               {NIGHTS.map((n) => <option key={n}>{n}</option>)}
             </Select>
           </Field>
           <Field label="Ночей до" icon={MoonStar} htmlFor="nights_max">
-            <Select id="nights_max" name="nights_max" icon defaultValue={10}>
+            <Select id="nights_max" name="nights_max" icon defaultValue={initial?.nights_max ?? 10}>
               {NIGHTS.map((n) => <option key={n}>{n}</option>)}
             </Select>
           </Field>
@@ -213,7 +216,7 @@ export default function SearchForm({ onSubmit, isSearching = false }) {
       {/* Туристы + бюджет */}
       <div className="mt-4 grid gap-4 sm:grid-cols-3">
         <Field label="Взрослых" icon={Users} htmlFor="adults">
-          <Select id="adults" name="adults" icon defaultValue={2}>
+          <Select id="adults" name="adults" icon defaultValue={initial?.adults ?? 2}>
             {ADULTS.map((a) => <option key={a}>{a}</option>)}
           </Select>
         </Field>
@@ -228,7 +231,7 @@ export default function SearchForm({ onSubmit, isSearching = false }) {
           </Select>
         </Field>
         <Field label="Макс. цена, ₽" icon={Wallet} htmlFor="price_max">
-          <Input id="price_max" name="price_max" type="text" icon placeholder="любая" inputMode="numeric" />
+          <Input id="price_max" name="price_max" type="text" icon placeholder="любая" inputMode="numeric" defaultValue={initial?.price_max ?? ""} />
         </Field>
       </div>
 
@@ -292,8 +295,8 @@ export default function SearchForm({ onSubmit, isSearching = false }) {
         <div className="mt-5">
           <label className="mb-2 block text-xs font-medium tracking-wide text-muted">Рейсы</label>
           <div className="flex flex-wrap gap-5">
-            <Checkbox name="charter_only" label="Только чартер" />
-            <Checkbox name="direct_only" label="Только прямые" />
+            <Checkbox name="charter_only" label="Только чартер" defaultChecked={!!initial?.charter_only} />
+            <Checkbox name="direct_only" label="Только прямые" defaultChecked={!!initial?.direct_only} />
           </div>
         </div>
       )}
@@ -414,11 +417,11 @@ function HealthCheckInfo({ providers = [] }) {
 }
 
 /** Кастомный чекбокс в фирменном стиле. */
-function Checkbox({ name, label }) {
-  const [checked, setChecked] = useState(false);
+function Checkbox({ name, label, defaultChecked = false }) {
+  const [checked, setChecked] = useState(defaultChecked);
   return (
     <label className="flex cursor-pointer select-none items-center gap-2 text-sm text-ink">
-      <input type="checkbox" name={name} className="peer sr-only" onChange={(e) => setChecked(e.target.checked)} />
+      <input type="checkbox" name={name} defaultChecked={defaultChecked} className="peer sr-only" onChange={(e) => setChecked(e.target.checked)} />
       <motion.span
         whileTap={{ scale: 0.85 }}
         className={[

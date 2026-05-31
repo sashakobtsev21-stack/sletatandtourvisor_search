@@ -312,16 +312,32 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
     async def api_runs(limit: int = 50):
         with Storage(db_path) as storage:
             runs = storage.list_runs(limit=limit)
-        return [
-            {
-                "run_id": r.run_id, "run_at": r.run_at.isoformat(),
-                "cheapest_label": r.cheapest_label,
-                "cheapest_price": str(r.cheapest_price) if r.cheapest_price is not None else None,
-                "cheapest_provider": r.cheapest_provider,
-                "fastest_provider": r.fastest_provider,
-            }
-            for r in runs
-        ]
+            out = []
+            for r in runs:
+                rep = storage.get_report(r.run_id)
+                p = rep.params
+                out.append({
+                    "run_id": r.run_id, "run_at": r.run_at.isoformat(),
+                    "cheapest_label": r.cheapest_label,
+                    "cheapest_price": str(r.cheapest_price) if r.cheapest_price is not None else None,
+                    "cheapest_provider": r.cheapest_provider,
+                    "fastest_provider": r.fastest_provider,
+                    # параметры прогона — для заголовка истории и кнопки «Повторить»
+                    "params": {
+                        "search_mode": p.search_mode,
+                        "departure_city": p.departure_city,
+                        "destination_country": p.destination_country,
+                        "date_from": p.date_from.isoformat(),
+                        "date_to": p.date_to.isoformat(),
+                        "nights_min": p.nights_min, "nights_max": p.nights_max,
+                        "adults": p.adults, "children_ages": p.children_ages,
+                        "operators": p.operators,
+                        "charter_only": p.charter_only, "direct_only": p.direct_only,
+                        "price_max": str(p.price_max) if p.price_max is not None else None,
+                        "providers": [res.provider for res in rep.results],
+                    },
+                })
+        return out
 
     @app.get("/api/runs/{run_id}")
     async def api_run(run_id: int):

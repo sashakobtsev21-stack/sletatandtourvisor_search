@@ -1,12 +1,34 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import DashboardLayout from "../components/DashboardLayout.jsx";
 import SearchForm from "../components/SearchForm.jsx";
 import SearchTerminal from "../components/SearchTerminal.jsx";
 import LiveViews from "../components/LiveViews.jsx";
 import { navigate } from "../lib/router.js";
+import { takeRepeat } from "../lib/repeatStore.js";
+import { PROVIDERS } from "../lib/constants.js";
 
 let logSeq = 0;
 const now = () => new Date().toTimeString().slice(0, 8);
+
+/** Параметры прогона (из истории) → payload для runRealSearch. */
+function payloadFromParams(p) {
+  return {
+    mode: p.search_mode,
+    departure_city: p.departure_city,
+    destination_country: p.destination_country,
+    date_from: p.date_from,
+    date_to: p.date_to,
+    nights_min: p.nights_min,
+    nights_max: p.nights_max,
+    adults: p.adults,
+    child_ages: p.children_ages ?? [],
+    price_max: p.price_max ?? null,
+    operators: p.operators ?? [],
+    charter_only: !!p.charter_only,
+    direct_only: !!p.direct_only,
+    providers: p.providers?.length ? p.providers : [...PROVIDERS],
+  };
+}
 
 /**
  * SearchPage — экран поиска (три колонки: live-окна / форма / терминал логов).
@@ -22,6 +44,8 @@ export default function SearchPage() {
   const [phases, setPhases] = useState({});
   const esRef = useRef(null);
   const tokenRef = useRef(null);
+  // Параметры повтора прогона (из истории) — читаем один раз при монтировании.
+  const [repeatInitial] = useState(() => takeRepeat());
 
   const pushLog = (msg, level = "info") =>
     setLogs((prev) => [...prev, { id: ++logSeq, msg, level, ts: now() }]);
@@ -37,6 +61,13 @@ export default function SearchPage() {
     setStatus("running");
     runRealSearch(payload);
   };
+
+  // Повтор прогона из истории: предзаполняем форму и сразу запускаем поиск.
+  useEffect(() => {
+    if (repeatInitial) {
+      handleSubmit(payloadFromParams(repeatInitial));
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCancel = async () => {
     pushLog("⏹ Останавливаю поиск…", "warning");
@@ -167,7 +198,7 @@ export default function SearchPage() {
   return (
     <DashboardLayout
       left={<LiveViews providers={activeProviders} frames={frames} phases={phases} active={status !== "idle"} />}
-      center={<SearchForm onSubmit={handleSubmit} isSearching={status === "running"} />}
+      center={<SearchForm onSubmit={handleSubmit} isSearching={status === "running"} initial={repeatInitial} />}
       right={<SearchTerminal logs={logs} progress={progress} status={status} onCancel={handleCancel} />}
     />
   );
