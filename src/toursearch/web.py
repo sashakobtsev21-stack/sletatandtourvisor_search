@@ -110,6 +110,8 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
         ops = [o for o in form.getlist("operator") if o]
         child_ages = [int(x) for x in form.getlist("child_age") if str(x).isdigit()]
 
+        # «Ночей от» не может превышать «Ночей до» — нормализуем
+        nights_min, nights_max = min(nights_min, nights_max), max(nights_min, nights_max)
         df, dt = date.fromisoformat(date_from), date.fromisoformat(date_to)
         # Окно вылета — не более 14 дней
         if (dt - df).days > MAX_DATE_SPAN_DAYS:
@@ -161,11 +163,14 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
         dt = date.fromisoformat(f.get("date_to"))
         if (dt - df).days > MAX_DATE_SPAN_DAYS:
             return {"error": f"Диапазон дат вылета не должен превышать {MAX_DATE_SPAN_DAYS} дней (ограничение Sletat)."}
+        nmin = int(f.get("nights_min", 7))
+        nmax = int(f.get("nights_max", 10))
+        nmin, nmax = min(nmin, nmax), max(nmin, nmax)
         params = SearchParams(
             departure_city=f.get("departure_city", "Москва"),
             destination_country=f.get("destination_country", "Турция"),
             date_from=df, date_to=dt,
-            nights_min=int(f.get("nights_min", 7)), nights_max=int(f.get("nights_max", 10)),
+            nights_min=nmin, nights_max=nmax,
             adults=int(f.get("adults", 2)), children_ages=child_ages,
             search_mode=f.get("mode", "tours"), operators=ops,
             charter_only=bool(f.get("charter_only")), direct_only=bool(f.get("direct_only")),

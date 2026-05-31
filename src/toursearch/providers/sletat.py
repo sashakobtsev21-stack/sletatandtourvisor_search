@@ -152,11 +152,11 @@ class SletatProvider:
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(
                 headless=self.headless,
-                args=["--disable-blink-features=AutomationControlled", "--window-size=1920,1080"],
+                args=["--disable-blink-features=AutomationControlled", "--window-size=1600,1080"],
             )
-            # Широкий вьюпорт: сайт помещается по ширине и в live-кадрах, и в скриншоте выдачи.
+            # Вьюпорт 1600: сайт целиком по ширине, но крупнее (читабельнее) в live-окне и скриншоте.
             context = await browser.new_context(
-                viewport={"width": 1920, "height": 1080}, permissions=[]
+                viewport={"width": 1600, "height": 1080}, permissions=[]
             )
             await context.add_init_script(
                 "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
