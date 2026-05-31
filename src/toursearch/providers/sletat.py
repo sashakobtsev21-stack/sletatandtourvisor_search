@@ -199,6 +199,10 @@ class SletatProvider:
                             f"{f}: ожидали {e!r}, получили {a!r}" for f, e, a in url_problems),
                     )
                 found = bool(offers or hotel_offers)
+                # В «Турах» раскрываем выезжающую слева панель операторов (blinchik),
+                # чтобы на скриншоте выдачи был виден перечень туроператоров с ценами.
+                if params.search_mode != "hotels":
+                    await self._open_operator_panel(page)
                 shot = await self._safe_screenshot(page)
                 return ProviderResult(
                     provider=self.name,
@@ -625,6 +629,27 @@ class SletatProvider:
             last = key
             if stable >= 3 and (items > 0 or not_found > 0):
                 return
+
+    async def _open_operator_panel(self, page: Page) -> None:
+        """Выдвинуть слева панель операторов (blinchik) — для скриншота выдачи.
+
+        Панель `.blinchik` по умолчанию `blinchik_closed` (спрятана за левым краем,
+        x<0). Жмём штатную кнопку показа, а как подстраховку снимаем класс
+        `blinchik_closed`, чтобы панель выехала и попала в скриншот.
+        """
+        try:
+            await page.evaluate(
+                """() => {
+                    const b = document.querySelector('.blinchik');
+                    if (!b) return;
+                    const btn = b.querySelector('.blinchik__hide-button');
+                    if (btn) btn.click();
+                    b.classList.remove('blinchik_closed');
+                }"""
+            )
+            await page.wait_for_timeout(800)
+        except Exception:
+            pass
 
     async def _sort_by_price(self, page: Page) -> None:
         try:
