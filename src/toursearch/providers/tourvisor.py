@@ -442,10 +442,43 @@ class TourvisorProvider:
         await page.wait_for_selector(
             "xpath=//div[contains(@class,'TVCountryAirportList') and not(contains(@class,'TVHide'))]"
         )
-        await page.click(
-            f"xpath=//div[contains(@class,'TVCountryAirportList')]"
-            f"//div[contains(@class,'TVComplexListItem') and contains(text(),'{country}')][1]"
+        await page.wait_for_timeout(300)
+        # Список стран прокручиваемый — нужная страна (напр. «Мальдивы») может быть ниже
+        # видимой части. Скроллим контейнер по шагам, ищем по нормализованному тексту.
+        clicked = await page.evaluate(
+            """async (country) => {
+                const sleep = ms => new Promise(r => setTimeout(r, ms));
+                const norm = s => (s || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+                const want = norm(country);
+                const lists = [...document.querySelectorAll('.TVCountryAirportList')]
+                    .filter(e => !(e.className || '').includes('TVHide'));
+                const cont = lists[lists.length - 1];
+                if (!cont) return false;
+                const find = () => {
+                    const items = [...cont.querySelectorAll('.TVComplexListItem')];
+                    return items.find(e => norm(e.textContent) === want)
+                        || items.find(e => norm(e.textContent).includes(want));
+                };
+                let el = find();
+                if (!el) {
+                    cont.scrollTop = 0; await sleep(40);
+                    const step = Math.max(60, cont.clientHeight - 24);
+                    for (let i = 0; i < 60; i++) {
+                        el = find();
+                        if (el) break;
+                        const atEnd = cont.scrollTop + cont.clientHeight >= cont.scrollHeight - 2;
+                        cont.scrollTop += step; await sleep(45);
+                        if (atEnd) { el = find(); break; }
+                    }
+                }
+                if (el) { el.scrollIntoView({block: 'center'}); el.click(); return true; }
+                return false;
+            }""",
+            country,
         )
+        if not clicked:
+            raise RuntimeError(f"Страна «{country}» недоступна на Tourvisor")
+        await page.wait_for_timeout(500)
 
     async def _select_dates(self, page: Page, date_from, date_to) -> None:
         await page.click("div.TVFlyDatesFilter")

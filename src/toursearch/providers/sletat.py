@@ -340,14 +340,30 @@ class SletatProvider:
                 # контрол ночей недоступен в этом режиме (напр. иная форма отелей) — пропускаем
                 return
             await page.wait_for_timeout(500)
-            # Кликаем опцию ВНУТРИ нужного списка (min — nights-left, max — nights-right),
-            # иначе матчится чужой видимый дропдаун.
+            # Список ночей — прокручиваемый/виртуализованный: нужный пункт (напр. 14)
+            # появляется в DOM только при прокрутке. Скроллим контейнер по шагам и ищем.
             clicked = await page.evaluate(
-                """([cls, value]) => {
+                """async ([cls, value]) => {
+                    const sleep = ms => new Promise(r => setTimeout(r, ms));
                     const cont = document.querySelector('.uis-select__options_nights.' + cls);
                     if (!cont) return false;
-                    const el = [...cont.querySelectorAll('li')].find(e => e.textContent.trim() === String(value));
-                    if (el) { el.click(); return true; }
+                    const find = () => [...cont.querySelectorAll('li')]
+                        .find(e => e.textContent.trim() === String(value));
+                    let el = find();
+                    if (!el) {
+                        cont.scrollTop = 0;
+                        await sleep(40);
+                        const step = Math.max(40, cont.clientHeight - 24);
+                        for (let i = 0; i < 60; i++) {
+                            el = find();
+                            if (el) break;
+                            const atEnd = cont.scrollTop + cont.clientHeight >= cont.scrollHeight - 2;
+                            cont.scrollTop += step;
+                            await sleep(45);
+                            if (atEnd) { el = find(); break; }
+                        }
+                    }
+                    if (el) { el.scrollIntoView({block: 'center'}); el.click(); return true; }
                     return false;
                 }""",
                 [container, value],
