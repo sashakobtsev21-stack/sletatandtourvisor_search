@@ -137,23 +137,39 @@ export default function ResultsPage({ runId }) {
             </h3>
             {!r.success ? (
               <p className="text-sm text-rose-300">⚠️ {r.error || "поиск не дал результатов"}</p>
-            ) : r.hotel_offers.length > 0 ? (
-              <ProviderTable
-                head={["Отель", "★", "Рейтинг", "Цена"]}
-                rows={r.hotel_offers.map((h) => [
-                  h.hotel_name,
-                  h.stars ? <Stars n={h.stars} /> : "—",
-                  h.rating ?? "—",
-                  formatPrice(h.price, h.currency),
-                ])}
-              />
-            ) : r.offers.length > 0 ? (
-              <ProviderTable
-                head={["Туроператор", "Мин. цена"]}
-                rows={r.offers.map((o) => [o.operator, formatPrice(o.price, o.currency)])}
-              />
             ) : (
-              <p className="text-sm text-muted">Предложений не найдено.</p>
+              <div className="space-y-4">
+                {r.hotel_offers.length > 0 && (
+                  <ProviderTable
+                    head={["Отель", "★", "Рейтинг", "Цена"]}
+                    rows={r.hotel_offers.map((h) => [
+                      h.hotel_name,
+                      h.stars ? <Stars n={h.stars} /> : "—",
+                      h.rating ?? "—",
+                      formatPrice(h.price, h.currency),
+                    ])}
+                  />
+                )}
+                {r.operator_offers?.length > 0 && (
+                  <div>
+                    <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted">
+                      Туроператоры
+                    </h4>
+                    <ProviderTable
+                      head={["Оператор", "Отель", "Цена", "Скорость"]}
+                      rows={r.operator_offers.map((o) => [
+                        o.operator,
+                        o.hotel_name || "—",
+                        formatPrice(o.price, o.currency),
+                        o.load_seconds != null ? `${o.load_seconds} с` : "—",
+                      ])}
+                    />
+                  </div>
+                )}
+                {r.hotel_offers.length === 0 && (r.operator_offers?.length ?? 0) === 0 && (
+                  <p className="text-sm text-muted">Предложений не найдено.</p>
+                )}
+              </div>
             )}
           </GlassCard>
         ))}

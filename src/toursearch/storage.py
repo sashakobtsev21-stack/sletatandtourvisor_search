@@ -19,6 +19,7 @@ from toursearch.models import (
     ComparisonReport,
     HotelOffer,
     Offer,
+    OperatorOffer,
     ProviderResult,
     SearchParams,
 )
@@ -61,6 +62,17 @@ CREATE TABLE IF NOT EXISTS hotel_offers (
     destination        TEXT,
     operators_count    INTEGER,
     raw_label          TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS operator_offers (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider_result_id INTEGER NOT NULL REFERENCES provider_results(id) ON DELETE CASCADE,
+    provider           TEXT NOT NULL,
+    operator           TEXT NOT NULL,
+    price              TEXT NOT NULL,
+    currency           TEXT NOT NULL,
+    hotel_name         TEXT,
+    load_seconds       REAL,
+    raw_label          TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -163,6 +175,23 @@ class Storage:
                         ho.raw_label,
                     ),
                 )
+            for oo in result.operator_offers:
+                self._conn.execute(
+                    """INSERT INTO operator_offers
+                       (provider_result_id, provider, operator, price, currency,
+                        hotel_name, load_seconds, raw_label)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        pr_id,
+                        oo.provider,
+                        oo.operator,
+                        str(oo.price),
+                        oo.currency,
+                        oo.hotel_name,
+                        oo.load_seconds,
+                        oo.raw_label,
+                    ),
+                )
         self._conn.commit()
         return run_id
 
@@ -206,6 +235,21 @@ class Storage:
                 )
                 for h in ho_rows
             ]
+            oo_rows = self._conn.execute(
+                "SELECT * FROM operator_offers WHERE provider_result_id = ? ORDER BY id", (pr["id"],)
+            ).fetchall()
+            operator_offers = [
+                OperatorOffer(
+                    provider=o["provider"],
+                    operator=o["operator"],
+                    price=Decimal(o["price"]),
+                    currency=o["currency"],
+                    hotel_name=o["hotel_name"],
+                    load_seconds=o["load_seconds"],
+                    raw_label=o["raw_label"] if "raw_label" in o.keys() else "",
+                )
+                for o in oo_rows
+            ]
             results.append(
                 ProviderResult(
                     provider=pr["provider"],
@@ -214,6 +258,7 @@ class Storage:
                     search_mode=pr["search_mode"],
                     offers=offers,
                     hotel_offers=hotel_offers,
+                    operator_offers=operator_offers,
                     error=pr["error"],
                     screenshot_path=pr["screenshot_path"],
                     search_url=pr["search_url"] if "search_url" in pr.keys() else None,

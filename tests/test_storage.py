@@ -3,7 +3,13 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from toursearch.models import ComparisonReport, Offer, ProviderResult, SearchParams
+from toursearch.models import (
+    ComparisonReport,
+    Offer,
+    OperatorOffer,
+    ProviderResult,
+    SearchParams,
+)
 from toursearch.storage import Storage
 
 
@@ -80,6 +86,30 @@ def test_get_missing_run_raises(tmp_path):
         pass
     finally:
         storage.close()
+
+
+def test_operator_offers_roundtrip(tmp_path):
+    storage = Storage(tmp_path / "t.db")
+    report = _report()
+    report.results[1].operator_offers = [
+        OperatorOffer(provider="sletat", operator="Travelata", price=Decimal("76648"),
+                      hotel_name="Vision Imperial Hotel", load_seconds=6.3),
+        OperatorOffer(provider="sletat", operator="Pegas Touristik", price=Decimal("80000"),
+                      hotel_name=None, load_seconds=None),
+    ]
+    run_id = storage.save_report(report)
+
+    restored = storage.get_report(run_id)
+    sl = [r for r in restored.results if r.provider == "sletat"][0]
+    assert len(sl.operator_offers) == 2
+    first = sl.operator_offers[0]
+    assert first.operator == "Travelata"
+    assert first.price == Decimal("76648")
+    assert first.hotel_name == "Vision Imperial Hotel"
+    assert first.load_seconds == 6.3
+    assert sl.operator_offers[1].hotel_name is None
+    assert sl.operator_offers[1].load_seconds is None
+    storage.close()
 
 
 def test_failed_provider_persisted(tmp_path):

@@ -102,6 +102,24 @@ class Offer(BaseModel):
         return self.operator
 
 
+class OperatorOffer(BaseModel):
+    """Предложение в разрезе туроператора: оператор, отель, цена и скорость загрузки.
+
+    `load_seconds` — за сколько секунд после старта поиска у оператора появилась цена
+    (видно по тому, как операторы прогружаются в панели «блинчик»). best-effort:
+    где недоступно (напр. Tourvisor) — None. `hotel_name` сопоставляется с отелем по
+    цене (best-effort), может быть None.
+    """
+
+    provider: str
+    operator: str
+    price: Decimal
+    currency: str = "RUB"
+    hotel_name: str | None = None
+    load_seconds: float | None = None
+    raw_label: str = ""
+
+
 class HotelOffer(BaseModel):
     """Предложение по отелю (режим «Отели»): отель + цена и характеристики."""
 
@@ -133,6 +151,7 @@ class ProviderResult(BaseModel):
     search_mode: SearchMode = "tours"
     offers: list[Offer] = Field(default_factory=list)              # режим «Туры»
     hotel_offers: list[HotelOffer] = Field(default_factory=list)   # режим «Отели»
+    operator_offers: list["OperatorOffer"] = Field(default_factory=list)  # оператор+отель+цена+скорость
     error: str | None = None
     screenshot_path: str | None = None
     search_url: str | None = None  # URL результата (если площадка его формирует)

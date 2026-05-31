@@ -23,7 +23,7 @@ log = logging.getLogger("toursearch.providers.sletat")
 
 from playwright.async_api import Page, TimeoutError as PWTimeout, async_playwright
 
-from toursearch.models import HotelOffer, Offer, ProviderResult, SearchParams
+from toursearch.models import HotelOffer, Offer, OperatorOffer, ProviderResult, SearchParams
 from toursearch.providers._formcheck import (
     UNKNOWN,
     FormVerificationError,
@@ -176,8 +176,10 @@ class SletatProvider:
                 await self._verify_and_fix(page, params)
                 await self._click_search(page)
                 start = time.monotonic()
+                # Засекаем, за сколько каждый оператор появляется с ценой в блинчике.
+                op_seen: dict[str, float] = {}
                 log.info("Sletat: поиск запущен, жду полной загрузки результатов…")
-                await self._wait_for_completion(page)
+                await self._wait_for_completion(page, op_seen=op_seen, op_start=start)
                 # URL результата кодирует реальные параметры поиска — финальная сверка.
                 search_url = page.url
                 url_problems = verify_sletat_search_url(search_url, params)
@@ -189,6 +191,8 @@ class SletatProvider:
                 else:
                     offers = await self._parse_operators(page)
                     hotel_offers = []
+                # Таблица оператор → отель → цена → скорость (блинчик + тайминги).
+                operator_offers = await self._build_operator_offers(page, op_seen, hotel_offers)
                 if url_problems:
                     # площадка искала не то, что просили — результаты невалидны
                     return ProviderResult(
@@ -199,10 +203,10 @@ class SletatProvider:
                             f"{f}: ожидали {e!r}, получили {a!r}" for f, e, a in url_problems),
                     )
                 found = bool(offers or hotel_offers)
-                # В «Турах» раскрываем выезжающую слева панель операторов (blinchik),
-                # чтобы на скриншоте выдачи был виден перечень туроператоров с ценами.
-                if params.search_mode != "hotels":
-                    await self._open_operator_panel(page)
+                # Раскрываем выезжающую слева панель операторов (blinchik) — и в
+                # «Турах», и в «Отелях» — чтобы на скриншоте выдачи был виден
+                # перечень туроператоров с ценами.
+                await self._open_operator_panel(page)
                 shot = await self._safe_screenshot(page)
                 return ProviderResult(
                     provider=self.name,
@@ -211,6 +215,7 @@ class SletatProvider:
                     search_mode=params.search_mode,
                     offers=offers,
                     hotel_offers=hotel_offers,
+                    operator_offers=operator_offers,
                     search_url=search_url,
                     screenshot_path=shot,
                     error=None if found else "Предложений не найдено по заданным параметрам.",
@@ -605,13 +610,34 @@ class SletatProvider:
 
     # --- ожидание / сортировка / парсинг ---
 
-    async def _wait_for_completion(self, page: Page, timeout_s: int = 120) -> None:
-        """Завершение = текст статуса и число карточек стабильны (спиннеры не в счёт)."""
+    async def _wait_for_completion(
+        self, page: Page, timeout_s: int = 120,
+        op_seen: dict | None = None, op_start: float | None = None,
+    ) -> None:
+        """Завершение = текст статуса и число карточек стабильны (спиннеры не в счёт).
+
+        Если переданы `op_seen`/`op_start` — попутно фиксируем, за сколько секунд у
+        каждого оператора в блинчике появилась цена (best-effort, для колонки «Скорость»).
+        """
         deadline = time.monotonic() + timeout_s
         last = None
         stable = 0
         while time.monotonic() < deadline:
             await page.wait_for_timeout(1500)
+            if op_seen is not None and op_start is not None:
+                try:
+                    rows = await page.evaluate(
+                        """() => [...document.querySelectorAll('li.blinchik__operator-item')].map(it => ({
+                            name: (it.querySelector('label')?.textContent || '').trim(),
+                            price: (it.querySelector('.blinchik__price .sr-currency-rub, .sr-currency-rub')?.textContent || '').trim(),
+                        }))"""
+                    )
+                    t = round(time.monotonic() - op_start, 1)
+                    for r in rows:
+                        if r["name"] and r["price"] and r["name"] not in op_seen:
+                            op_seen[r["name"]] = t
+                except Exception:
+                    pass
             try:
                 items = await page.locator(".search-result__list-item").count()
             except Exception:
@@ -629,6 +655,44 @@ class SletatProvider:
             last = key
             if stable >= 3 and (items > 0 or not_found > 0):
                 return
+
+    async def _build_operator_offers(
+        self, page: Page, op_seen: dict, hotel_offers: list[HotelOffer],
+    ) -> list[OperatorOffer]:
+        """Из блинчика: оператор → мин. цена + скорость (op_seen) + отель (по цене)."""
+        rows = await page.evaluate(
+            """() => {
+                const out = [];
+                document.querySelectorAll('li.blinchik__operator-item').forEach(it => {
+                    const name = (it.querySelector('label')?.textContent || '').trim();
+                    const price = (it.querySelector('.blinchik__price .sr-currency-rub, .sr-currency-rub')?.textContent || '').trim();
+                    if (name) out.push({name, price});
+                });
+                return out;
+            }"""
+        )
+        best: dict[str, tuple[Decimal, str]] = {}
+        for r in rows:
+            name = (r.get("name") or "").strip()
+            price = _parse_price(r.get("price") or "")
+            if not name or price is None:
+                continue
+            if name not in best or price < best[name][0]:
+                best[name] = (price, (r.get("price") or "").strip())
+        # отель сопоставляем по точному совпадению цены (best-effort)
+        hotel_by_price: dict[Decimal, str] = {}
+        for h in hotel_offers:
+            hotel_by_price.setdefault(h.price, h.hotel_name)
+        out = [
+            OperatorOffer(
+                provider=self.name, operator=name, price=price, currency="RUB",
+                hotel_name=hotel_by_price.get(price), load_seconds=op_seen.get(name),
+                raw_label=raw,
+            )
+            for name, (price, raw) in best.items()
+        ]
+        out.sort(key=lambda o: o.price)
+        return out
 
     async def _open_operator_panel(self, page: Page) -> None:
         """Выдвинуть слева панель операторов (blinchik) — для скриншота выдачи.
