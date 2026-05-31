@@ -11,28 +11,31 @@
   #centerCol { flex:0 0 420px; max-width:420px; }
   #rightCol { flex:1 1 0; min-width:0; position:sticky; top:12px; }
   #centerCol > .card, #rightCol > .card { width:100%; }
-  .liveviews { display:none; flex-direction:column; gap:12px; }  /* показываем при запуске */
+  .liveviews { display:none; flex-direction:column; gap:16px; }  /* показываем при запуске */
   #searchlog { height:340px; overflow:auto; background:#0f1733; color:#cfe0ff;
-    font-family:ui-monospace,monospace; font-size:12px; border-radius:8px; padding:8px 10px; }
+    font-family:ui-monospace,monospace; font-size:12px; border-radius:14px; padding:12px 14px;
+    box-shadow: inset 0 2px 14px rgba(0,0,0,.35); }
   #searchlog .l-info { color:#cfe0ff; } #searchlog .l-warning { color:#ffd479; }
   #searchlog .l-ok { color:#6ee7a8; } #searchlog .l-err { color:#ff9b9b; }
-  .spin { width:16px; height:16px; border:3px solid #cdd7e5; border-top-color:var(--accent);
+  .spin { width:16px; height:16px; border:3px solid #d7dcf0; border-top-color:var(--accent);
     border-radius:50%; display:inline-block; animation:sp .8s linear infinite; vertical-align:middle; }
   @keyframes sp { to { transform:rotate(360deg); } }
-  #stopBtn { background:#e0464b; color:#fff; border:none; border-radius:6px; padding:5px 12px;
-    font-size:13px; cursor:pointer; }
-  #stopBtn:hover { background:#c93b40; }
-  #stopBtn:disabled { background:#c9ced8; cursor:default; }
+  /* Кнопка «Остановить» — мягкий коралловый, со своим hover (масштаб берётся из base) */
+  #stopBtn { background:#fb6f78; background-image:none; box-shadow:0 8px 20px -10px rgba(251,111,120,.7);
+    padding:6px 14px; font-size:13px; }
+  #stopBtn:hover { background:#f4555f; }
+  #stopBtn:disabled { background:#cbd2e0; background-image:none; }
   .liveviews.on { display:flex; }
-  .liveview { border:1px solid #e3e7ee; border-radius:8px; overflow:hidden; background:#0f1733; }
-  .liveview .lv-cap { font-size:13px; color:#cfe0ff; padding:6px 10px; background:#16204a;
-    display:flex; align-items:center; gap:6px; }
+  .liveview { border:1px solid rgba(255,255,255,.6); border-radius:20px; overflow:hidden;
+    background:#0f1733; box-shadow:0 18px 40px -22px rgba(40,46,90,.6); }
+  .liveview .lv-cap { font-size:13px; font-weight:600; color:#cfe0ff; padding:9px 13px; background:#161f44;
+    display:flex; align-items:center; gap:8px; }
   .liveview .lv-body { min-height:120px; display:flex; align-items:center; justify-content:center;
-    position:relative; padding:6px; }
-  .liveview img { width:100%; height:auto; display:none; border-radius:4px; }
+    position:relative; padding:7px; }
+  .liveview img { width:100%; height:auto; display:none; border-radius:12px; }
   .liveview .lv-wait { color:#8da2c9; font-size:13px; padding:24px 0; }
   .lv-dot { width:9px; height:9px; border-radius:50%; background:#ff5a5f; display:inline-block;
-    animation:blink 1s steps(2,start) infinite; }
+    box-shadow:0 0 0 4px rgba(255,90,95,.25); animation:blink 1s steps(2,start) infinite; }
   @keyframes blink { 50% { opacity:.25; } }
 </style>
 <div class="layout">
@@ -124,8 +127,8 @@
     {% for p in providers %}<label><input type="checkbox" name="provider" value="{{ p }}" checked> {{ p }}</label>{% endfor %}
   </div>
 
-  <button type="submit">Сравнить</button>
-  <p class="muted">Поиск открывает обе площадки и ждёт полной загрузки. Перед прогоном выполняется health-check.</p>
+  <button type="submit" class="w-full mt-5 py-3 text-base">Сравнить</button>
+  <p class="muted" style="margin-top:10px">Поиск открывает обе площадки и ждёт полной загрузки. Перед прогоном выполняется health-check.</p>
   <details class="muted" style="margin-top:6px">
     <summary style="cursor:pointer">Что такое health-check?</summary>
     <div style="margin-top:6px;line-height:1.45">

@@ -4,37 +4,153 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}ТурСравнение{% endblock %}</title>
+
+  <!-- Современная типографика -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <!-- Tailwind CSS (Play CDN) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'ui-sans-serif', 'system-ui', 'Inter', 'Arial', 'sans-serif'],
+          },
+          colors: {
+            ink:   '#2b3350',
+            accent:{ DEFAULT: '#7c83ff', soft: '#eef0ff', deep: '#5a62f0' },
+            mint:  '#bdeedd',
+            peach: '#ffd9c7',
+            lilac: '#e4d4ff',
+            sky:   '#cfe3ff',
+            good:  '#16a36b',
+            bad:   '#e2566b',
+          },
+          boxShadow: {
+            soft: '0 10px 30px -14px rgba(70,80,140,.30)',
+            card: '0 14px 40px -22px rgba(70,80,140,.40)',
+          },
+          keyframes: {
+            floatbg:  { '0%,100%': { transform: 'translate3d(0,0,0) scale(1)' },   '50%': { transform: 'translate3d(2%,-4%,0) scale(1.10)' } },
+            floatbg2: { '0%,100%': { transform: 'translate3d(0,0,0) scale(1.05)' }, '50%': { transform: 'translate3d(-3%,3%,0) scale(0.95)' } },
+            fadeup:   { '0%': { opacity: '0', transform: 'translateY(10px)' },      '100%': { opacity: '1', transform: 'translateY(0)' } },
+          },
+          animation: {
+            floatbg:  'floatbg 19s ease-in-out infinite',
+            floatbg2: 'floatbg2 24s ease-in-out infinite',
+            fadeup:   'fadeup .5s ease both',
+          },
+        },
+      },
+    };
+  </script>
+
+  <!-- Тема: компонентные/элементные стили (надёжный обычный CSS поверх Tailwind-утилит) -->
   <style>
-    :root { --bg:#0f1733; --accent:#1f6feb; --ok:#1a7f37; --bad:#cf222e; }
+    :root {
+      --bg:#0f1733; --accent:#7c83ff; --accent-deep:#5a62f0; --accent-soft:#eef0ff;
+      --ink:#2b3350; --muted:#94a0b5; --ok:#16a36b; --bad:#e2566b;
+    }
     * { box-sizing: border-box; }
-    body { font-family: system-ui, Arial, sans-serif; margin: 0; background:#f6f8fb; color:#1c2430; }
-    header { background: var(--bg); color:#fff; padding: 14px 24px; display:flex; gap:20px; align-items:center; }
-    header a { color:#cfe0ff; text-decoration:none; font-weight:600; }
-    header h1 { font-size:18px; margin:0; }
-    main { max-width: 980px; margin: 24px auto; padding: 0 16px; }
-    .card { background:#fff; border:1px solid #e3e8ef; border-radius:10px; padding:18px 20px; margin-bottom:18px; }
-    label { display:block; font-size:13px; color:#54607a; margin:10px 0 4px; }
-    input[type=text], input[type=number], input[type=date], select {
-      width:100%; padding:8px 10px; border:1px solid #c8d0de; border-radius:7px; font-size:14px; }
-    .row { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:12px; }
-    .chips label { display:inline-flex; align-items:center; gap:6px; margin-right:14px; font-size:14px; color:#1c2430; }
-    button { background:var(--accent); color:#fff; border:0; padding:12px 22px; border-radius:8px;
-      font-size:15px; font-weight:600; cursor:pointer; margin-top:14px; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0; color: var(--ink);
+      font-family: "Plus Jakarta Sans", ui-sans-serif, system-ui, Inter, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+    }
+    main { max-width: 980px; margin: 28px auto; padding: 0 16px; }
+
+    h1,h2,h3 { letter-spacing: -.02em; line-height: 1.2; }
+    h2 { font-size: 1.6rem; font-weight: 800; }
+    h3 { font-size: 1.15rem; font-weight: 700; }
+    a { color: var(--accent-deep); text-decoration: none; transition: color .15s; }
+    a:hover { color: var(--accent); }
+
+    /* Карточки — мягкое стекло с лёгкой тенью */
+    .card {
+      background: rgba(255,255,255,.75); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+      border: 1px solid rgba(255,255,255,.7); border-radius: 24px; padding: 24px; margin-bottom: 20px;
+      box-shadow: 0 14px 40px -22px rgba(70,80,140,.40);
+      animation: fadeup .5s ease both;
+    }
+    @keyframes fadeup { from { opacity:0; transform: translateY(10px); } to { opacity:1; transform:none; } }
+
+    /* Поля ввода */
+    label { display:block; font-size:13px; font-weight:500; color:#64708a; margin:12px 0 4px; }
+    input[type=text], input[type=number], input[type=date], input[type=search], select, textarea {
+      width:100%; border:1px solid #e2e6f0; background:rgba(255,255,255,.85); color:var(--ink);
+      border-radius:12px; padding:9px 12px; font-size:14px; font-family:inherit;
+      box-shadow:0 1px 2px rgba(70,80,140,.05); outline:none; transition:border-color .15s, box-shadow .15s;
+    }
+    input:focus, select:focus, textarea:focus { border-color:var(--accent); box-shadow:0 0 0 4px rgba(124,131,255,.18); }
+    input[type=checkbox], input[type=radio] { accent-color: var(--accent); width:16px; height:16px; vertical-align:middle; }
+
+    /* Таблицы */
     table { width:100%; border-collapse:collapse; }
-    th, td { text-align:left; padding:8px 10px; border-bottom:1px solid #eef1f6; font-size:14px; }
-    .best { color:var(--ok); font-weight:700; }
+    th, td { text-align:left; padding:10px 12px; font-size:14px; border-bottom:1px solid #eef1f7; }
+    th { color:#9aa4ba; font-weight:600; font-size:11.5px; text-transform:uppercase; letter-spacing:.04em; }
+    tbody tr { transition:background-color .15s; }
+    tbody tr:hover { background:rgba(238,240,255,.5); }
+
+    /* Кнопки — градиент + плавное увеличение при наведении */
+    button {
+      display:inline-flex; align-items:center; justify-content:center; gap:8px;
+      border:none; border-radius:12px; cursor:pointer;
+      background:linear-gradient(90deg,#7c83ff,#9aa0ff); color:#fff;
+      padding:10px 20px; font-size:14px; font-weight:600; font-family:inherit;
+      box-shadow:0 10px 30px -14px rgba(124,131,255,.85);
+      transition:transform .2s ease, box-shadow .2s ease, filter .2s ease;
+    }
+    button:hover { transform:scale(1.05); box-shadow:0 16px 40px -16px rgba(124,131,255,.95); }
+    button:active { transform:scale(.95); }
+    button:disabled { opacity:.55; cursor:default; transform:none; box-shadow:none; filter:grayscale(.2); }
+
+    summary { cursor:pointer; }
+
+    /* Текстовые помощники */
+    .muted { color:var(--muted); font-size:13px; }
+    .best  { color:var(--ok); font-weight:700; }
     .worst { color:var(--bad); font-weight:600; }
-    .muted { color:#7a869a; font-size:13px; }
-    .pill { display:inline-block; padding:2px 8px; border-radius:20px; font-size:12px; background:#eef3ff; color:#1f4ea8; }
+    .pill  { display:inline-block; padding:4px 12px; border-radius:999px; font-size:11px; font-weight:700;
+             text-transform:uppercase; letter-spacing:.04em; background:var(--accent-soft); color:var(--accent-deep); }
+
+    /* Раскладка-помощники */
+    .row { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap:12px; }
+    .chips { display:flex; flex-wrap:wrap; gap:8px 16px; }
+    .chips label { display:inline-flex; align-items:center; gap:7px; margin:0; font-size:14px; color:var(--ink); font-weight:500; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .animate-floatbg, .animate-floatbg2, .card { animation: none !important; }
+    }
   </style>
 </head>
-<body>
-  <header>
-    <h1>🏝️ ТурСравнение</h1>
-    <a href="/">Поиск</a>
-    <a href="/history">История</a>
-    <a href="/tests">Автотесты</a>
+<body class="relative min-h-screen bg-gradient-to-br from-[#f5f7ff] via-[#fdf6fb] to-[#eefaff]">
+
+  <!-- Анимированный адаптивный фон (мягкие пастельные пятна) -->
+  <div aria-hidden="true" class="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
+    <div class="absolute -top-40 -left-32 h-[42rem] w-[42rem] rounded-full bg-lilac/50 blur-3xl animate-floatbg"></div>
+    <div class="absolute top-1/4 -right-40 h-[40rem] w-[40rem] rounded-full bg-sky/50 blur-3xl animate-floatbg2"></div>
+    <div class="absolute -bottom-48 left-1/4 h-[40rem] w-[40rem] rounded-full bg-mint/45 blur-3xl animate-floatbg"></div>
+    <div class="absolute bottom-8 right-1/5 h-[26rem] w-[26rem] rounded-full bg-peach/40 blur-3xl animate-floatbg2"></div>
+  </div>
+
+  <header class="sticky top-0 z-20 border-b border-white/60 bg-white/70 backdrop-blur-md">
+    <div class="mx-auto flex h-16 max-w-[1900px] items-center gap-6 px-6">
+      <a href="/" class="flex items-center gap-2 text-lg font-extrabold no-underline">
+        <span class="text-xl">🏝️</span>
+        <span class="bg-gradient-to-r from-accent-deep to-[#b48cff] bg-clip-text text-transparent">ТурСравнение</span>
+      </a>
+      <nav class="flex items-center gap-1 text-sm font-semibold">
+        <a href="/"        class="rounded-lg px-3 py-2 text-slate-500 no-underline transition hover:bg-accent-soft hover:text-ink">Поиск</a>
+        <a href="/history" class="rounded-lg px-3 py-2 text-slate-500 no-underline transition hover:bg-accent-soft hover:text-ink">История</a>
+        <a href="/tests"   class="rounded-lg px-3 py-2 text-slate-500 no-underline transition hover:bg-accent-soft hover:text-ink">Автотесты</a>
+      </nav>
+    </div>
   </header>
+
   <main>{% block content %}{% endblock %}</main>
 </body>
 </html>
