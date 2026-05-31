@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from pydantic import BaseModel
 from playwright.async_api import async_playwright
 
@@ -71,12 +73,26 @@ async def check_provider(name: str, headless: bool = True, timeout_ms: int = 15_
 async def run_health_check(
     providers: list[str] | None = None, headless: bool = True
 ) -> dict[str, ProviderHealth]:
-    """Проверить якорные селекторы указанных (или всех) площадок."""
+    """Проверить якорные селекторы указанных (или всех) площадок.
+
+    Площадки проверяются ПАРАЛЛЕЛЬНО (asyncio.gather): каждая поднимает свой
+    браузер, поэтому последовательный прогон удваивал задержку перед каждым
+    поиском. Падение одной проверки не валит остальные (превращается в ok=False).
+    """
     load_browser_providers()
     names = providers or list_providers()
+    raw = await asyncio.gather(
+        *(check_provider(name, headless=headless) for name in names),
+        return_exceptions=True,
+    )
     results: dict[str, ProviderHealth] = {}
-    for name in names:
-        results[name] = await check_provider(name, headless=headless)
+    for name, res in zip(names, raw):
+        if isinstance(res, BaseException):
+            results[name] = ProviderHealth(
+                provider=name, ok=False, error=f"{type(res).__name__}: {res}"
+            )
+        else:
+            results[name] = res
     return results
 
 

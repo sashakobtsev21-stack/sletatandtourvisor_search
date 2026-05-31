@@ -62,6 +62,12 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
     app = FastAPI(title="ТурСравнение")
     Path("screenshots").mkdir(exist_ok=True)
     app.mount("/screenshots", StaticFiles(directory="screenshots"), name="screenshots")
+    # Собранный React-дашборд (frontend/dist) раздаём под /app, если он существует.
+    # API (/search, /run, ...) тот же origin → проксирование в проде не нужно.
+    # Сборка: cd frontend && npm install && npm run build.
+    dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+    if dist.is_dir():
+        app.mount("/app", StaticFiles(directory=str(dist), html=True), name="dashboard")
     load_browser_providers()
 
     def _providers() -> list[str]:
