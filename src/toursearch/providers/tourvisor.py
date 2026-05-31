@@ -26,7 +26,12 @@ from toursearch.providers._formcheck import (
     norm,
     text_contains,
 )
-from toursearch.providers.base import register_provider, start_frame_pump, stop_frame_pump
+from toursearch.providers.base import (
+    capture_top as _capture_top,
+    register_provider,
+    start_frame_pump,
+    stop_frame_pump,
+)
 from toursearch.urlcheck import verify_tourvisor_search_url
 
 _MONTHS_RU = {
@@ -147,9 +152,10 @@ class TourvisorProvider:
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(
                 headless=self.headless,
-                args=["--disable-blink-features=AutomationControlled", "--start-maximized"],
+                args=["--disable-blink-features=AutomationControlled", "--window-size=1920,1080"],
             )
-            context = await browser.new_context(no_viewport=True)
+            # Широкий вьюпорт: сайт помещается по ширине и в live-кадрах, и в скриншоте выдачи.
+            context = await browser.new_context(viewport={"width": 1920, "height": 1080})
             await context.add_init_script(
                 "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
             )
@@ -719,16 +725,7 @@ class TourvisorProvider:
         return build_offers(self.name, rows)
 
     async def _safe_screenshot(self, page: Page) -> str | None:
-        # Только верхняя видимая область (форма поиска + «нашлось N»), без длинной
-        # ленты результатов — так скриншот читабелен.
-        try:
-            Path("screenshots").mkdir(exist_ok=True)
-            try:
-                await page.evaluate("window.scrollTo(0, 0)")
-            except Exception:
-                pass
-            path = f"screenshots/tourvisor_{datetime.now():%Y%m%d_%H%M%S}.png"
-            await page.screenshot(path=path, full_page=False)
-            return path
-        except Exception:
-            return None
+        # Верхняя часть страницы во всю ширину (форма + «нашлось N» + первые
+        # результаты), но не вся бесконечная лента — информативно и читабельно.
+        path = f"screenshots/tourvisor_{datetime.now():%Y%m%d_%H%M%S}.png"
+        return await _capture_top(page, path)

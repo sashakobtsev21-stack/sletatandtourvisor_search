@@ -51,6 +51,40 @@ async def stop_frame_pump(task: "asyncio.Task | None") -> None:
         pass
 
 
+async def capture_top(page, path: str, max_height: int = 1500) -> "str | None":
+    """Снять верхнюю часть страницы во всю ширину вьюпорта.
+
+    Берём форму поиска + «нашлось N» + первые результаты, но не всю бесконечную
+    ленту: информативно и читабельно. Высота = min(высота контента, max_height),
+    но не меньше высоты вьюпорта.
+    """
+    from pathlib import Path
+
+    try:
+        Path("screenshots").mkdir(exist_ok=True)
+        try:
+            await page.evaluate("window.scrollTo(0, 0)")
+        except Exception:
+            pass
+        vp = page.viewport_size or {"width": 1920, "height": 1080}
+        try:
+            content_h = await page.evaluate(
+                "Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)"
+            )
+        except Exception:
+            content_h = vp["height"]
+        height = max(vp["height"], min(int(content_h or vp["height"]), max_height))
+        # full_page=True + clip: позволяет захватить область ниже видимой части
+        # (без него clip обрезается высотой вьюпорта).
+        await page.screenshot(
+            path=path, full_page=True,
+            clip={"x": 0, "y": 0, "width": vp["width"], "height": height},
+        )
+        return path
+    except Exception:
+        return None
+
+
 @runtime_checkable
 class SearchProvider(Protocol):
     """Контракт площадки поиска.

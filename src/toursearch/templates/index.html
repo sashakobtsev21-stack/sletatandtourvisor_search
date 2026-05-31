@@ -1,11 +1,17 @@
 {% extends "base.html" %}
 {% block content %}
 <style>
-  .layout { display:flex; gap:16px; align-items:flex-start; }
-  /* live-окна слева (широкие, чтобы сайт помещался по ширине), форма+лог справа */
-  #liveCol { flex:1 1 60%; position:sticky; top:12px; display:none; }
-  #rightCol { flex:1 1 40%; min-width:360px; max-width:640px; }
-  #rightCol > .card { width:100%; }
+  /* Широкая раскладка только на странице поиска (переопределяем main из base.html) */
+  main { max-width: 1700px; }
+  /* Три колонки: live слева, форма ПО ЦЕНТРУ (фиксированная — не двигается),
+     лог справа. Боковые колонки flex:1 и равны → форма всегда строго посередине,
+     даже когда боковые пустые (до запуска поиска). */
+  .layout { display:flex; gap:16px; align-items:flex-start; justify-content:center; }
+  #liveCol  { flex:1 1 0; min-width:0; position:sticky; top:12px; }
+  #centerCol { flex:0 0 440px; max-width:440px; }
+  #rightCol { flex:1 1 0; min-width:0; position:sticky; top:12px; }
+  #centerCol > .card, #rightCol > .card { width:100%; }
+  .liveviews { display:none; flex-direction:column; gap:12px; }  /* показываем при запуске */
   #searchlog { height:340px; overflow:auto; background:#0f1733; color:#cfe0ff;
     font-family:ui-monospace,monospace; font-size:12px; border-radius:8px; padding:8px 10px; }
   #searchlog .l-info { color:#cfe0ff; } #searchlog .l-warning { color:#ffd479; }
@@ -17,7 +23,7 @@
     font-size:13px; cursor:pointer; }
   #stopBtn:hover { background:#c93b40; }
   #stopBtn:disabled { background:#c9ced8; cursor:default; }
-  .liveviews { display:flex; flex-direction:column; gap:12px; }
+  .liveviews.on { display:flex; }
   .liveview { border:1px solid #e3e7ee; border-radius:8px; overflow:hidden; background:#0f1733; }
   .liveview .lv-cap { font-size:13px; color:#cfe0ff; padding:6px 10px; background:#16204a;
     display:flex; align-items:center; gap:6px; }
@@ -31,7 +37,7 @@
 </style>
 <div class="layout">
 <div id="liveCol">
-  <div class="liveviews">
+  <div class="liveviews" id="liveviews">
     {% for p in providers %}
     <div class="liveview" id="lv-{{ p }}">
       <div class="lv-cap"><span class="lv-dot"></span> {{ p }} — в реальном времени</div>
@@ -43,7 +49,7 @@
     {% endfor %}
   </div>
 </div>
-<div id="rightCol">
+<div id="centerCol">
 <form class="card" method="post" action="/search" id="searchForm">
   <h2 style="margin-top:0">Параметры поиска</h2>
   {% if error %}<div class="worst" style="margin-bottom:10px">⚠️ {{ error }}</div>{% endif %}
@@ -121,7 +127,9 @@
   <button type="submit">Сравнить</button>
   <p class="muted">Поиск открывает обе площадки и ждёт полной загрузки — до ~1.5 мин. Перед прогоном выполняется health-check.</p>
 </form>
+</div>
 
+<div id="rightCol">
 <div id="progress" class="card" hidden>
   <h3 style="margin-top:0;display:flex;align-items:center;gap:10px">
     <span class="spin" id="pspin"></span> Выполнение поиска
@@ -201,10 +209,10 @@ function finishUI() {
   stopBtn.disabled = true;
 }
 function showLiveViews() {
-  // показываем левую колонку и окна только для выбранных площадок
+  // раскрываем live-окна только для выбранных площадок (колонки всегда на месте,
+  // поэтому форма по центру не сдвигается)
   const chosen = new Set([...document.querySelectorAll('input[name=provider]:checked')].map(c => c.value));
-  const liveCol = document.getElementById('liveCol');
-  if (liveCol) liveCol.style.display = chosen.size ? 'block' : 'none';
+  document.getElementById('liveviews').classList.add('on');
   document.querySelectorAll('.liveview').forEach(v => {
     const name = v.id.replace('lv-', '');
     v.style.display = chosen.has(name) ? '' : 'none';
