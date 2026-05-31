@@ -18,7 +18,7 @@ log = logging.getLogger("toursearch.providers.tourvisor")
 
 from playwright.async_api import Locator, Page, TimeoutError as PWTimeout, async_playwright
 
-from toursearch.models import HotelOffer, Offer, ProviderResult, SearchParams
+from toursearch.models import HotelOffer, Offer, OperatorOffer, ProviderResult, SearchParams
 from toursearch.providers._formcheck import (
     UNKNOWN,
     FormVerificationError,
@@ -185,11 +185,20 @@ class TourvisorProvider:
                     start = time.monotonic()
                     await self._wait_for_completion(page)
                     hotel_offers = await self._parse_hotels(page)
+                    # Операторы (best-effort): панель операторов, если есть; отель — по цене.
+                    try:
+                        op_raw = await self._parse_operators(page)
+                    except Exception:
+                        op_raw = []
+                    operator_offers = self._to_operator_offers(op_raw, hotel_offers)
                     shot = await self._safe_screenshot(page)
                     return ProviderResult(
                         provider=self.name, success=bool(hotel_offers),
                         duration_seconds=time.monotonic() - start,
                         search_mode="hotels", hotel_offers=hotel_offers,
+                        operator_offers=operator_offers,
+                        # ссылка «поиск»: URL страницы отелей после поиска
+                        search_url=page.url,
                         screenshot_path=shot,
                         error=None if hotel_offers else "Предложений не найдено по заданным параметрам.",
                     )
@@ -225,11 +234,13 @@ class TourvisorProvider:
                         error="URL-параметры не совпали: " + "; ".join(
                             f"{f}: ожидали {e!r}, получили {a!r}" for f, e, a in url_problems),
                     )
+                operator_offers = self._to_operator_offers(offers, [])
                 shot = await self._safe_screenshot(page)
                 return ProviderResult(
                     provider=self.name, success=bool(offers),
                     duration_seconds=time.monotonic() - start,
-                    search_mode="tours", offers=offers, search_url=search_url,
+                    search_mode="tours", offers=offers, operator_offers=operator_offers,
+                    search_url=search_url,
                     screenshot_path=shot,
                     error=None if offers else "Предложений не найдено по заданным параметрам.",
                 )
@@ -775,6 +786,24 @@ class TourvisorProvider:
         )
 
         return build_offers(self.name, rows)
+
+    def _to_operator_offers(
+        self, offers: list[Offer], hotel_offers: list[HotelOffer],
+    ) -> list[OperatorOffer]:
+        """Offer (оператор+мин.цена) → OperatorOffer; отель по совпадению цены, скорость —
+        недоступна на Tourvisor (панель операторов грузится после результатов) → None."""
+        hotel_by_price: dict[Decimal, str] = {}
+        for h in hotel_offers:
+            hotel_by_price.setdefault(h.price, h.hotel_name)
+        out = [
+            OperatorOffer(
+                provider=self.name, operator=o.operator, price=o.price, currency=o.currency,
+                hotel_name=hotel_by_price.get(o.price), load_seconds=None, raw_label=o.raw_label,
+            )
+            for o in offers
+        ]
+        out.sort(key=lambda x: x.price)
+        return out
 
     async def _safe_screenshot(self, page: Page) -> str | None:
         # Верхняя часть страницы во всю ширину (форма + «нашлось N» + первые
