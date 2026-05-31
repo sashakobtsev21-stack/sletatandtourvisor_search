@@ -15,6 +15,7 @@ async def run_search(
     params: SearchParams,
     providers: list[str] | None = None,
     headless: bool = False,
+    on_frame=None,
 ) -> ComparisonReport:
     """Запустить поиск на всех (или указанных) площадках параллельно.
 
@@ -30,6 +31,13 @@ async def run_search(
     log.info("search start: providers=%s mode=%s %s→%s",
              names, params.search_mode, params.departure_city, params.destination_country)
     instances = [get_provider(name)(headless=headless) for name in names]
+    if on_frame is not None:
+        for inst in instances:
+            # транслируем «живые кадры» площадки в веб (если провайдер их поддерживает)
+            try:
+                inst.on_frame = on_frame
+            except Exception:
+                pass
     raw = await asyncio.gather(
         *(inst.search(params) for inst in instances), return_exceptions=True
     )

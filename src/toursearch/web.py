@@ -149,6 +149,7 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
 
     # --- поиск с живым логом (SSE) ---
     search_pending: dict[str, tuple] = {}
+    search_running: dict[str, asyncio.Task] = {}
 
     @app.post("/search/prepare")
     async def search_prepare(request: Request):
@@ -174,6 +175,14 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
         search_pending[token] = (params, chosen)
         return {"token": token}
 
+    @app.post("/search/cancel")
+    async def search_cancel(token: str):
+        task = search_running.get(token)
+        if task is not None and not task.done():
+            task.cancel()
+            return {"cancelled": True}
+        return {"cancelled": False}
+
     @app.get("/search/stream")
     async def search_stream(token: str):
         params, chosen = search_pending.pop(token, (None, None))
@@ -187,6 +196,10 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
             tlog = logging.getLogger("toursearch")
             tlog.addHandler(handler)
 
+            async def on_frame(name: str, data: str) -> None:
+                # кадр живой трансляции площадки → в очередь SSE
+                queue.put_nowait({"type": "frame", "provider": name, "data": data})
+
             async def work():
                 try:
                     await queue.put({"type": "log", "level": "INFO", "msg": "Проверяю формы площадок (health-check)…"})
@@ -196,16 +209,20 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
                         await queue.put({"type": "gate_failed", "detail": miss})
                         return
                     await queue.put({"type": "log", "level": "INFO", "msg": "Гейт пройден. Запускаю поиск на площадках…"})
-                    report = await run_search(params, providers=chosen, headless=True)
+                    report = await run_search(params, providers=chosen, headless=True, on_frame=on_frame)
                     with Storage(db_path) as storage:
                         run_id = storage.save_report(report)
                     await queue.put({"type": "done", "run_id": run_id})
+                except asyncio.CancelledError:
+                    await queue.put({"type": "cancelled", "msg": "Поиск остановлен по запросу."})
+                    raise
                 except Exception as exc:  # noqa: BLE001
                     await queue.put({"type": "error", "msg": f"{type(exc).__name__}: {exc}"})
                 finally:
                     await queue.put({"type": "_end"})
 
             task = asyncio.create_task(work())
+            search_running[token] = task
             try:
                 while True:
                     event = await queue.get()
@@ -214,7 +231,13 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             finally:
                 tlog.removeHandler(handler)
-                await task
+                search_running.pop(token, None)
+                if not task.done():
+                    task.cancel()
+                try:
+                    await task
+                except BaseException:
+                    pass
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 

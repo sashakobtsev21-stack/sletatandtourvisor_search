@@ -11,6 +11,20 @@
   .spin { width:16px; height:16px; border:3px solid #cdd7e5; border-top-color:var(--accent);
     border-radius:50%; display:inline-block; animation:sp .8s linear infinite; vertical-align:middle; }
   @keyframes sp { to { transform:rotate(360deg); } }
+  #stopBtn { background:#e0464b; color:#fff; border:none; border-radius:6px; padding:5px 12px;
+    font-size:13px; cursor:pointer; }
+  #stopBtn:hover { background:#c93b40; }
+  #stopBtn:disabled { background:#c9ced8; cursor:default; }
+  .liveviews { margin-top:12px; display:flex; flex-direction:column; gap:10px; }
+  .liveview { border:1px solid #e3e7ee; border-radius:8px; overflow:hidden; background:#0f1733; }
+  .liveview .lv-cap { font-size:12px; color:#cfe0ff; padding:5px 9px; background:#16204a;
+    display:flex; align-items:center; gap:6px; }
+  .liveview .lv-body { height:380px; display:flex; align-items:center; justify-content:center; position:relative; }
+  .liveview img { max-width:100%; max-height:380px; display:none; }
+  .liveview .lv-wait { color:#8da2c9; font-size:13px; }
+  .lv-dot { width:9px; height:9px; border-radius:50%; background:#ff5a5f; display:inline-block;
+    animation:blink 1s steps(2,start) infinite; }
+  @keyframes blink { 50% { opacity:.25; } }
 </style>
 <div class="layout">
 <form class="card" method="post" action="/search" id="searchForm">
@@ -92,12 +106,28 @@
 </form>
 
 <div id="progress" class="card" hidden>
-  <h3 style="margin-top:0"><span class="spin" id="pspin"></span> Выполнение поиска <b id="ppct" style="float:right">0%</b></h3>
+  <h3 style="margin-top:0;display:flex;align-items:center;gap:10px">
+    <span class="spin" id="pspin"></span> Выполнение поиска
+    <button type="button" id="stopBtn">⏹ Остановить</button>
+    <b id="ppct" style="margin-left:auto">0%</b>
+  </h3>
   <div style="height:14px;border-radius:7px;background:#eef1f6;overflow:hidden;margin-bottom:10px">
     <span id="pbar" style="display:block;height:100%;width:0;background:var(--accent);transition:width .3s"></span>
   </div>
   <div id="searchlog"></div>
-  <p class="muted" id="pnote" style="margin-bottom:0">Идёт поиск… по завершении откроются результаты.</p>
+  <p class="muted" id="pnote" style="margin:8px 0 0">Идёт поиск… по завершении откроются результаты.</p>
+
+  <div class="liveviews">
+    {% for p in providers %}
+    <div class="liveview" id="lv-{{ p }}">
+      <div class="lv-cap"><span class="lv-dot"></span> {{ p }} — в реальном времени</div>
+      <div class="lv-body">
+        <span class="lv-wait" id="wait-{{ p }}">ожидание первого кадра…</span>
+        <img id="frame-{{ p }}" alt="{{ p }} live">
+      </div>
+    </div>
+    {% endfor %}
+  </div>
 </div>
 </div>
 
@@ -157,12 +187,49 @@ function setP(p) {
   document.getElementById('pbar').style.width = v + '%';
   document.getElementById('ppct').textContent = v + '%';
 }
+const stopBtn = document.getElementById('stopBtn');
+let curToken = null, curES = null;
+function finishUI() {
+  document.getElementById('pspin').style.display = 'none';
+  form.querySelector('button[type=submit]').disabled = false;
+  stopBtn.disabled = true;
+}
+function showLiveViews() {
+  // показываем окна только для выбранных площадок, остальные прячем
+  const chosen = new Set([...document.querySelectorAll('input[name=provider]:checked')].map(c => c.value));
+  document.querySelectorAll('.liveview').forEach(v => {
+    const name = v.id.replace('lv-', '');
+    v.style.display = chosen.has(name) ? '' : 'none';
+    const img = document.getElementById('frame-' + name);
+    const wait = document.getElementById('wait-' + name);
+    if (img) { img.style.display = 'none'; img.removeAttribute('src'); }
+    if (wait) wait.style.display = '';
+  });
+}
+function setFrame(name, data) {
+  const img = document.getElementById('frame-' + name);
+  const wait = document.getElementById('wait-' + name);
+  if (!img) return;
+  img.src = 'data:image/jpeg;base64,' + data;
+  img.style.display = 'block';
+  if (wait) wait.style.display = 'none';
+}
+
+stopBtn.addEventListener('click', async () => {
+  if (!curToken) return;
+  stopBtn.disabled = true;
+  plog('⏹ Останавливаю поиск…', 'l-warning');
+  try { await fetch('/search/cancel?token=' + curToken, { method: 'POST' }); } catch (e) {}
+});
+
 form.addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const btn = form.querySelector('button[type=submit]'); btn.disabled = true;
   progress.hidden = false; slog.innerHTML = '';
   document.getElementById('pspin').style.display = 'inline-block';
   document.getElementById('pnote').textContent = 'Идёт поиск… по завершении откроются результаты.';
+  stopBtn.disabled = false;
+  showLiveViews();
   const totalProv = [...document.querySelectorAll('input[name=provider]:checked')].length || 1;
   let doneProv = 0;
   setP(3); plog('Отправляю параметры…');
@@ -170,19 +237,23 @@ form.addEventListener('submit', async (ev) => {
   try {
     const r = await fetch('/search/prepare', { method:'POST', body: new FormData(form) });
     const j = await r.json().catch(() => ({}));
-    if (j.error) { plog('⚠️ ' + j.error, 'l-err'); btn.disabled = false; document.getElementById('pspin').style.display='none'; return; }
+    if (j.error) { plog('⚠️ ' + j.error, 'l-err'); finishUI(); return; }
     token = j.token;
     if (!token) {
       plog('Сервер вернул неожиданный ответ (нет токена). Похоже, запущена старая версия — '
            + 'перезапустите сервер: Ctrl+C, затем `.\\.venv\\Scripts\\toursearch.exe web`, и обновите страницу (Ctrl+F5).', 'l-err');
-      btn.disabled = false; document.getElementById('pspin').style.display='none'; return;
+      finishUI(); return;
     }
-  } catch (e) { plog('Ошибка отправки: ' + e, 'l-err'); btn.disabled = false; return; }
+  } catch (e) { plog('Ошибка отправки: ' + e, 'l-err'); finishUI(); return; }
 
+  curToken = token;
   const es = new EventSource('/search/stream?token=' + token);
+  curES = es;
   es.onmessage = (m) => {
     const e = JSON.parse(m.data);
-    if (e.type === 'log') {
+    if (e.type === 'frame') {
+      setFrame(e.provider, e.data);
+    } else if (e.type === 'log') {
       const cls = e.level === 'WARNING' ? 'l-warning' : 'l-info';
       plog((e.level === 'WARNING' ? '⚠ ' : '› ') + e.msg, cls);
       const m = e.msg || '';
@@ -191,19 +262,23 @@ form.addEventListener('submit', async (ev) => {
       else if (m.includes('search start')) setP(22);
       else if (/provider .*(OK|FAIL)/.test(m)) { doneProv++; setP(22 + doneProv / totalProv * 76); }
     } else if (e.type === 'gate_failed') {
-      es.close(); document.getElementById('pspin').style.display='none'; btn.disabled = false;
+      es.close(); finishUI();
       plog('⛔ Health-check не пройден — поиск остановлен:', 'l-err');
       for (const [k, v] of Object.entries(e.detail)) plog('   ' + k + ': ' + JSON.stringify(v), 'l-err');
       document.getElementById('pnote').textContent = 'Структура площадки изменилась — нужно обновить селекторы.';
+    } else if (e.type === 'cancelled') {
+      es.close(); finishUI();
+      plog('⏹ ' + (e.msg || 'Поиск остановлен.'), 'l-warning');
+      document.getElementById('pnote').textContent = 'Поиск остановлен. Можно изменить параметры и запустить заново.';
     } else if (e.type === 'done') {
       es.close(); setP(100); plog('✓ Готово — открываю результаты…', 'l-ok');
       window.location = '/run/' + e.run_id;
     } else if (e.type === 'error') {
-      es.close(); document.getElementById('pspin').style.display='none'; btn.disabled = false;
+      es.close(); finishUI();
       plog('Ошибка: ' + e.msg, 'l-err');
     }
   };
-  es.onerror = () => { es.close(); document.getElementById('pspin').style.display='none'; btn.disabled = false; plog('[поток прерван]', 'l-err'); };
+  es.onerror = () => { es.close(); finishUI(); plog('[поток прерван]', 'l-err'); };
 });
 </script>
 {% endblock %}
