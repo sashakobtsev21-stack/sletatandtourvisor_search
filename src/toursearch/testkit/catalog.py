@@ -222,6 +222,17 @@ _VARIANTS = [
 for i, pv in enumerate(_VARIANTS):
     add(G, f"совпадение варианта #{i}", (lambda p=pv: _assert(verify_sletat_search_url(_sletat_url(p), p) == [])))
 
+
+def _hotels_checkout_ok() -> None:
+    # Регрессия: в режиме «Отели» Sletat кладёт в dateto дату ВЫЕЗДА (заезд + ночи,
+    # минимум 1 ночь). При date_from==date_to checkout = date+1 — это НЕ расхождение.
+    p = mk(search_mode="hotels", date_from=date(2026, 11, 2), date_to=date(2026, 11, 2))
+    url = _sletat_url(p).replace("dateto=02/11/2026", "dateto=03/11/2026")
+    _assert(verify_sletat_search_url(url, p) == [], "checkout +1 в отелях ложно пойман")
+
+
+add(G, "отели: checkout (dateto +1) не считается расхождением", _hotels_checkout_ok)
+
 G = "URL Sletat: детект расхождений"
 
 
