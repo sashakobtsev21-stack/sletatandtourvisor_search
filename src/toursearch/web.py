@@ -11,7 +11,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -94,6 +94,10 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request):
+        # Единый вход — React-дашборд (если собран). Простая Jinja-форма остаётся
+        # запасным вариантом, когда фронт не собран (frontend/dist отсутствует).
+        if dist.is_dir():
+            return RedirectResponse(url="/app/")
         return _TEMPLATES.TemplateResponse(request, "index.html", _form_ctx())
 
     @app.post("/search", response_class=HTMLResponse)

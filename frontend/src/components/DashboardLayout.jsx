@@ -44,13 +44,17 @@ export default function DashboardLayout({ left, center, right }) {
             <span className="hidden text-xs text-muted sm:inline">live-агрегатор туров</span>
           </div>
           <nav className="ml-auto flex items-center gap-1 text-sm font-semibold text-muted">
-            {["Поиск", "История", "Автотесты"].map((item, i) => (
+            {[
+              { label: "Поиск", href: "/app/", active: true },
+              { label: "История", href: "/history", active: false },
+              { label: "Автотесты", href: "/tests", active: false },
+            ].map(({ label, href, active }) => (
               <a
-                key={item}
-                href="#"
-                className={`rounded-lg px-3 py-2 transition-colors hover:bg-white/5 hover:text-ink ${i === 0 ? "text-ink" : ""}`}
+                key={label}
+                href={href}
+                className={`rounded-lg px-3 py-2 transition-colors hover:bg-white/5 hover:text-ink ${active ? "text-ink" : ""}`}
               >
-                {item}
+                {label}
               </a>
             ))}
           </nav>
