@@ -101,19 +101,7 @@ export default function ResultsPage({ runId }) {
               <p className="text-sm text-rose-300">⚠️ {r.error || "поиск не дал результатов"}</p>
             ) : (
               <div className="space-y-4">
-                {r.operator_offers?.length > 0 ? (
-                  <ProviderTable
-                    head={["Туроператор", "Наименьшая цена", "Скорость"]}
-                    emphasizeCol={1}
-                    rows={r.operator_offers.map((o) => [
-                      o.operator,
-                      formatPrice(o.price, o.currency),
-                      o.load_seconds != null ? `${o.load_seconds} с` : "—",
-                    ])}
-                  />
-                ) : (
-                  <p className="text-sm text-muted">Предложений по операторам не найдено.</p>
-                )}
+                <OperatorTable offers={r.operator_offers} />
 
                 {r.hotel_offers?.length > 0 && (
                   <div>
@@ -130,6 +118,8 @@ export default function ResultsPage({ runId }) {
                     />
                   </div>
                 )}
+
+                <OperatorStatuses noTours={r.operators_no_tours} notResponding={r.operators_not_responding} />
               </div>
             )}
           </GlassCard>
@@ -194,6 +184,50 @@ function Stars({ n }) {
     <span className="inline-flex items-center gap-0.5 text-amber-300">
       {Array.from({ length: n }).map((_, i) => <Star key={i} className="size-3 fill-current" />)}
     </span>
+  );
+}
+
+/**
+ * OperatorTable — «Туроператор / Наименьшая цена / Скорость». Колонка «Скорость»
+ * показывается, только если у площадки есть тайминги (Sletat); у Tourvisor их нет —
+ * тогда таблица в 2 колонки.
+ */
+function OperatorTable({ offers = [] }) {
+  if (!offers.length) return <p className="text-sm text-muted">Предложений по операторам не найдено.</p>;
+  const hasSpeed = offers.some((o) => o.load_seconds != null);
+  const head = hasSpeed
+    ? ["Туроператор", "Наименьшая цена", "Скорость"]
+    : ["Туроператор", "Наименьшая цена"];
+  const rows = offers.map((o) =>
+    hasSpeed
+      ? [o.operator, formatPrice(o.price, o.currency), o.load_seconds != null ? `${o.load_seconds} с` : "—"]
+      : [o.operator, formatPrice(o.price, o.currency)]
+  );
+  return <ProviderTable head={head} emphasizeCol={1} rows={rows} />;
+}
+
+/** OperatorStatuses — операторы без туров и не ответившие (из блинчика Sletat). */
+function OperatorStatuses({ noTours = [], notResponding = [] }) {
+  if (!noTours.length && !notResponding.length) return null;
+  const Group = ({ title, items, tone }) => (
+    <div>
+      <div className={`mb-1 text-[11px] font-semibold uppercase tracking-wider ${tone}`}>
+        {title} · {items.length}
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {items.map((n) => (
+          <span key={n} className="rounded-full border border-white/10 bg-white/[0.03] px-2 py-0.5 text-[11px] text-muted">
+            {n}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+  return (
+    <div className="space-y-2 border-t border-white/5 pt-3">
+      {noTours.length > 0 && <Group title="Туров нет" items={noTours} tone="text-muted" />}
+      {notResponding.length > 0 && <Group title="Оператор не отвечает" items={notResponding} tone="text-amber-300/80" />}
+    </div>
   );
 }
 
