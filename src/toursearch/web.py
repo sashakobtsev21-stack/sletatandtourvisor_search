@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
+import re
 import uuid
 from datetime import date, timedelta
 from decimal import Decimal
@@ -29,18 +31,41 @@ _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 MAX_DATE_SPAN_DAYS = 13
 
 
-class _QueueLogHandler(logging.Handler):
-    """Перехватывает записи логов toursearch.* и кладёт их в очередь для SSE."""
+# Токен текущего прогона — наследуется задачами поиска (asyncio копирует контекст
+# при создании), поэтому позволяет хендлеру отличать логи СВОЕГО прогона от чужих.
+_run_token_ctx: "contextvars.ContextVar[str | None]" = contextvars.ContextVar(
+    "toursearch_run_token", default=None
+)
 
-    def __init__(self, queue: "asyncio.Queue") -> None:
+
+class _QueueLogHandler(logging.Handler):
+    """Перехватывает записи логов toursearch.* и кладёт их в очередь СВОЕГО прогона.
+
+    Хендлер висит на общем логгере `toursearch`, поэтому при параллельных поисках их
+    несколько. Чтобы логи не перетекали между стримами, пишем только записи, помеченные
+    нашим токеном (через `_run_token_ctx`, выставленный в задаче поиска).
+    """
+
+    def __init__(self, queue: "asyncio.Queue", token: str) -> None:
         super().__init__()
         self.queue = queue
+        self.token = token
 
     def emit(self, record: logging.LogRecord) -> None:
+        if _run_token_ctx.get() != self.token:
+            return
         try:
             self.queue.put_nowait({"type": "log", "level": record.levelname, "msg": record.getMessage()})
         except Exception:
             pass
+
+
+def _cap_tokens(store: dict, limit: int = 64) -> None:
+    """Ограничить рост словаря токенов: если клиент сделал /prepare, но так и не
+    подключил стрим, запись иначе висела бы вечно. Держим последние `limit`
+    (обычный dict сохраняет порядок вставки → выкидываем самые старые)."""
+    while len(store) > limit:
+        store.pop(next(iter(store)), None)
 
 
 def _fmt_price(value) -> str:
@@ -50,6 +75,20 @@ def _fmt_price(value) -> str:
 
 
 _TEMPLATES.env.filters["price"] = _fmt_price
+
+
+def _parse_price_input(raw) -> "Decimal | None":
+    """Безопасно разобрать цену из формы: берём только цифры («12 000 ₽» → 12000),
+    мусор/пусто → None. НИКОГДА не бросает — иначе нечисловой ввод ронял /search в
+    500 (`Decimal('abc')` кидает `InvalidOperation`, а это не `ValueError`)."""
+    digits = re.sub(r"[^\d]", "", str(raw or ""))
+    return Decimal(digits) if digits else None
+
+
+def _form_flag(value) -> bool:
+    """Чекбокс формы → bool. Истинно только для явных «on/true/1/yes»; раньше было
+    `bool(строка)`, из-за чего любое непустое значение (в т.ч. 'false') было True."""
+    return str(value or "").strip().lower() in ("on", "true", "1", "yes")
 
 
 # --- сериализация отчёта в JSON для React-дашборда ---
@@ -177,28 +216,33 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
 
         # «Ночей от» не может превышать «Ночей до» — нормализуем
         nights_min, nights_max = min(nights_min, nights_max), max(nights_min, nights_max)
-        df, dt = date.fromisoformat(date_from), date.fromisoformat(date_to)
-        # Окно вылета — не более 14 дней
-        if (dt - df).days > MAX_DATE_SPAN_DAYS:
+        # Любой некорректный ввод (даты, окно >13 дней, невалидные параметры модели)
+        # перерисовывает форму с понятным текстом, а не падает в 500.
+        try:
+            df, dt = date.fromisoformat(date_from), date.fromisoformat(date_to)
+            if (dt - df).days > MAX_DATE_SPAN_DAYS:
+                raise ValueError(
+                    f"Диапазон дат вылета не должен превышать {MAX_DATE_SPAN_DAYS} дней (ограничение Sletat)."
+                )
+            params = SearchParams(
+                departure_city=departure_city,
+                destination_country=destination_country,
+                date_from=df,
+                date_to=dt,
+                nights_min=nights_min,
+                nights_max=nights_max,
+                adults=adults,
+                children_ages=child_ages,
+                search_mode=mode,
+                operators=ops,
+                charter_only=charter_only,
+                direct_only=direct_only,
+                price_max=_parse_price_input(price_max),
+            )
+        except ValueError as exc:
             ctx = _form_ctx()
-            ctx["error"] = f"Диапазон дат вылета не должен превышать {MAX_DATE_SPAN_DAYS} дней (ограничение Sletat)."
+            ctx["error"] = str(exc)
             return _TEMPLATES.TemplateResponse(request, "index.html", ctx)
-
-        params = SearchParams(
-            departure_city=departure_city,
-            destination_country=destination_country,
-            date_from=df,
-            date_to=dt,
-            nights_min=nights_min,
-            nights_max=nights_max,
-            adults=adults,
-            children_ages=child_ages,
-            search_mode=mode,
-            operators=ops,
-            charter_only=charter_only,
-            direct_only=direct_only,
-            price_max=Decimal(price_max) if price_max.strip() else None,
-        )
 
         # Жёсткий health-check гейт перед прогоном
         health = await run_health_check(providers=chosen, headless=True)
@@ -224,30 +268,34 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
         chosen = f.getlist("provider") or None
         ops = [o for o in f.getlist("operator") if o]
         child_ages = [int(x) for x in f.getlist("child_age") if str(x).isdigit()]
-        df = date.fromisoformat(f.get("date_from"))
-        dt = date.fromisoformat(f.get("date_to"))
+        try:
+            df = date.fromisoformat(f.get("date_from") or "")
+            dt = date.fromisoformat(f.get("date_to") or "")
+        except ValueError:
+            return {"error": "Некорректные даты поиска."}
         if dt < df:
             return {"error": "Дата «до» не может быть раньше даты «от»."}
         if (dt - df).days > MAX_DATE_SPAN_DAYS:
             return {"error": f"Диапазон дат вылета не должен превышать {MAX_DATE_SPAN_DAYS} дней (ограничение Sletat)."}
-        nmin = int(f.get("nights_min", 7))
-        nmax = int(f.get("nights_max", 10))
-        nmin, nmax = min(nmin, nmax), max(nmin, nmax)
         try:
+            nmin = int(f.get("nights_min") or 7)
+            nmax = int(f.get("nights_max") or 10)
+            nmin, nmax = min(nmin, nmax), max(nmin, nmax)
             params = SearchParams(
                 departure_city=f.get("departure_city", "Москва"),
                 destination_country=f.get("destination_country", "Турция"),
                 date_from=df, date_to=dt,
                 nights_min=nmin, nights_max=nmax,
-                adults=int(f.get("adults", 2)), children_ages=child_ages,
+                adults=int(f.get("adults") or 2), children_ages=child_ages,
                 search_mode=f.get("mode", "tours"), operators=ops,
-                charter_only=bool(f.get("charter_only")), direct_only=bool(f.get("direct_only")),
-                price_max=Decimal(f.get("price_max")) if (f.get("price_max") or "").strip() else None,
+                charter_only=_form_flag(f.get("charter_only")), direct_only=_form_flag(f.get("direct_only")),
+                price_max=_parse_price_input(f.get("price_max")),
             )
         except ValueError as exc:
             return {"error": f"Некорректные параметры поиска: {exc}"}
         token = uuid.uuid4().hex
         search_pending[token] = (params, chosen)
+        _cap_tokens(search_pending)
         return {"token": token}
 
     @app.post("/search/cancel")
@@ -267,7 +315,7 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
                 yield 'data: {"type":"error","msg":"истёк токен — повторите"}\n\n'
                 return
             queue: asyncio.Queue = asyncio.Queue()
-            handler = _QueueLogHandler(queue)
+            handler = _QueueLogHandler(queue, token)
             tlog = logging.getLogger("toursearch")
             tlog.addHandler(handler)
 
@@ -276,6 +324,9 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
                 queue.put_nowait({"type": "frame", "provider": name, "data": data})
 
             async def work():
+                # Пометить этот прогон: задачи поиска унаследуют токен, и хендлер будет
+                # отбирать только наши логи (изоляция параллельных стримов).
+                _run_token_ctx.set(token)
                 try:
                     await queue.put({"type": "log", "level": "INFO", "msg": "Проверяю формы площадок (health-check)…"})
                     health = await run_health_check(providers=chosen, headless=True)
@@ -320,17 +371,18 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
     @app.get("/api/runs")
     async def api_runs(limit: int = 50):
         with Storage(db_path) as storage:
-            runs = storage.list_runs(limit=limit)
             out = []
-            for r in runs:
-                rep = storage.get_report(r.run_id)
+            # Один проход: list_reports уже реконструирует каждый прогон ровно один
+            # раз (раньше list_runs + повторный get_report делали это дважды).
+            for run_id, rep in storage.list_reports(limit=limit):
                 p = rep.params
+                cheapest = rep.cheapest
                 out.append({
-                    "run_id": r.run_id, "run_at": r.run_at.isoformat(),
-                    "cheapest_label": r.cheapest_label,
-                    "cheapest_price": str(r.cheapest_price) if r.cheapest_price is not None else None,
-                    "cheapest_provider": r.cheapest_provider,
-                    "fastest_provider": r.fastest_provider,
+                    "run_id": run_id, "run_at": rep.run_at.isoformat(),
+                    "cheapest_label": cheapest.label if cheapest else None,
+                    "cheapest_price": str(cheapest.price) if cheapest else None,
+                    "cheapest_provider": cheapest.provider if cheapest else None,
+                    "fastest_provider": rep.fastest_provider,
                     # статус площадок — чтобы помечать прогоны с ошибками
                     "provider_status": [
                         {"provider": res.provider, "ok": res.success, "error": res.error}
@@ -361,6 +413,19 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
             except KeyError:
                 raise HTTPException(status_code=404, detail=f"Прогон #{run_id} не найден")
         return _report_dict(report, run_id)
+
+    @app.get("/api/refdata")
+    async def api_refdata():
+        """Справочники формы — единый источник правды (refdata.py). React-дашборд
+        берёт списки отсюда, а не из своей хардкод-копии (constants.js остаётся лишь
+        фолбэком), чтобы фронт и бэкенд не расходились."""
+        return {
+            "departure_cities": refdata.departure_cities(),
+            "countries": refdata.countries(),
+            "operators": refdata.operators(),
+            "providers": _providers(),
+            "max_date_span_days": MAX_DATE_SPAN_DAYS,
+        }
 
     @app.get("/history", response_class=HTMLResponse)
     async def history(request: Request):
@@ -455,6 +520,7 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
 
         token = uuid.uuid4().hex
         pending[token] = uniq
+        _cap_tokens(pending)
         return {"token": token, "count": len(uniq)}
 
     @app.get("/tests/stream")
