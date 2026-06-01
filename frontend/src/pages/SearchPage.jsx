@@ -201,7 +201,7 @@ export default function SearchPage() {
 
   return (
     <DashboardLayout
-      left={<LiveViews providers={activeProviders} frames={frames} phases={phases} active={status !== "idle"} />}
+      left={<LiveViews providers={activeProviders} frames={frames} phases={phases} active={status === "running"} />}
       center={<SearchForm onSubmit={handleSubmit} isSearching={status === "running"} initial={repeatInitial} />}
       right={<SearchTerminal logs={logs} progress={progress} status={status} onCancel={handleCancel} />}
     />
