@@ -10,9 +10,9 @@ import { Field, Input, Select } from "./ui/Field.jsx";
 import { DatePicker } from "./ui/DatePicker.jsx";
 import { staggerContainer, fadeUp, spring } from "../lib/animations.js";
 import {
-  DEPARTURE_CITIES, COUNTRIES, OPERATORS, PROVIDERS,
-  NIGHTS, ADULTS, CHILDREN, CHILD_AGES, MAX_DATE_SPAN_DAYS,
+  PROVIDERS, NIGHTS, ADULTS, CHILDREN, CHILD_AGES, MAX_DATE_SPAN_DAYS,
 } from "../lib/constants.js";
+import { useRefData } from "../lib/refdata.js";
 
 const addDays = (iso, n) => {
   const d = new Date(iso);
@@ -38,6 +38,8 @@ const defaultTo = addDays(minDate, 7);
  * props.initial — параметры для предзаполнения (повтор прогона из истории).
  */
 export default function SearchForm({ onSubmit, isSearching = false, initial = null }) {
+  // Справочники с бэкенда (/api/refdata); до ответа — фолбэк-константы.
+  const { departureCities, countries, operators: operatorOptions, providers: providerOptions } = useRefData();
   const [mode, setMode] = useState(initial?.search_mode ?? "tours"); // tours | hotels
   const [childrenCount, setChildrenCount] = useState(initial?.children_ages?.length ?? 0);
   const [childAges, setChildAges] = useState(initial?.children_ages ?? []);
@@ -140,7 +142,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
         </span>
         <div>
           <h2 className="text-xl font-extrabold tracking-tight text-white">Параметры поиска</h2>
-          <p className="text-xs text-muted">Сравним {PROVIDERS.length} площадки за один прогон</p>
+          <p className="text-xs text-muted">Сравним {providerOptions.length} площадки за один прогон</p>
         </div>
       </motion.div>
 
@@ -179,14 +181,14 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
         {!isHotels && (
           <Field label="Откуда?" icon={Plane} htmlFor="departure_city">
             <Select id="departure_city" name="departure_city" icon searchable defaultValue={initial?.departure_city ?? "Москва"}>
-              {DEPARTURE_CITIES.map((c) => <option key={c}>{c}</option>)}
+              {departureCities.map((c) => <option key={c}>{c}</option>)}
             </Select>
           </Field>
         )}
 
         <Field label="Куда?" icon={Globe2} htmlFor="destination_country">
           <Select id="destination_country" name="destination_country" icon searchable defaultValue={initial?.destination_country ?? "Турция"}>
-            {COUNTRIES.map((c) => <option key={c}>{c}</option>)}
+            {countries.map((c) => <option key={c}>{c}</option>)}
           </Select>
         </Field>
       </div>
@@ -281,7 +283,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
           </span>
         </label>
         <div className="flex max-h-44 flex-wrap gap-2 overflow-y-auto rounded-xl border border-white/5 bg-white/[0.02] p-2.5">
-          {OPERATORS.map((op) => {
+          {operatorOptions.map((op) => {
             const active = operators.includes(op);
             return (
               <motion.button
@@ -322,7 +324,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
           Площадки для сравнения
         </label>
         <div className="flex flex-wrap gap-2">
-          {PROVIDERS.map((p) => {
+          {providerOptions.map((p) => {
             const active = providers.includes(p);
             return (
               <motion.button

@@ -188,10 +188,14 @@ export default function SearchPage() {
     };
 
     es.onerror = () => {
-      if (status === "running" && esRef.current) {
-        pushLog("Соединение с потоком прервано.", "err");
-        finish("error");
-      }
+      // esRef обнуляется в closeStream() при штатном завершении — значит, если он
+      // ещё жив, это реальный обрыв (рестарт/краш бэкенда, сеть), а не нормальное
+      // закрытие. НЕ зависим от `status`: на момент создания обработчика он ещё
+      // "idle" (setStatus асинхронный), поэтому условие `status === "running"`
+      // никогда не срабатывало и обрыв молча оставлял UI висеть на «Идёт поиск…».
+      if (!esRef.current) return;
+      pushLog("Соединение с потоком прервано.", "err");
+      finish("error");
     };
   }
 
