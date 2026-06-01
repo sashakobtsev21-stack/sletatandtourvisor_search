@@ -126,6 +126,17 @@ _DEPARTURE_MAP = {
 }
 
 
+def _departure_candidates(city: str) -> list[str]:
+    """Возможные подписи города вылета на Tourvisor: сокращённое имя (если знаем),
+    полное имя и последнее слово («С.Петербург»/«Петербург» ← «Санкт-Петербург»).
+    Используется и для клика по городу, и для терпимой сверки формы."""
+    cands = [c for c in (_DEPARTURE_MAP.get(city), city) if c]
+    last = city.replace("-", " ").split()[-1]
+    if len(last) >= 4 and last not in cands:
+        cands.append(last)
+    return cands
+
+
 def _parse_price(text: str) -> Decimal | None:
     digits = re.sub(r"[^\d]", "", text)
     return Decimal(digits) if digits else None
@@ -497,10 +508,7 @@ class TourvisorProvider:
         await page.wait_for_timeout(400)
         # Кандидаты подписи: сокращённое имя Tourvisor (если знаем), полное имя и
         # последнее слово (С.Петербург ← «Петербург», Н.Новгород ← «Новгород»).
-        candidates = [c for c in (_DEPARTURE_MAP.get(city), city) if c]
-        last = city.replace("-", " ").split()[-1]
-        if len(last) >= 4 and last not in candidates:
-            candidates.append(last)
+        candidates = _departure_candidates(city)
         # Клик через JS с нормализацией (пробелы/разные дефисы), а не xpath contains(text()).
         clicked = await page.evaluate(
             """(cands) => {
@@ -773,7 +781,11 @@ class TourvisorProvider:
         # На /poisk-otelej (отели) форма иная: город/страна/ночи задаются иначе — пропускаем.
         if not hotels:
             dep = await self._safe_text(page, "div.TVDepartureFilter")
-            check("departure", params.departure_city, dep, text_contains(params.departure_city, dep) if dep is not UNKNOWN else True)
+            # Tourvisor подписывает город сокращённо («Город вылетаС.Петербург» ←
+            # «Санкт-Петербург»), поэтому сверяем по ЛЮБОМУ из кандидатов, а не по
+            # полному имени — иначе валидный поиск ложно падал FormVerificationError.
+            dep_ok = dep is UNKNOWN or any(text_contains(c, dep) for c in _departure_candidates(params.departure_city))
+            check("departure", params.departure_city, dep, dep_ok)
             country = await self._safe_text(page, "div.TVCountryFilter")
             check("country", params.destination_country, country, text_contains(params.destination_country, country) if country is not UNKNOWN else True)
             nights = await self._safe_text(page, "div.TVNightsFilter")

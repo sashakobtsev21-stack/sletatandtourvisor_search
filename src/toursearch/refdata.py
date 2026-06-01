@@ -10,15 +10,12 @@
 
 from __future__ import annotations
 
-# Туроператоры Sletat (см. scripts: собрано прокруткой списка).
+# Туроператоры для формы — кураторский короткий список основных ТО (имена как на
+# Sletat; провайдеры матчат их и на Tourvisor через нормализацию + алиасы/регион).
 OPERATORS: list[str] = [
     "Anex", "Pegas Touristik", "Biblio Globus", "Coral", "Sunmar", "TEZ TOUR",
-    "FUN and SUN", "Intourist", "Travelata", "Русский Экспресс", "Anex Online",
-    "Ambotis Holidays", "Amigo S", "Amigo Tours", "BSI Group", "ICS Travel Group",
-    "Let's Fly", "Let's Fly Online", "MaldivesIN", "Mantera Travel", "Melino Travel",
-    "MyHolidays", "OneTouchTravel", "PAC GROUP", "SPACE TRAVEL", "UNEX", "Xpress Travel",
-    "АРТ-ТУР", "Алеан", "Крымская Волна", "ЛАСПИ", "МУЛЬТИТУР", "Меркурий", "ПАКС",
-    "Планета Travel", "Премьера", "Спектрум",
+    "FUN and SUN", "Intourist", "Travelata", "Русский Экспресс",
+    "Let's Fly", "Let's Fly Online", "Алеан",
 ]
 
 DEPARTURE_CITIES: list[str] = [
