@@ -1751,10 +1751,28 @@ async def _rt_default():
     _assert(await page.locator(_rt_opt("Любой")).count() > 0, "нет опции «Любой» в рейтинге")
 
 
+# flat-checkbox: клик по <label> переключает sibling-input и вешает класс
+# `flat-checkbox_checked` на родительский <fieldset class="flat-checkbox">.
+_FLAT_CHECKED = (
+    "(t) => { const ls=[...document.querySelectorAll('label')];"
+    " const l=ls.find(e=>(e.textContent||'').trim()===t); if(!l) return false;"
+    " const fs=l.closest('.flat-checkbox')||l.parentElement; const i=fs&&fs.querySelector('input');"
+    " return /flat-checkbox_checked/.test((fs&&fs.className)||'') || !!(i&&i.checked); }"
+)
+
+
+async def _rt_select():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await page.locator(_rt_opt("8+")).first.click(force=True)
+    await page.wait_for_timeout(400)
+    _assert(await page.evaluate(_FLAT_CHECKED, "8+"), "выбор рейтинга «8+» не отметился (flat-checkbox)")
+
+
 _reg(GUI19, [
     (_rt_present, "блок рейтинга присутствует", "Есть блок «Рейтинг отеля» с опциями (Любой/7+/8+/9+)."),
     (_rt_default, "есть опция «Любой»", "Среди опций рейтинга есть значение по умолчанию «Любой»."),
-], "⏱ Live UI: «Рейтинг отеля» Sletat — наличие блока и опций (Любой/7+/8+/9+).")
+    (_rt_select, "выбор «8+» отмечается", "Клик по «8+» отмечает минимальный рейтинг (flat-checkbox_checked)."),
+], "⏱ Live UI: «Рейтинг отеля» Sletat — наличие, дефолт «Любой», выбор 8+.")
 
 
 # --- Группа: Пляжная линия ---
@@ -1772,9 +1790,19 @@ async def _be_present():
     _assert(has, "нет блока «Пляжная линия»")
 
 
+async def _be_select():
+    page = await get_session("form-tours").ensure_tours_mode()
+    lbl = page.locator(_be_opt("2-я"))
+    _assert(await lbl.count() > 0, "нет опции пляжной линии «2-я»")
+    await lbl.first.click(force=True)
+    await page.wait_for_timeout(400)
+    _assert(await page.evaluate(_FLAT_CHECKED, "2-я"), "выбор пляжной линии «2-я» не отметился (flat-checkbox)")
+
+
 _reg(GUI20, [
     (_be_present, "блок пляжной линии присутствует", "Есть выбор пляжной линии отеля (Любая/1-я/2-я/3-я)."),
-], "⏱ Live UI: «Пляжная линия» Sletat — наличие блока (Любая/1-я/2-я/3-я).")
+    (_be_select, "выбор «2-я линия» отмечается", "Клик по «2-я» отмечает пляжную линию (flat-checkbox_checked)."),
+], "⏱ Live UI: «Пляжная линия» Sletat — наличие и выбор линии.")
 
 
 # --- Группа: Курорт ---
@@ -1827,3 +1855,41 @@ async def _ty_present():
 _reg(GUI23, [
     (_ty_present, "блок «тип отеля» присутствует", "На форме есть блок типа/услуг отеля (#hotelServiceContainer)."),
 ], "⏱ Live UI: «Тип отеля» Sletat — наличие блока услуг/типа отеля.")
+
+
+# --- Группа: Межэлементные взаимодействия ---
+GUI24 = "Live: Взаимодействия"
+
+_RESORT_TITLES = (
+    "() => [...document.querySelectorAll('.uis-checkbox__label-title')]"
+    ".map(e => (e.textContent||'').trim()).filter(Boolean).slice(0, 40)"
+)
+
+
+async def _ix_country_resorts():
+    # Отдельная свежая сессия: дефолт = Турция, делаем РОВНО ОДНУ смену страны на Египет
+    # (повторная смена на общей мутированной сессии капризна — поэтому сравниваем
+    # дефолт vs одну смену).
+    page = await get_session("interactions").ensure_tours_mode()
+    await page.click("#ui-select-resort")
+    await page.wait_for_timeout(800)
+    set_a = await page.evaluate(_RESORT_TITLES)  # курорты Турции (по умолчанию)
+    try:
+        await page.keyboard.press("Escape")
+    except Exception:
+        pass
+    await page.wait_for_timeout(300)
+    await _type_country(page, "Египет")
+    await _pick_country(page, "Египет")
+    await page.wait_for_timeout(800)
+    await page.click("#ui-select-resort")
+    await page.wait_for_timeout(800)
+    set_b = await page.evaluate(_RESORT_TITLES)  # курорты Египта
+    _assert(set_a and set_b, "не удалось снять списки курортов")
+    _assert(set(set_a) != set(set_b),
+            f"курорты не изменились при смене страны (Турция≈Египет): A[:5]={set_a[:5]}, B[:5]={set_b[:5]}")
+
+
+_reg(GUI24, [
+    (_ix_country_resorts, "смена страны обновляет курорты", "Выбор Египта и Таиланда даёт РАЗНЫЕ списки курортов — направление зависит от страны."),
+], "⏱ Live UI: межэлементные связи Sletat — смена страны перезагружает список курортов.")
