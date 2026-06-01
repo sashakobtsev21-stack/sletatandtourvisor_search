@@ -2,9 +2,27 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   FlaskConical, Play, Loader2, CheckCircle2, XCircle, ChevronDown, Info, Clock,
+  ShieldCheck, Zap, Globe2,
 } from "lucide-react";
 import GlassCard from "../components/ui/GlassCard.jsx";
 import { fadeUp } from "../lib/animations.js";
+
+// Три верхнеуровневых списка вкладки (изначально свёрнуты). Порядок показа:
+// health-check → быстрые → live (по просьбе; быстрые всё равно бегут первыми).
+const CATEGORIES = [
+  {
+    key: "healthcheck", title: "Тесты health-check", icon: ShieldCheck,
+    hint: "Проверяют, что формы площадок целы. Ниже — что именно проверяем и какими селекторами. Live ⏱ реально открывают сайт.",
+  },
+  {
+    key: "fast", title: "Быстрые автотесты", icon: Zap,
+    hint: "Без браузера, мгновенные: проверяют, что наша логика обработки данных не сломана.",
+  },
+  {
+    key: "live", title: "Live-тесты Sletat", icon: Globe2,
+    hint: "⏱ Реальные поиски на Sletat.ru по параметрам с проверкой результата (медленные).",
+  },
+];
 
 /** TestsPage — каталог автотестов (#/tests): выбор групп/кейсов, прогон по SSE. */
 export default function TestsPage() {
@@ -53,6 +71,16 @@ export default function TestsPage() {
     });
 
   const toggleAll = (on) => setSelected(on ? new Set(allIds) : new Set());
+
+  const groupsOf = (catKey) =>
+    (catalog?.groups ?? []).filter((g) => (g.category || "fast") === catKey);
+
+  const toggleCategory = (catKey, on) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      groupsOf(catKey).forEach((g) => g.cases.forEach((c) => (on ? next.add(c.id) : next.delete(c.id))));
+      return next;
+    });
 
   const toggleInfo = (id) =>
     setOpenInfo((prev) => {
@@ -194,49 +222,85 @@ export default function TestsPage() {
         </div>
       </GlassCard>
 
-      {/* Группы кейсов */}
-      <GlassCard variants={fadeUp} initial="hidden" animate="show" className="p-2">
-        {catalog.groups.map((g) => {
-          const groupChecked = g.cases.every((c) => selected.has(c.id));
+      {/* Три категории — изначально свёрнуты: health-check / быстрые / live. */}
+      <div className="space-y-3">
+        {CATEGORIES.map((cat) => {
+          const cgroups = groupsOf(cat.key);
+          if (!cgroups.length) return null;
+          const cids = cgroups.flatMap((g) => g.cases.map((c) => c.id));
+          const catChecked = cids.length > 0 && cids.every((id) => selected.has(id));
+          const Icon = cat.icon;
           return (
-            <details key={g.group} className="group border-b border-white/5 last:border-0">
-              <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2.5 hover:bg-white/[0.03]">
-                <input
-                  type="checkbox" checked={groupChecked}
-                  onClick={(e) => e.stopPropagation()}
-                  onChange={(e) => toggleGroup(g, e.target.checked)}
-                  className="size-4 accent-brand"
-                />
-                <ChevronDown className="size-4 text-muted transition-transform group-open:rotate-180" />
-                <span className="font-semibold text-ink">{g.group}</span>
-                <span className="text-xs text-muted">({g.cases.length})</span>
-              </summary>
-              <div className="px-4 pb-3">
-                {g.description && <p className="mb-2 pl-6 text-xs text-muted">{g.description}</p>}
-                {g.cases.map((c) => {
-                  const st = statuses[c.id];
-                  return (
-                    <div key={c.id} className="flex flex-wrap items-center gap-2 py-1 pl-6 text-sm">
-                      <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} className="size-3.5 accent-brand" />
-                      <StatusIcon st={st} />
-                      <span className={c.live ? "text-amber-300" : "text-ink/90"}>{c.name}{c.live && " ⏱"}</span>
-                      {c.description && (
-                        <button type="button" onClick={() => toggleInfo(c.id)} className="grid size-4 place-items-center rounded-full border border-white/15 text-[10px] font-bold text-brand-soft hover:bg-white/5" title="Что проверяет тест">
-                          <Info className="size-2.5" />
-                        </button>
-                      )}
-                      {st?.state === "fail" && st.error && <span className="basis-full pl-6 text-xs text-rose-300/90">{st.error}</span>}
-                      {openInfo.has(c.id) && c.description && (
-                        <span className="basis-full whitespace-pre-wrap rounded-r-md border-l-2 border-brand/60 bg-white/[0.03] py-1.5 pl-3 pr-2 text-xs text-muted">{c.description}</span>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            </details>
+            <GlassCard key={cat.key} variants={fadeUp} initial="hidden" animate="show" className="p-0">
+              <details className="group/cat overflow-hidden rounded-xl2">
+                <summary className="flex cursor-pointer list-none items-center gap-3 px-4 py-3.5 hover:bg-white/[0.03]">
+                  <input
+                    type="checkbox" checked={catChecked}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => toggleCategory(cat.key, e.target.checked)}
+                    className="size-4 accent-brand"
+                  />
+                  <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-brand/30 to-ocean/20">
+                    <Icon className="size-4.5 text-brand-soft" />
+                  </span>
+                  <ChevronDown className="size-4 shrink-0 text-muted transition-transform group-open/cat:rotate-180" />
+                  <div className="min-w-0 flex-1">
+                    <div className="font-bold text-white">{cat.title}</div>
+                    <div className="text-xs text-muted">{cat.hint}</div>
+                  </div>
+                  <span className="ml-auto shrink-0 rounded-full bg-white/[0.06] px-2.5 py-0.5 text-xs font-semibold text-muted">
+                    {cids.length}
+                  </span>
+                </summary>
+
+                <div className="border-t border-white/5 p-2">
+                  {cat.key === "healthcheck" && <AnchorsInfo anchors={catalog.healthcheck_anchors} />}
+                  {cgroups.map((g) => {
+                    const groupChecked = g.cases.every((c) => selected.has(c.id));
+                    return (
+                      <details key={g.group} className="group border-b border-white/5 last:border-0">
+                        <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2.5 hover:bg-white/[0.03]">
+                          <input
+                            type="checkbox" checked={groupChecked}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => toggleGroup(g, e.target.checked)}
+                            className="size-4 accent-brand"
+                          />
+                          <ChevronDown className="size-4 text-muted transition-transform group-open:rotate-180" />
+                          <span className="font-semibold text-ink">{g.group}</span>
+                          <span className="text-xs text-muted">({g.cases.length})</span>
+                        </summary>
+                        <div className="px-4 pb-3">
+                          {g.description && <p className="mb-2 whitespace-pre-wrap pl-6 text-xs text-muted">{g.description}</p>}
+                          {g.cases.map((c) => {
+                            const st = statuses[c.id];
+                            return (
+                              <div key={c.id} className="flex flex-wrap items-center gap-2 py-1 pl-6 text-sm">
+                                <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} className="size-3.5 accent-brand" />
+                                <StatusIcon st={st} />
+                                <span className={c.live ? "text-amber-300" : "text-ink/90"}>{c.name}{c.live && " ⏱"}</span>
+                                {c.description && (
+                                  <button type="button" onClick={() => toggleInfo(c.id)} className="grid size-4 place-items-center rounded-full border border-white/15 text-[10px] font-bold text-brand-soft hover:bg-white/5" title="Что проверяет тест">
+                                    <Info className="size-2.5" />
+                                  </button>
+                                )}
+                                {st?.state === "fail" && st.error && <span className="basis-full pl-6 text-xs text-rose-300/90">{st.error}</span>}
+                                {openInfo.has(c.id) && c.description && (
+                                  <span className="basis-full whitespace-pre-wrap rounded-r-md border-l-2 border-brand/60 bg-white/[0.03] py-1.5 pl-3 pr-2 text-xs text-muted">{c.description}</span>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </details>
+                    );
+                  })}
+                </div>
+              </details>
+            </GlassCard>
           );
         })}
-      </GlassCard>
+      </div>
 
       {/* Отчёт */}
       {report && (
@@ -259,6 +323,43 @@ export default function TestsPage() {
           )}
         </GlassCard>
       )}
+    </div>
+  );
+}
+
+/** Блок «что проверяет health-check»: якоря (поля + селекторы) по площадкам. */
+function AnchorsInfo({ anchors }) {
+  const blocks = Object.entries(anchors || {});
+  if (!blocks.length) return null;
+  return (
+    <div className="mx-1 mb-2 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs">
+      <p className="mb-2.5 text-muted">
+        Health-check проверяет, что в форме площадки на месте эти поля (якоря). Если какой-то
+        селектор пропал — сайт сменил вёрстку, и поиск блокируется, чтобы не искать вслепую.
+      </p>
+      <div className="grid gap-4 sm:grid-cols-2">
+        {blocks.map(([prov, list]) => (
+          <div key={prov}>
+            <div className="mb-1.5 flex items-center gap-1.5 font-semibold capitalize text-ink">
+              <ShieldCheck className="size-3.5 text-ocean" /> {prov}
+            </div>
+            <ul className="space-y-1">
+              {list.map((a) => (
+                <li key={a.selector} className="flex items-center justify-between gap-2">
+                  <span className="text-muted">{a.label}</span>
+                  <code className="truncate rounded bg-black/30 px-1.5 py-0.5 font-mono text-[10px] text-brand-soft">
+                    {a.selector}
+                  </code>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2.5 flex items-center gap-1.5 text-[11px] text-amber-300/90">
+        <Zap className="size-3" /> При запуске любого health-check сначала автоматически
+        прогоняются все быстрые тесты.
+      </p>
     </div>
   );
 }

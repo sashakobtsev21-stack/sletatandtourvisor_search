@@ -544,14 +544,46 @@ def _register_live_scenarios(n: int = 50) -> None:
 _register_live_scenarios(50)
 
 
-# Sletat health-check (только Sletat — live для Tourvisor не нужен).
+# ============ 17. Health-check: живая проверка формы (обе площадки) ============
+# Эти тесты лежат в КАТЕГОРИИ «Health-check» (группа начинается с «Health-check»),
+# а не в Live — чтобы во вкладке они попали в свой список «Тесты health-check».
+HC = "Health-check: форма (live)"
+
+
+def _hc_form_desc(provider: str, anchors: dict[str, str]) -> str:
+    lines = "\n".join(f"  • {label} — {sel}" for label, sel in anchors.items())
+    return (
+        f"Живой прогон: открывает форму {provider} и проверяет, что на месте все ключевые "
+        f"элементы (якоря). Если что-то пропало — сайт сменил вёрстку и поиск надо чинить.\n"
+        f"Проверяемые поля и их селекторы:\n{lines}"
+    )
+
+
 async def _live_sletat_health() -> None:
     from toursearch.healthcheck import gate_passed, run_health_check
     res = await run_health_check(providers=["sletat"], headless=True)
     _assert(gate_passed(res), str({k: v.missing or v.error for k, v in res.items()}))
 
 
-add(G, "Health-check формы Sletat", _live_sletat_health, live=True,
-    description="Живой прогон: открывает форму Sletat и проверяет, что ключевые поля "
-                "(город, страна, даты, ночи, туристы, операторы, кнопка поиска) на месте. "
-                "Если структура сайта изменилась — этот тест упадёт и подскажет, что чинить.")
+async def _live_tourvisor_health() -> None:
+    from toursearch.healthcheck import gate_passed, run_health_check
+    res = await run_health_check(providers=["tourvisor"], headless=True)
+    _assert(gate_passed(res), str({k: v.missing or v.error for k, v in res.items()}))
+
+
+def _register_health_form_tests() -> None:
+    from toursearch.providers.sletat import SletatProvider
+    from toursearch.providers.tourvisor import TourvisorProvider
+    add(HC, "Health-check формы Sletat", _live_sletat_health, live=True,
+        description=_hc_form_desc("Sletat", SletatProvider.HEALTH_ANCHORS))
+    add(HC, "Health-check формы Tourvisor", _live_tourvisor_health, live=True,
+        description=_hc_form_desc("Tourvisor", TourvisorProvider.HEALTH_ANCHORS))
+
+
+_register_health_form_tests()
+REGISTRY.describe_group(
+    HC,
+    "⏱ Живые проверки: реально открывают форму площадки и убеждаются, что все ключевые "
+    "поля (якоря) на месте. Именно этот health-check срабатывает в приложении перед каждым "
+    "поиском — если форма сломана, поиск блокируется, чтобы не искать вслепую.",
+)
