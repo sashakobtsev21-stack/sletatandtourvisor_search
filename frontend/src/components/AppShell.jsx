@@ -37,7 +37,7 @@ export default function AppShell({ route = "/", children }) {
             </span>
             <div className="flex items-baseline gap-2">
               <span className="bg-gradient-to-r from-brand-soft to-ocean bg-clip-text text-lg font-extrabold tracking-tight text-transparent">
-                ТурСравнение
+                Tour Search
               </span>
               <span className="hidden text-xs text-muted sm:inline">live-агрегатор туров</span>
             </div>
@@ -64,6 +64,14 @@ export default function AppShell({ route = "/", children }) {
       </motion.header>
 
       <main className="mx-auto max-w-[1800px] px-4 py-6 md:px-6">{children}</main>
+
+      {/* Подпись автора (ненавязчивый водяной знак, не перехватывает клики) */}
+      <div
+        aria-hidden
+        className="pointer-events-none fixed bottom-2.5 right-3 z-20 select-none font-mono text-[10.5px] tracking-wide text-white/30"
+      >
+        © Александр Кобцев
+      </div>
     </div>
   );
 }

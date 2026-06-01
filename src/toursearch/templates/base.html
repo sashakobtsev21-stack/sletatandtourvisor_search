@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}ТурСравнение{% endblock %}</title>
+  <title>{% block title %}Tour Search{% endblock %}</title>
 
   <!-- Современная типографика -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -141,7 +141,7 @@
     <div class="mx-auto flex h-16 max-w-[1900px] items-center gap-6 px-6">
       <a href="/" class="flex items-center gap-2 text-lg font-extrabold no-underline">
         <span class="text-xl">🏝️</span>
-        <span class="bg-gradient-to-r from-accent-deep to-[#b48cff] bg-clip-text text-transparent">ТурСравнение</span>
+        <span class="bg-gradient-to-r from-accent-deep to-[#b48cff] bg-clip-text text-transparent">Tour Search</span>
       </a>
       <nav class="flex items-center gap-1 text-sm font-semibold">
         <a href="/"        class="rounded-lg px-3 py-2 text-slate-500 no-underline transition hover:bg-accent-soft hover:text-ink">Поиск</a>
@@ -152,5 +152,11 @@
   </header>
 
   <main>{% block content %}{% endblock %}</main>
+
+  <!-- Подпись автора (водяной знак) -->
+  <div aria-hidden style="position:fixed;right:12px;bottom:10px;z-index:20;pointer-events:none;
+       font:600 11px ui-monospace,monospace;letter-spacing:.3px;color:rgba(30,41,59,.35);user-select:none;">
+    © Александр Кобцев
+  </div>
 </body>
 </html>
