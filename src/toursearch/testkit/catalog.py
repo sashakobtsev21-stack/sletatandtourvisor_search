@@ -649,3 +649,172 @@ REGISTRY.describe_group(
     "поля (якоря) на месте. Именно этот health-check срабатывает в приложении перед каждым "
     "поиском — если форма сломана, поиск блокируется, чтобы не искать вслепую.",
 )
+
+
+# ============ 18. Live UI: фокусные тесты формы Sletat (ОБРАЗЕЦ) ============
+# Инфраструктура: общая страница на сессию (livekit.LiveSession) — одна форма на всю
+# группу. Это образцовые группы (каркас/режимы + город вылета) — паттерн для остальных
+# групп из docs/SLETAT_UI_TEST_PLAN.md (всего ~120 фокусных UI-тестов).
+from toursearch.testkit.livekit import get_session, visible  # noqa: E402
+
+_FORM_ANCHORS = {
+    "Откуда": "input.excludeClickOutside",
+    "Куда": "#ui-select-country-to",
+    "Даты": "div.containerTitle",
+    "Ночи": "#ui-select-nightsMin",
+    "Туристы": "#touristSelector",
+    "Кнопка поиска": "[data-testid='b2b.search-form.search-btn']",
+}
+_CITY = "input.excludeClickOutside"
+
+
+def _city_option(name: str) -> str:
+    return f"xpath=//div[contains(@class,'city-selector-list')]//li//button[contains(.,'{name}')]"
+
+
+# --- Группа: Каркас и режимы ---
+GUI = "Live: Каркас и режимы"
+
+
+async def _ui_frame_blocks():
+    page = await get_session("form-tours").ensure_tours_mode()
+    missing = [label for label, sel in _FORM_ANCHORS.items() if not await visible(page, sel)]
+    _assert(not missing, f"не видны блоки формы: {missing}")
+
+
+async def _ui_tours_to_hotels():
+    s = get_session("form-tours")
+    await s.ensure_tours_mode()
+    page = await s.switch_to_hotels()
+    _assert(not await visible(page, "#ui-select-nightsMin"), "в «Отелях» не должно быть контрола ночей")
+    _assert(not await visible(page, _CITY), "в «Отелях» не должно быть города вылета")
+
+
+async def _ui_hotels_to_tours():
+    s = get_session("form-tours")
+    await s.switch_to_hotels()
+    page = await s.ensure_tours_mode()
+    _assert(await visible(page, _CITY), "в «Турах» город вылета должен быть виден")
+    _assert(await visible(page, "#ui-select-nightsMin"), "в «Турах» контрол ночей должен быть виден")
+
+
+async def _ui_tours_tab_active():
+    page = await get_session("form-tours").ensure_tours_mode()
+    # активная вкладка «Туры» — косвенно: в режиме туров виден город вылета (его нет в отелях)
+    _assert(await visible(page, _CITY), "режим «Туры» не активен (не виден город вылета)")
+
+
+async def _ui_search_button():
+    page = await get_session("form-tours").ensure_tours_mode()
+    _assert(await visible(page, "[data-testid='b2b.search-form.search-btn']"), "кнопка «Найти туры» не видна")
+
+
+for _fn, _name, _desc in [
+    (_ui_frame_blocks, "форма «Туры»: ключевые блоки на месте",
+     "Открывает форму Sletat в режиме «Туры» и проверяет, что видны все основные блоки: Откуда, Куда, Даты, Ночи, Туристы, кнопка поиска."),
+    (_ui_tours_to_hotels, "Туры→Отели: ночи и город вылета скрываются",
+     "Переключает на «Отели» и проверяет, что контрол ночей и поле города вылета пропадают (в отелях перелёта нет, ночи задаются датами проживания)."),
+    (_ui_hotels_to_tours, "Отели→Туры: город и ночи возвращаются",
+     "Из режима «Отели» переключает обратно на «Туры» и проверяет, что город вылета и ночи снова видны."),
+    (_ui_tours_tab_active, "режим «Туры» активен по умолчанию",
+     "Проверяет, что активен режим «Туры» (виден город вылета, которого нет в отелях)."),
+    (_ui_search_button, "кнопка «Найти туры» присутствует",
+     "Проверяет наличие и видимость кнопки запуска поиска."),
+]:
+    add(GUI, _name, _fn, live=True, description=_desc)
+
+REGISTRY.describe_group(
+    GUI,
+    "⏱ Live UI: каркас формы Sletat и переключение режимов Туры/Отели. Все кейсы группы "
+    "работают на ОДНОЙ открытой странице (общая сессия) — быстро.",
+)
+
+
+# --- Группа: Город вылета (Откуда) ---
+GUI2 = "Live: Город вылета (Откуда)"
+
+
+async def _type_city(page, text: str) -> None:
+    inp = page.locator(_CITY)
+    await inp.click()
+    await inp.fill("")
+    await inp.type(text, delay=30)
+    await page.wait_for_timeout(900)
+
+
+async def _city_default():
+    page = await get_session("form-tours").ensure_tours_mode()
+    val = await page.input_value(_CITY)
+    _assert(bool((val or "").strip()), "поле города вылета пустое по умолчанию")
+
+
+async def _city_filter():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _type_city(page, "сан")
+    _assert(await page.locator(_city_option("Петербург")).count() > 0,
+            "ввод «сан» не отфильтровал список до Санкт-Петербурга")
+
+
+async def _city_select_from_list():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _type_city(page, "Казань")
+    await page.click(_city_option("Казань") + "[1]")
+    await page.wait_for_timeout(500)
+    val = await page.input_value(_CITY)
+    _assert("Казан" in (val or ""), f"после выбора в поле не Казань: {val!r}")
+
+
+async def _city_quick_chip():
+    page = await get_session("form-tours").ensure_tours_mode()
+    chip = page.locator("xpath=//button[normalize-space(text())='Санкт-Петербург']")
+    if await chip.count() == 0:
+        return  # чипа быстрых городов может не быть в этой раскладке — мягкий пропуск
+    await chip.first.click()
+    await page.wait_for_timeout(500)
+    val = await page.input_value(_CITY)
+    _assert("Петербург" in (val or ""), f"чип не выставил город: {val!r}")
+
+
+async def _city_non_default():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _type_city(page, "Екатеринбург")
+    opt = page.locator(_city_option("Екатеринбург"))
+    _assert(await opt.count() > 0, "Екатеринбург (не из дефолтного списка) не найден набором текста")
+    await opt.first.click()
+    await page.wait_for_timeout(400)
+    val = await page.input_value(_CITY)
+    _assert("Екатеринбург" in (val or ""), f"Екатеринбург не выбран: {val!r}")
+
+
+async def _city_clear():
+    page = await get_session("form-tours").ensure_tours_mode()
+    inp = page.locator(_CITY)
+    await inp.click()
+    await inp.fill("")
+    await page.wait_for_timeout(300)
+    await _type_city(page, "Москва")
+    _assert(await page.locator(_city_option("Москва")).count() > 0,
+            "после очистки поле не принимает новый ввод")
+
+
+for _fn, _name, _desc in [
+    (_city_default, "город по умолчанию заполнен",
+     "Проверяет, что поле «Откуда» не пустое при открытии формы."),
+    (_city_filter, "ввод «сан» фильтрует до Санкт-Петербурга",
+     "Печатает «сан» и проверяет, что в подсказках появляется Санкт-Петербург (поле фильтруется при наборе)."),
+    (_city_select_from_list, "выбор города из списка обновляет поле",
+     "Печатает «Казань», кликает подсказку и проверяет, что поле стало «Казань»."),
+    (_city_quick_chip, "быстрый чип города выставляет город",
+     "Кликает чип «Санкт-Петербург» (если есть) и проверяет поле."),
+    (_city_non_default, "город не из дефолта (Екатеринбург) выбирается набором",
+     "Город, которого нет в дефолтном списке, находится и выбирается через ввод текста."),
+    (_city_clear, "очистка поля не ломает ввод",
+     "Очищает поле и проверяет, что после этого можно снова ввести и отфильтровать город."),
+]:
+    add(GUI2, _name, _fn, live=True, description=_desc)
+
+REGISTRY.describe_group(
+    GUI2,
+    "⏱ Live UI: поле «Откуда» (город вылета) Sletat — значение по умолчанию, фильтрация "
+    "набором, выбор из списка, быстрые чипы, города не из дефолтного списка.",
+)

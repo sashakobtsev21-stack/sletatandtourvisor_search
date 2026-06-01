@@ -29,20 +29,28 @@ async def run_selected(ids: list[str], emit: Emit) -> dict:
 
     await _emit(emit, {"type": "begin", "total": total})
     t0 = time.monotonic()
-    for idx, case in enumerate(cases, 1):
-        await _emit(emit, {"type": "running", "index": idx, "id": case.id,
-                           "group": case.group, "name": case.name})
+    try:
+        for idx, case in enumerate(cases, 1):
+            await _emit(emit, {"type": "running", "index": idx, "id": case.id,
+                               "group": case.group, "name": case.name})
+            try:
+                result = case.func()
+                if inspect.isawaitable(result):
+                    await result
+                passed += 1
+                await _emit(emit, {"type": "result", "id": case.id, "ok": True})
+            except Exception as exc:  # noqa: BLE001 — фиксируем любую ошибку как провал теста
+                failed += 1
+                err = f"{type(exc).__name__}: {exc}"
+                failures.append({"id": case.id, "group": case.group, "name": case.name, "error": err})
+                await _emit(emit, {"type": "result", "id": case.id, "ok": False, "error": err})
+    finally:
+        # Закрыть общие live-сессии (если открывались) — освободить браузер.
         try:
-            result = case.func()
-            if inspect.isawaitable(result):
-                await result
-            passed += 1
-            await _emit(emit, {"type": "result", "id": case.id, "ok": True})
-        except Exception as exc:  # noqa: BLE001 — фиксируем любую ошибку как провал теста
-            failed += 1
-            err = f"{type(exc).__name__}: {exc}"
-            failures.append({"id": case.id, "group": case.group, "name": case.name, "error": err})
-            await _emit(emit, {"type": "result", "id": case.id, "ok": False, "error": err})
+            from toursearch.testkit.livekit import close_all_sessions
+            await close_all_sessions()
+        except Exception:
+            pass
 
     summary = {
         "type": "end",
