@@ -1729,3 +1729,101 @@ _reg(GUI18, [
     (_url_tours, "URL результата (туры) = параметры формы", "После поиска URL Sletat кодирует ровно заданные параметры (город/страна/ночи/туристы/даты) — сверка verify_sletat_search_url без расхождений."),
     (_url_hotels, "URL результата (отели) = параметры формы", "В режиме «Отели» URL соответствует параметрам (ночи/дату выезда сверка не проверяет — это by design)."),
 ], "⏱ Live UI: персистенция формы Sletat — URL выдачи кодирует заданные параметры (защита от «виджет показал одно, ушло другое»).")
+
+
+# --- Группа: Рейтинг отеля ---
+GUI19 = "Live: Рейтинг отеля"
+_RC = ".slsf-rating-container"
+
+
+def _rt_opt(t: str) -> str:
+    return f"xpath=//*[contains(@class,'slsf-rating-container')]//label[normalize-space(.)='{t}']"
+
+
+async def _rt_present():
+    page = await get_session("form-tours").ensure_tours_mode()
+    _assert(await page.locator(_RC).count() > 0 and await page.locator(_rt_opt("8+")).count() > 0,
+            "нет блока рейтинга или опции 8+")
+
+
+async def _rt_default():
+    page = await get_session("form-tours").ensure_tours_mode()
+    _assert(await page.locator(_rt_opt("Любой")).count() > 0, "нет опции «Любой» в рейтинге")
+
+
+_reg(GUI19, [
+    (_rt_present, "блок рейтинга присутствует", "Есть блок «Рейтинг отеля» с опциями (Любой/7+/8+/9+)."),
+    (_rt_default, "есть опция «Любой»", "Среди опций рейтинга есть значение по умолчанию «Любой»."),
+], "⏱ Live UI: «Рейтинг отеля» Sletat — наличие блока и опций (Любой/7+/8+/9+).")
+
+
+# --- Группа: Пляжная линия ---
+GUI20 = "Live: Пляжная линия"
+
+
+def _be_opt(t: str) -> str:
+    return f"xpath=//label[normalize-space(text())='{t}']"
+
+
+async def _be_present():
+    page = await get_session("form-tours").ensure_tours_mode()
+    has = (await page.locator("xpath=//*[contains(@class,'uis-select__label') and contains(.,'Пляжн')]").count() > 0
+           or await page.locator(_be_opt("1-я")).count() > 0)
+    _assert(has, "нет блока «Пляжная линия»")
+
+
+_reg(GUI20, [
+    (_be_present, "блок пляжной линии присутствует", "Есть выбор пляжной линии отеля (Любая/1-я/2-я/3-я)."),
+], "⏱ Live UI: «Пляжная линия» Sletat — наличие блока (Любая/1-я/2-я/3-я).")
+
+
+# --- Группа: Курорт ---
+GUI21 = "Live: Курорт"
+
+
+async def _re_open():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await page.click("#ui-select-resort")
+    await page.wait_for_timeout(800)
+    _assert(await page.locator(".uis-checkbox__label-title").count() > 0, "после открытия курорта нет пунктов")
+
+
+async def _re_items():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await page.click("#ui-select-resort")
+    await page.wait_for_timeout(800)
+    _assert(await page.locator(".uis-checkbox__label-title").count() >= 3, "мало курортов в списке")
+
+
+_reg(GUI21, [
+    (_re_open, "список курортов открывается", "Клик по «Курорт» раскрывает дерево курортов выбранной страны."),
+    (_re_items, "курортов в списке достаточно", "В списке курортов несколько пунктов (зависит от страны)."),
+], "⏱ Live UI: «Курорт» Sletat — открытие дерева курортов (зависит от выбранной страны).")
+
+
+# --- Группа: Конкретный отель ---
+GUI22 = "Live: Конкретный отель"
+
+
+async def _hf_present():
+    page = await get_session("form-tours").ensure_tours_mode()
+    _assert(await page.locator("#ui-select-hotels").count() > 0, "нет поля выбора конкретного отеля")
+
+
+_reg(GUI22, [
+    (_hf_present, "поле «конкретный отель» присутствует", "На форме есть селектор конкретного отеля (#ui-select-hotels)."),
+], "⏱ Live UI: «Конкретный отель» Sletat — наличие поля (поиск отеля зависит от страны/курорта).")
+
+
+# --- Группа: Тип отеля ---
+GUI23 = "Live: Тип отеля"
+
+
+async def _ty_present():
+    page = await get_session("form-tours").ensure_tours_mode()
+    _assert(await page.locator("#hotelServiceContainer").count() > 0, "нет блока «Тип/услуги отеля»")
+
+
+_reg(GUI23, [
+    (_ty_present, "блок «тип отеля» присутствует", "На форме есть блок типа/услуг отеля (#hotelServiceContainer)."),
+], "⏱ Live UI: «Тип отеля» Sletat — наличие блока услуг/типа отеля.")
