@@ -1165,3 +1165,161 @@ _reg(GUI7, [
     (_me_select_ai, "выбор AI применяется", "Выбор «Всё включено» (AI) отражается в подписи."),
     (_me_select_bb, "выбор BB кликается", "Кнопка BB (только завтрак) кликабельна."),
 ], "⏱ Live UI: «Питание» Sletat — дефолт «Любое», открытие, выбор кодов (AI/BB).")
+
+
+# --- Группа: Рейсы и опции ---
+GUI8 = "Live: Рейсы и опции"
+
+
+def _flight_label(text: str) -> str:
+    return f"xpath=//label[contains(@class,'uis-checkbox__label_flight-info') and contains(., '{text}')]"
+
+
+async def _flight_state(page, text: str):
+    loc = page.locator(_flight_label(text))
+    if await loc.count() == 0:
+        return None
+    cls = await loc.first.get_attribute("class") or ""
+    return "uis-checkbox__label_checked" in cls
+
+
+async def _toggle_flight(page, text: str):
+    before = await _flight_state(page, text)
+    if before is None:
+        return None, None
+    await page.locator(_flight_label(text)).first.click()
+    await page.wait_for_timeout(300)
+    return before, await _flight_state(page, text)
+
+
+async def _fl_block():
+    page = await get_session("form-tours").ensure_tours_mode()
+    _assert(await page.locator(_flight_label("Без стопов")).count() > 0, "блок рейсов (чекбоксы) не найден")
+
+
+async def _fl_nostops_default():
+    page = await get_session("form-tours").ensure_tours_mode()
+    st = await _flight_state(page, "Без стопов")
+    _assert(st is True, f"«Без стопов» не включён по умолчанию (state={st})")
+
+
+async def _fl_charter():
+    page = await get_session("form-tours").ensure_tours_mode()
+    b, a = await _toggle_flight(page, "Чартерные")
+    _assert(b is not None and a != b, "тоггл «Чартерные» не изменил состояние")
+
+
+async def _fl_direct():
+    page = await get_session("form-tours").ensure_tours_mode()
+    b, a = await _toggle_flight(page, "Прямые")
+    _assert(b is not None and a != b, "тоггл «Прямые» не изменил состояние")
+
+
+async def _fl_transfer():
+    page = await get_session("form-tours").ensure_tours_mode()
+    b, a = await _toggle_flight(page, "С трансфером")
+    _assert(b is not None and a != b, "тоггл «С трансфером» не изменил состояние")
+
+
+_reg(GUI8, [
+    (_fl_block, "блок рейсов присутствует", "На форме «Туры» есть чекбоксы рейсов (Чартерные/Прямые/Без стопов/…)."),
+    (_fl_nostops_default, "«Без стопов» включён по умолчанию", "Проверяет, что флаг «Без стопов» отмечен по умолчанию."),
+    (_fl_charter, "тоггл «Чартерные»", "Клик меняет состояние флага «Чартерные»."),
+    (_fl_direct, "тоггл «Прямые»", "Клик меняет состояние флага «Прямые»."),
+    (_fl_transfer, "тоггл «С трансфером»", "Клик меняет состояние флага «С трансфером»."),
+], "⏱ Live UI: «Рейсы» Sletat — дефолт «Без стопов», переключение флагов чартер/прямые/трансфер.")
+
+
+# --- Группа: Туроператор (на форме) ---
+GUI9 = "Live: Туроператор (на форме)"
+_OP_INPUT = ".uis-text_tour-operator"
+_OP_LABEL = "label[class*='tour-operator']"
+_OP_FIND = r"""(name) => {
+    const norm = s => (s||'').replace(/\s+/g,' ').trim().toLowerCase();
+    const want = norm(name);
+    const op = l => norm((l.querySelector('.slsf-white-space-nowrap')||l).textContent);
+    const labels = [...document.querySelectorAll("label[class*='tour-operator']")];
+    return labels.findIndex(l => op(l).includes(want));
+}"""
+
+
+async def _op_open(page):
+    try:
+        await page.locator(_OP_INPUT).first.click()
+        await page.wait_for_timeout(400)
+    except Exception:
+        pass
+
+
+async def _op_list():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _op_open(page)
+    _assert(await page.locator(_OP_LABEL).count() >= 5, "список операторов на форме пуст/короткий")
+
+
+async def _op_search():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _op_open(page)
+    await page.fill(_OP_INPUT, "")
+    await page.type(_OP_INPUT, "Anex", delay=30)
+    await page.wait_for_timeout(700)
+    idx = await page.evaluate(_OP_FIND, "Anex")
+    _assert(idx is not None and idx >= 0, "поиск «Anex» не нашёл оператора в списке")
+
+
+_reg(GUI9, [
+    (_op_list, "список операторов присутствует", "В фильтре операторов на форме есть пункты (≥5)."),
+    (_op_search, "поиск «Anex» находит оператора", "Печатает «Anex» и проверяет, что оператор есть в отфильтрованном списке."),
+], "⏱ Live UI: «Туроператор» на форме Sletat — список и поиск оператора (выбор/«все»/группы — в тестах выдачи).")
+
+
+# --- Группа: Сбросить фильтры ---
+GUI10 = "Live: Сбросить фильтры"
+_RESET = "xpath=//*[normalize-space(text())='Сбросить фильтры']"
+
+
+async def _rs_present():
+    page = await get_session("form-tours").ensure_tours_mode()
+    _assert(await page.locator(_RESET).count() > 0, "кнопка «Сбросить фильтры» не найдена")
+
+
+async def _rs_resets_stars():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _open_stars(page)
+    b4 = await _star_btn(page, 4)
+    if await b4.count():
+        await b4.first.click()
+        await page.wait_for_timeout(300)
+    await page.locator(_RESET).first.click()
+    await page.wait_for_timeout(700)
+    cur = (await _ltext(page, _STARS_CUR)).lower()
+    _assert("люб" in cur or cur == "", f"после сброса категория не «Любая»: {cur!r}")
+
+
+_reg(GUI10, [
+    (_rs_present, "кнопка «Сбросить фильтры» присутствует", "На форме есть кнопка сброса фильтров."),
+    (_rs_resets_stars, "сброс возвращает категорию к «Любая»", "Выбирает 4★, жмёт «Сбросить фильтры» и проверяет, что категория снова «Любая»."),
+], "⏱ Live UI: «Сбросить фильтры» Sletat — наличие кнопки и возврат фильтров к дефолту.")
+
+
+# --- Группа: Запуск поиска (кнопка) ---
+GUI11 = "Live: Запуск поиска"
+_SEARCH_BTN = "[data-testid='b2b.search-form.search-btn']"
+
+
+async def _go_present():
+    page = await get_session("form-tours").ensure_tours_mode()
+    _assert(await visible(page, _SEARCH_BTN), "кнопка «Найти туры» не видна")
+
+
+async def _go_enabled():
+    page = await get_session("form-tours").ensure_tours_mode()
+    loc = page.locator(_SEARCH_BTN).first
+    _assert(await loc.is_enabled(), "кнопка «Найти туры» не активна")
+    _assert(await loc.get_attribute("disabled") is None, "кнопка «Найти туры» помечена disabled")
+
+
+_reg(GUI11, [
+    (_go_present, "кнопка «Найти туры» видна", "Проверяет наличие и видимость кнопки запуска (без клика — чтобы не уходить в выдачу)."),
+    (_go_enabled, "кнопка «Найти туры» активна", "Кнопка запуска enabled и не disabled при валидной форме."),
+], "⏱ Live UI: «Найти туры» Sletat — кнопка запуска present/enabled (без навигации; сам запуск — в тестах выдачи).")
