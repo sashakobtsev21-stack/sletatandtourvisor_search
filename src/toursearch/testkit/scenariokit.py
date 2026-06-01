@@ -1,0 +1,168 @@
+"""Инфраструктура СЦЕНАРНЫХ live-тестов Sletat: «параметры → поиск → сверка ВЫДАЧИ».
+
+В отличие от UI-тестов (`livekit`, проверяют элемент формы) здесь проверяется
+ЧЕСТНОСТЬ РЕЗУЛЬТАТОВ: запускаем реальный поиск и утверждаем, что каждая карточка/
+оператор выдачи соответствует заданным фильтрам (звёзды, оператор, цена, курорт,
+рейтинг…). Это закрывает пробел: сверка по URL доказывает «задали правильный вопрос»,
+а здесь — «ответ честный».
+
+Поиск исполняется через `SletatProvider.search` (тот же путь, что в бою): провайдер сам
+заполняет форму, ждёт выдачу и возвращает распарсенные операторы/отели + URL. Результат
+кэшируется по ключу параметров — несколько проверок одного сценария переиспользуют один
+прогон (поиск дорогой, ~10–15 c). Кэш живёт в рамках процесса; раннер его не чистит.
+
+См. план: docs/SLETAT_SCENARIO_TEST_PLAN.md.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass, field
+from datetime import date, timedelta
+
+from toursearch.models import HotelOffer, Offer, SearchParams
+
+
+@dataclass
+class Outcome:
+    """Распарсенный итог одного реального прогона поиска (для сверки с параметрами)."""
+
+    params: SearchParams
+    success: bool
+    error: str | None
+    search_url: str | None
+    hotels: list[HotelOffer] = field(default_factory=list)       # туры: первые ~10; отели: все
+    operators: list[Offer] = field(default_factory=list)         # блинчик: оператор+мин.цена
+    no_tours: list[str] = field(default_factory=list)            # блинчик: «Туров нет»
+    not_responding: list[str] = field(default_factory=list)      # блинчик: «не отвечает»
+
+    @property
+    def cheapest_operator(self) -> Offer | None:
+        return min(self.operators, key=lambda o: o.price, default=None)
+
+
+_CACHE: dict[str, Outcome] = {}
+
+
+def base_params(**over) -> SearchParams:
+    """Базовый набор с высокой наличностью туров (Москва→Турция, окно +21д, 7–10 ночей,
+    2 взрослых). Меняем РОВНО один фильтр через `over` и проверяем его влияние на выдачу.
+    Даты считаются при ВЫЗОВЕ (не при импорте) — всегда в будущем."""
+    df = date.today() + timedelta(days=21)
+    p = dict(
+        departure_city="Москва", destination_country="Турция",
+        date_from=df, date_to=df + timedelta(days=7),
+        nights_min=7, nights_max=10, adults=2,
+    )
+    p.update(over)
+    return SearchParams(**p)
+
+
+async def run(params: SearchParams) -> Outcome:
+    """Запустить (или взять из кэша) реальный поиск Sletat и вернуть распарсенный итог."""
+    key = params.model_dump_json()
+    cached = _CACHE.get(key)
+    if cached is not None:
+        return cached
+    from toursearch.providers.sletat import SletatProvider  # ленивый импорт (браузер)
+
+    r = await SletatProvider(headless=True).search(params)
+    out = Outcome(
+        params=params, success=r.success, error=r.error, search_url=r.search_url,
+        hotels=list(r.hotel_offers), operators=list(r.offers),
+        no_tours=list(r.operators_no_tours), not_responding=list(r.operators_not_responding),
+    )
+    _CACHE[key] = out
+    return out
+
+
+def clear_cache() -> None:
+    _CACHE.clear()
+
+
+# --------------------------- матчеры/ассерты ---------------------------
+
+def _assert(cond, msg: str) -> None:
+    if not cond:
+        raise AssertionError(msg)
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "")).strip().lower()
+
+
+def _name_matches(scraped: str, wanted: list[str]) -> bool:
+    """Имя оператора из блинчика совпадает с одним из выбранных (терпимо к суффиксам/регистру)."""
+    s = _norm(scraped)
+    return any(w and (w in s or s in w) for w in (_norm(x) for x in wanted))
+
+
+def have_results(o: Outcome) -> None:
+    """Поиск успешен и выдача непустая (есть отели или операторы)."""
+    _assert(o.success, o.error or "поиск не дал результатов")
+    _assert(bool(o.hotels or o.operators), "выдача пустая: ни отелей, ни операторов")
+
+
+def url_matches(o: Outcome) -> None:
+    """URL результата кодирует заданные параметры (persistence-контракт)."""
+    from toursearch.urlcheck import verify_sletat_search_url
+
+    if o.search_url:
+        probs = verify_sletat_search_url(o.search_url, o.params)
+        _assert(not probs, f"URL не совпал с параметрами: {probs}")
+
+
+def stars_honored(o: Outcome) -> None:
+    """ВСЕ карточки выдачи (где звёзды распарсились) — в выбранных звёздах."""
+    allowed = set(o.params.hotel_stars)
+    _assert(allowed, "stars_honored вызван без выбранных звёзд")
+    bad = [(h.hotel_name, h.stars) for h in o.hotels if h.stars and h.stars not in allowed]
+    _assert(not bad, f"в выдаче отели вне выбранных звёзд {sorted(allowed)}: {bad[:5]}")
+
+
+def rating_honored(o: Outcome) -> None:
+    """ВСЕ отели выдачи (где рейтинг есть) — не ниже выбранного минимума."""
+    thr = o.params.hotel_rating_min
+    _assert(thr is not None, "rating_honored вызван без минимального рейтинга")
+    bad = [(h.hotel_name, h.rating) for h in o.hotels if h.rating is not None and h.rating < thr]
+    _assert(not bad, f"в выдаче отели с рейтингом ниже {thr}: {bad[:5]}")
+
+
+def price_honored(o: Outcome) -> None:
+    """ВСЕ цены выдачи (отели+операторы) — в выбранном диапазоне [min,max]."""
+    lo, hi = o.params.price_min, o.params.price_max
+    _assert(lo is not None or hi is not None, "price_honored вызван без диапазона цен")
+    prices = [(h.hotel_name, h.price) for h in o.hotels] + [(op.operator, op.price) for op in o.operators]
+    bad = [(n, p) for n, p in prices
+           if (lo is not None and p < lo) or (hi is not None and p > hi)]
+    _assert(not bad, f"в выдаче цены вне диапазона [{lo}, {hi}]: {bad[:5]}")
+
+
+def destination_honored(o: Outcome) -> None:
+    """ВСЕ отели выдачи — в выбранных курортах (по полю destination карточки)."""
+    resorts = [_norm(r) for r in o.params.resorts]
+    _assert(resorts, "destination_honored вызван без выбранных курортов")
+    bad = [(h.hotel_name, h.destination) for h in o.hotels
+           if h.destination and not any(r in _norm(h.destination) for r in resorts)]
+    _assert(not bad, f"в выдаче отели вне выбранных курортов {o.params.resorts}: {bad[:5]}")
+
+
+def operators_present(o: Outcome, wanted: list[str]) -> None:
+    """Хотя бы один выбранный оператор появился (с ценой ИЛИ в статусной группе)."""
+    everywhere = [op.operator for op in o.operators] + o.no_tours + o.not_responding
+    _assert(any(_name_matches(n, wanted) for n in everywhere),
+            f"ни один выбранный оператор {wanted} не появился в выдаче (есть: {everywhere[:6]})")
+
+
+def cheapest_operator_in(o: Outcome, wanted: list[str]) -> None:
+    """Дешёвейший оператор выдачи — из выбранных (гарантия корректности сравнения)."""
+    ch = o.cheapest_operator
+    _assert(ch is not None, "в блинчике нет операторов с ценой")
+    _assert(_name_matches(ch.operator, wanted),
+            f"дешёвейший оператор «{ch.operator}» не из выбранных {wanted} — фильтр оператора не применился к выдаче")
+
+
+def operators_pure(o: Outcome, wanted: list[str]) -> None:
+    """СТРОГО: все операторы с ценой — только из выбранных (фильтр не «протёк»)."""
+    leaked = [op.operator for op in o.operators if not _name_matches(op.operator, wanted)]
+    _assert(not leaked, f"в блинчике операторы вне выбранных {wanted}: {leaked[:6]}")
