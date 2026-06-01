@@ -1,0 +1,27 @@
+# Единые переводы строк: в репозитории хранить как LF, не плодить CRLF-шум в диффах
+# (на Windows рабочая копия остаётся CRLF при core.autocrlf=true).
+* text=auto
+
+# Явно текстовые
+*.py    text
+*.js    text
+*.jsx   text
+*.ts    text
+*.tsx   text
+*.json  text
+*.md    text
+*.html  text
+*.css   text
+*.toml  text
+*.yml   text
+*.yaml  text
+*.cfg   text
+*.txt   text
+
+# Бинарные — не нормализовать
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.ico   binary
+*.webp  binary
+*.woff2 binary

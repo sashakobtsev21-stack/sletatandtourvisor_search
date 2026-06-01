@@ -23,6 +23,11 @@ _dump/
 .vscode/
 .claude/
 
+# Покрытие тестами / логи
+.coverage
+htmlcov/
+*.log
+
 # ОС
 .DS_Store
 Thumbs.db
