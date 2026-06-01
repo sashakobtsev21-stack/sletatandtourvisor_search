@@ -286,6 +286,9 @@ class SletatProvider:
         if params.search_mode != "hotels":
             await self._select_departure_city(page, params.departure_city)
         await self._select_country(page, params.destination_country)
+        # Курорт — ПОСЛЕ страны: смена страны перезагружает список курортов.
+        if params.resorts:
+            await self._select_resorts(page, params.resorts)
         await self._select_dates(page, params.date_from, params.date_to)
         await self._set_nights(page, params.nights_min, params.nights_max)
         await self._select_tourists(page, params.adults, params.children_ages)
@@ -295,6 +298,12 @@ class SletatProvider:
             await self._select_stars(page, params.hotel_stars)
         if params.meals:
             await self._select_meals(page, params.meals)
+        if params.hotel_rating_min is not None:
+            await self._select_rating(page, params.hotel_rating_min)
+        if params.price_min is not None or params.price_max is not None:
+            await self._select_price(page, params.price_min, params.price_max)
+        if params.currency and params.currency != "RUB":
+            await self._select_currency(page, params.currency)
         await self._toggle_flight_flags(page, params)
 
     async def _select_departure_city(self, page: Page, city: str) -> None:
@@ -531,6 +540,74 @@ class SletatProvider:
         except PWTimeout:
             pass
 
+    async def _select_resorts(self, page: Page, resorts: list[str]) -> None:
+        """Открыть «Курорт» и отметить курорты по названию (клик по тексту пункта,
+        а не по кнопке «+», которая раскрывает под-курорты). best-effort."""
+        try:
+            await page.click("#ui-select-resort", timeout=5000)
+            await page.wait_for_timeout(800)
+        except PWTimeout:
+            return
+        for resort in resorts:
+            title = page.locator(
+                f"xpath=//span[contains(@class,'uis-checkbox__label-title')"
+                f" and normalize-space(text())='{resort}']"
+            )
+            if await title.count():
+                await title.first.click()
+                await page.wait_for_timeout(250)
+            else:
+                log.info("Sletat: курорт «%s» не найден в списке — пропуск", resort)
+        await page.keyboard.press("Escape")
+        await page.wait_for_timeout(200)
+
+    async def _select_rating(self, page: Page, rating_min: float) -> None:
+        """Отметить минимальный рейтинг отеля (flat-checkbox 7+/8+/9+ в slsf-rating-container).
+        Берём ближайшую снизу ступень, доступную на сайте (7/8/9)."""
+        step = 9 if rating_min >= 9 else 8 if rating_min >= 8 else 7
+        loc = page.locator(
+            f"xpath=//*[contains(@class,'slsf-rating-container')]//label[normalize-space(.)='{step}+']"
+        )
+        if await loc.count():
+            await loc.first.click(force=True)  # flat-checkbox: клик по label переключает
+            await page.wait_for_timeout(300)
+
+    async def _select_price(self, page: Page, pmin, pmax) -> None:
+        """Ввести диапазон цен в поля «от»/«до» (input.uis-text_price-input)."""
+        inps = page.locator("input.uis-text_price-input")
+        count = await inps.count()
+        if pmin is not None and count >= 1:
+            await inps.nth(0).fill(str(int(pmin)))
+            await page.wait_for_timeout(200)
+        if pmax is not None and count >= 2:
+            await inps.nth(1).fill(str(int(pmax)))
+            await page.wait_for_timeout(200)
+        # снять фокус, чтобы значение применилось
+        await page.keyboard.press("Tab")
+        await page.wait_for_timeout(200)
+
+    async def _select_currency(self, page: Page, currency: str) -> None:
+        """Сменить валюту: readonly-инпут #ui-select-currency_selector открывает список;
+        кликаем опцию с ТОЧНЫМ кодом (RUB/USD/EUR уникальны — не путаются с ночами/курортами)."""
+        try:
+            await page.click("#ui-select-currency_selector", timeout=4000)
+            await page.wait_for_timeout(400)
+        except PWTimeout:
+            return
+        clicked = await page.evaluate(
+            """(cur) => {
+                const opts = [...document.querySelectorAll('.uis-select__options-item')]
+                    .filter(o => (o.textContent || '').trim() === cur);
+                const vis = opts.find(o => o.offsetParent !== null) || opts[0];
+                if (vis) { vis.click(); return true; }
+                return false;
+            }""",
+            currency,
+        )
+        if not clicked:
+            log.info("Sletat: валюта «%s» не найдена в списке — пропуск", currency)
+        await page.wait_for_timeout(300)
+
     async def _toggle_flight_flags(self, page: Page, params: SearchParams) -> None:
         async def set_flag(text: str, enable: bool) -> None:
             if not enable:
@@ -548,6 +625,8 @@ class SletatProvider:
         await set_flag("Чартерные", params.charter_only)
         await set_flag("Прямые", params.direct_only)
         await set_flag("С трансфером", params.with_transfer)
+        # «Моментальное подтверждение» — тоже flight-info-чекбокс (label_instantApprove).
+        await set_flag("Моментальное подтверждение", params.instant_confirmation)
 
     async def _click_search(self, page: Page) -> None:
         await page.click("[data-testid='b2b.search-form.search-btn']")
