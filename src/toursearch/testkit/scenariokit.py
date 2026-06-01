@@ -138,13 +138,25 @@ def price_honored(o: Outcome) -> None:
     _assert(not bad, f"в выдаче цены вне диапазона [{lo}, {hi}]: {bad[:5]}")
 
 
-def destination_honored(o: Outcome) -> None:
-    """ВСЕ отели выдачи — в выбранных курортах (по полю destination карточки)."""
-    resorts = [_norm(r) for r in o.params.resorts]
-    _assert(resorts, "destination_honored вызван без выбранных курортов")
-    bad = [(h.hotel_name, h.destination) for h in o.hotels
-           if h.destination and not any(r in _norm(h.destination) for r in resorts)]
-    _assert(not bad, f"в выдаче отели вне выбранных курортов {o.params.resorts}: {bad[:5]}")
+def resort_honored(o: Outcome, siblings: list[str]) -> None:
+    """Курорт честно применён к ВЫДАЧЕ:
+      (1) фильтр реально ушёл в поиск — в URL есть `resort=`;
+      (2) все отели — в выбранной стране;
+      (3) ни один отель не находится в НЕвыбранном соседнем регионе (`siblings`).
+
+    Точное совпадение под-района НЕ требуем: на Sletat регион включает дочерние районы
+    (выбор «Анталья» возвращает и отели в «Лара»). Поэтому проверяем «не протёк ли фильтр
+    в чужой регион», а не буквальное равенство названия."""
+    _assert(o.search_url and "resort=" in o.search_url,
+            "в URL нет resort= — фильтр курорта не применился к поиску")
+    country = _norm(o.params.destination_country)
+    bad_country = [h.destination for h in o.hotels
+                   if h.destination and country not in _norm(h.destination)]
+    _assert(not bad_country, f"в выдаче отели вне страны {o.params.destination_country}: {bad_country[:5]}")
+    sib = [_norm(s) for s in siblings]
+    leaked = [(h.hotel_name, h.destination) for h in o.hotels
+              if h.destination and any(s in _norm(h.destination) for s in sib)]
+    _assert(not leaked, f"в выдаче отели из НЕвыбранных регионов: {leaked[:5]}")
 
 
 def operators_present(o: Outcome, wanted: list[str]) -> None:
@@ -166,3 +178,42 @@ def operators_pure(o: Outcome, wanted: list[str]) -> None:
     """СТРОГО: все операторы с ценой — только из выбранных (фильтр не «протёк»)."""
     leaked = [op.operator for op in o.operators if not _name_matches(op.operator, wanted)]
     _assert(not leaked, f"в блинчике операторы вне выбранных {wanted}: {leaked[:6]}")
+
+
+def operator_honored(o: Outcome, wanted: list[str]) -> None:
+    """Толерантная сводная проверка честности фильтра оператора:
+      1) есть операторы с ценой → ВСЕ из выбранных и дешёвейший из них (строго);
+      2) ценовых нет, но выбранный числится в «туров нет»/«не отвечает» → тоже честно
+         (оператора искали, просто нет туров на эти даты);
+      3) иначе → фильтр не применился (выдача без выбранного оператора нигде)."""
+    if o.operators:
+        operators_pure(o, wanted)
+        cheapest_operator_in(o, wanted)
+        return
+    if any(_name_matches(n, wanted) for n in (o.no_tours + o.not_responding)):
+        return
+    raise AssertionError(
+        f"оператор {wanted} не применился к выдаче: ни цен, ни статуса "
+        f"(success={o.success}, err={o.error})")
+
+
+def prices_ascending(o: Outcome) -> None:
+    """Цены отелей выдачи идут по возрастанию (сортировка по цене применилась).
+    Провайдер при sort_by='price' жмёт «Цена», и карточки парсятся в порядке DOM = по цене."""
+    ps = [int(h.price) for h in o.hotels]
+    _assert(len(ps) >= 2, "слишком мало карточек для проверки сортировки")
+    _assert(ps == sorted(ps), f"цены отелей НЕ по возрастанию (сортировка по цене не применилась): {ps[:8]}")
+
+
+def direction_ok(o: Outcome) -> None:
+    """Направление/город отработали ЧИСТО: либо успех с верным URL и непустой выдачей,
+    либо корректное «туров нет» на эти даты. НЕ ок: краш, FormVerificationError, или
+    несовпадение параметров URL (это реальные дефекты, а не отсутствие туров)."""
+    if o.success:
+        url_matches(o)
+        _assert(bool(o.hotels or o.operators), "успех без выдачи")
+        return
+    err = (o.error or "").lower()
+    clean_empty = ("не найдено" in err or "предложен" in err or "туров нет" in err)
+    _assert(clean_empty,
+            f"направление отработало НЕ чисто (краш/неверные параметры, а не «нет туров»): {o.error}")
