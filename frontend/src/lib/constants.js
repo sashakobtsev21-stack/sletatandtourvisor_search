@@ -29,15 +29,11 @@ export const COUNTRIES = [
   "Нидерланды", "Финляндия", "Беларусь", "Казахстан", "Узбекистан", "Киргизия",
 ];
 
-// Туроператоры — полный список (OPERATORS из refdata.py, собран с Sletat).
+// Туроператоры — короткий кураторский список (фолбэк; основной источник — /api/refdata).
 export const OPERATORS = [
   "Anex", "Pegas Touristik", "Biblio Globus", "Coral", "Sunmar", "TEZ TOUR",
-  "FUN and SUN", "Intourist", "Travelata", "Русский Экспресс", "Anex Online",
-  "Ambotis Holidays", "Amigo S", "Amigo Tours", "BSI Group", "ICS Travel Group",
-  "Let's Fly", "Let's Fly Online", "MaldivesIN", "Mantera Travel", "Melino Travel",
-  "MyHolidays", "OneTouchTravel", "PAC GROUP", "SPACE TRAVEL", "UNEX", "Xpress Travel",
-  "АРТ-ТУР", "Алеан", "Крымская Волна", "ЛАСПИ", "МУЛЬТИТУР", "Меркурий", "ПАКС",
-  "Планета Travel", "Премьера", "Спектрум",
+  "FUN and SUN", "Intourist", "Travelata", "Русский Экспресс",
+  "Let's Fly", "Let's Fly Online", "Алеан",
 ];
 
 // Площадки-провайдеры (совпадают с бэкендом: sletat, tourvisor).
