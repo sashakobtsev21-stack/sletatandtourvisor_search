@@ -1458,3 +1458,171 @@ _reg(GUI13, [
     (_bl_sorted, "цены операторов по возрастанию", "Операторы в блинчике идут по возрастанию цены (как на сайте)."),
     (_bl_statuses, "группы «туров нет»/«не отвечает» парсятся", "Блинчик группирует операторов; группы статусов читаются (списки)."),
 ], "⏱ Live UI: блинчик Sletat — наличие, операторы с ценами, сортировка по цене, группы статусов.")
+
+
+# --- Группа: Даты вылета (календарь) ---
+GUI14 = "Live: Даты вылета"
+
+
+async def _open_calendar(page):
+    # На общей сессии прошлый кейс мог оставить календарь открытым/в спец-состоянии —
+    # сбрасываем (Escape) и открываем с ретраем, чтобы клик по триггеру не «тогглил» закрытие.
+    last = None
+    for _ in range(3):
+        try:
+            await page.keyboard.press("Escape")
+        except Exception:
+            pass
+        await page.wait_for_timeout(200)
+        try:
+            await page.click("div.containerTitle", timeout=4000)
+            await page.wait_for_selector("button.rdrDay", state="visible", timeout=4000)
+            return
+        except Exception as exc:
+            last = exc
+            await page.wait_for_timeout(400)
+    raise AssertionError(f"календарь не открылся: {last}")
+
+
+async def _dt_open():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _open_calendar(page)
+    _assert(await page.locator("button.rdrDay").count() > 0, "календарь не открылся")
+
+
+async def _dt_nav():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _open_calendar(page)
+    before = (await _ltext(page, ".rdrMonthName")).strip()
+    await page.click("button.navigatorSlideButton.nextButton")
+    await page.wait_for_timeout(450)
+    after = (await _ltext(page, ".rdrMonthName")).strip()
+    _assert(before and before != after, f"навигация по месяцам не сменила месяц: {before!r}→{after!r}")
+
+
+async def _dt_select():
+    from datetime import date, timedelta
+    page = await get_session("form-tours").ensure_tours_mode()
+    df = date.today() + timedelta(days=30)
+    await _sl._select_dates(page, df, df + timedelta(days=5))
+    label = await _ltext(page, "div.containerTitle")
+    _assert(any(c.isdigit() for c in label), f"после выбора дат в поле нет даты: {label!r}")
+
+
+async def _dt_window():
+    from datetime import date, timedelta
+    page = await get_session("form-tours").ensure_tours_mode()
+    target = (date.today() + timedelta(days=60)).replace(day=10)
+    await _open_calendar(page)
+    await _sl._goto_month(page, target)
+    await _sl._click_day(page, 10)  # старт окна
+    await page.wait_for_timeout(500)
+    disabled = await page.evaluate(
+        r"""(day) => {
+            const btns = [...document.querySelectorAll('button.rdrDay')];
+            const b = btns.find(e => { const s = e.querySelector('span.customDay span'); return s && s.textContent.trim() === String(day); });
+            return b ? b.className.includes('rdrDayDisabled') : null;
+        }""",
+        24,
+    )
+    try:
+        await page.keyboard.press("Escape")  # закрыть календарь, чтобы не мешать следующему кейсу
+    except Exception:
+        pass
+    await page.wait_for_timeout(150)
+    _assert(disabled is True, f"день 24 (старт 10 + 14) должен быть недоступен (окно ≤13), disabled={disabled}")
+
+
+# Порядок: _dt_select (полный выбор + закрытие) запускаем ПОСЛЕДНИМ — он оставляет
+# календарь в состоянии, из которого повторное открытие капризно; остальные кейсы до него.
+_reg(GUI14, [
+    (_dt_open, "календарь открывается", "Клик по полю дат открывает календарь (есть кнопки дней)."),
+    (_dt_nav, "навигация по месяцам", "Кнопка «вперёд» меняет отображаемый месяц."),
+    (_dt_window, "окно вылета ≤13 дней (валидация)", "После выбора старта день на +14 недоступен — сайт ограничивает окно 13 днями."),
+    (_dt_select, "выбор даты «от»+«до»", "Выбор корректного окна дат отражается в поле."),
+], "⏱ Live UI: «Даты вылета» Sletat — открытие, навигация, выбор окна и ограничение 13 дней.")
+
+
+# --- Группа: Диапазон цен + валюта ---
+GUI15 = "Live: Диапазон цен + валюта"
+_PRICE = "input.uis-text_price-input"
+
+
+async def _pr_from():
+    page = await get_session("form-tours").ensure_tours_mode()
+    inp = page.locator(_PRICE).first
+    await inp.fill("50000")
+    await page.wait_for_timeout(200)
+    val = (await inp.input_value() or "").replace(" ", "")
+    _assert("50000" in val, f"цена «от» не принялась: {val!r}")
+
+
+async def _pr_to():
+    page = await get_session("form-tours").ensure_tours_mode()
+    inps = page.locator(_PRICE)
+    _assert(await inps.count() >= 2, "нет второго поля цены («до»)")
+    inp = inps.nth(1)
+    await inp.fill("150000")
+    await page.wait_for_timeout(200)
+    val = (await inp.input_value() or "").replace(" ", "")
+    _assert("150000" in val, f"цена «до» не принялась: {val!r}")
+
+
+async def _pr_currency():
+    page = await get_session("form-tours").ensure_tours_mode()
+    _assert(await page.locator("#ui-select-currency_selector").count() > 0, "селектор валюты не найден")
+
+
+_reg(GUI15, [
+    (_pr_from, "поле цены «от» принимает ввод", "В поле «от» можно ввести число."),
+    (_pr_to, "поле цены «до» принимает ввод", "В поле «до» можно ввести число."),
+    (_pr_currency, "селектор валюты присутствует", "На форме есть выбор валюты (RUB и др.)."),
+], "⏱ Live UI: «Диапазон цен» Sletat — ввод «от»/«до» и наличие выбора валюты.")
+
+
+# --- Группа: Форма «Отели» (без перелёта) ---
+GUI16 = "Live: Форма «Отели»"
+
+
+async def _hotels_page():
+    return await get_session("form-hotels").switch_to_hotels()
+
+
+async def _ho_no_city():
+    page = await _hotels_page()
+    _assert(not await visible(page, "input.excludeClickOutside"), "в режиме «Отели» не должно быть города вылета")
+
+
+async def _ho_no_nights():
+    page = await _hotels_page()
+    _assert(not await visible(page, "#ui-select-nightsMin"), "в режиме «Отели» не должно быть контрола ночей")
+
+
+async def _ho_country():
+    page = await _hotels_page()
+    _assert(await visible(page, "#ui-select-country-to"), "в «Отелях» недоступна страна «Куда»")
+
+
+async def _ho_stars():
+    page = await _hotels_page()
+    _assert(await page.locator("#hotelCategoryOpenButton").count() > 0, "в «Отелях» нет выбора категории отеля")
+
+
+async def _ho_meals():
+    page = await _hotels_page()
+    _assert(await page.locator("#mealsOpenButton").count() > 0, "в «Отелях» нет выбора питания")
+
+
+async def _ho_search():
+    page = await _hotels_page()
+    _assert(await visible(page, "[data-testid='b2b.search-form.search-btn']"), "в «Отелях» нет кнопки поиска")
+
+
+_reg(GUI16, [
+    (_ho_no_city, "нет города вылета", "В режиме «Отели» (без перелёта) поле города вылета скрыто."),
+    (_ho_no_nights, "нет контрола ночей", "В «Отелях» нет отдельного выбора ночей (ночи = даты проживания)."),
+    (_ho_country, "страна «Куда» доступна", "Направление (страна) выбирается и в режиме «Отели»."),
+    (_ho_stars, "категория отеля доступна", "Выбор звёздности доступен в «Отелях»."),
+    (_ho_meals, "питание доступно", "Выбор питания доступен в «Отелях»."),
+    (_ho_search, "кнопка поиска присутствует", "Кнопка запуска есть и в режиме «Отели»."),
+], "⏱ Live UI: форма «Отели» Sletat (без перелёта) — скрытие города/ночей, доступность страны/звёзд/питания/кнопки.")
