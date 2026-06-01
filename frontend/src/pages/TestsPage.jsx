@@ -2,29 +2,45 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   FlaskConical, Play, Loader2, CheckCircle2, XCircle, ChevronDown, Info, Clock,
-  ShieldCheck, Zap, Globe2, Target,
+  ShieldCheck, Zap, Target, Hotel, Map, AlertTriangle, Users,
 } from "lucide-react";
 import GlassCard from "../components/ui/GlassCard.jsx";
 import { fadeUp } from "../lib/animations.js";
 
-// Верхнеуровневые списки вкладки (изначально свёрнуты). Порядок показа:
-// health-check → быстрые → Live (UI) → Сценарии. Быстрые всё равно бегут первыми.
+// Разделы вкладки по СМЫСЛУ (изначально свёрнуты). У каждого — список бэкенд-категорий
+// (`cats`), которые в него попадают. Health-check объединяет целостность форм + быструю логику.
 const CATEGORIES = [
   {
-    key: "healthcheck", title: "Тесты health-check", icon: ShieldCheck,
-    hint: "Проверяют, что формы площадок целы. Ниже — что именно проверяем и какими селекторами. Live ⏱ реально открывают сайт.",
+    key: "healthcheck", cats: ["healthcheck", "fast"], title: "Health-check: целостность форм + логика", icon: ShieldCheck,
+    hint: "Целостность форм площадок (якоря) + быстрые детерминированные проверки логики (парсинг/URL/модели). Без браузера — мгновенно; live-якоря ⏱ открывают сайт.",
   },
   {
-    key: "fast", title: "Быстрые автотесты", icon: Zap,
-    hint: "Без браузера, мгновенные: проверяют, что наша логика обработки данных не сломана.",
+    key: "smoke", cats: ["smoke"], title: "Live: Смоук", icon: Zap,
+    hint: "⏱ Быстрая проверка: сайт жив, форма цела, базовый поиск возвращает результаты.",
   },
   {
-    key: "live", title: "Live UI-тесты Sletat", icon: Globe2,
-    hint: "⏱ Проверки элементов формы и выдачи на реальном Sletat.ru (общая сессия — относительно быстро).",
+    key: "positive", cats: ["positive"], title: "Live: Позитивные — сверка фильтров", icon: CheckCircle2,
+    hint: "⏱ Валидный фильтр → выдача ему соответствует: звёзды/рейтинг/цена/курорт/оператор/питание/ночи/рейсы/валюта и их комбинации.",
   },
   {
-    key: "scenario", title: "Сценарии: поиск → сверка выдачи", icon: Target,
-    hint: "⏱ Реальные поиски по параметрам с проверкой, что ВЫДАЧА соответствует фильтрам (звёзды/цена/оператор/курорт…). Идут параллельно; каждый поиск ~60–90 с, полный набор — долгий.",
+    key: "hotels", cats: ["hotels"], title: "Live: Режим «Отели»", icon: Hotel,
+    hint: "⏱ Поиск без перелёта: те же сверки фильтров в режиме «Отели».",
+  },
+  {
+    key: "coverage", cats: ["coverage"], title: "Live: Покрытие направлений и составов", icon: Map,
+    hint: "⏱ Все страны / города вылета / составы тура ищутся корректно (успех или чистое «туров нет»).",
+  },
+  {
+    key: "negative", cats: ["negative"], title: "Live: Негативные и границы", icon: AlertTriangle,
+    hint: "⏱ Конфликтные/граничные параметры: окно дат >13, экстремальные фильтры — обрабатываются без сбоя.",
+  },
+  {
+    key: "e2e", cats: ["e2e"], title: "Live: Пользовательские сценарии", icon: Users,
+    hint: "⏱ Сквозные «персоны» (семья/пара/группа/бюджет) и разнообразный срез — реальные бронирования целиком.",
+  },
+  {
+    key: "ui", cats: ["ui"], title: "Live: UI формы и выдачи", icon: FlaskConical,
+    hint: "⏱ Проверки отдельных элементов формы и страницы результатов на реальном сайте (общая сессия — быстро).",
   },
 ];
 
@@ -78,13 +94,13 @@ export default function TestsPage() {
 
   const toggleAll = (on) => setSelected(on ? new Set(allIds) : new Set());
 
-  const groupsOf = (catKey) =>
-    (catalog?.groups ?? []).filter((g) => (g.category || "fast") === catKey);
+  const groupsOf = (cat) =>
+    (catalog?.groups ?? []).filter((g) => cat.cats.includes(g.category || "fast"));
 
-  const toggleCategory = (catKey, on) =>
+  const toggleCategory = (cat, on) =>
     setSelected((prev) => {
       const next = new Set(prev);
-      groupsOf(catKey).forEach((g) => g.cases.forEach((c) => (on ? next.add(c.id) : next.delete(c.id))));
+      groupsOf(cat).forEach((g) => g.cases.forEach((c) => (on ? next.add(c.id) : next.delete(c.id))));
       return next;
     });
 
@@ -249,7 +265,7 @@ export default function TestsPage() {
       {/* Три категории — изначально свёрнуты: health-check / быстрые / live. */}
       <div className="space-y-3">
         {CATEGORIES.map((cat) => {
-          const cgroups = groupsOf(cat.key);
+          const cgroups = groupsOf(cat);
           if (!cgroups.length) return null;
           const cids = cgroups.flatMap((g) => g.cases.map((c) => c.id));
           const catChecked = cids.length > 0 && cids.every((id) => selected.has(id));
@@ -261,7 +277,7 @@ export default function TestsPage() {
                   <input
                     type="checkbox" checked={catChecked}
                     onClick={(e) => e.stopPropagation()}
-                    onChange={(e) => toggleCategory(cat.key, e.target.checked)}
+                    onChange={(e) => toggleCategory(cat, e.target.checked)}
                     className="size-4 accent-brand"
                   />
                   <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-brand/30 to-ocean/20">
