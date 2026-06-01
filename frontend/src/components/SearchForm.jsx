@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import GlassCard from "./ui/GlassCard.jsx";
 import { Field, Input, Select } from "./ui/Field.jsx";
+import { DatePicker } from "./ui/DatePicker.jsx";
 import { staggerContainer, fadeUp, spring } from "../lib/animations.js";
 import {
   DEPARTURE_CITIES, COUNTRIES, OPERATORS, PROVIDERS,
@@ -193,14 +194,14 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
       {/* Даты. В отелях это даты проживания (заезд→выезд) — ими же задаются ночи. */}
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <Field label={isHotels ? "Заезд" : "Дата вылета (от)"} icon={CalendarDays} htmlFor="date_from">
-          <Input
-            id="date_from" name="date_from" type="date" icon min={minDate} value={dateFrom} required
+          <DatePicker
+            id="date_from" name="date_from" icon min={minDate} value={dateFrom}
             onChange={(e) => onFromChange(e.target.value)}
           />
         </Field>
         <Field label={isHotels ? "Выезд" : "Дата вылета (до)"} icon={CalendarDays} htmlFor="date_to">
-          <Input
-            id="date_to" name="date_to" type="date" icon min={dateToMin} max={dateToMax} value={dateTo} required
+          <DatePicker
+            id="date_to" name="date_to" icon min={dateToMin} max={dateToMax} value={dateTo}
             onChange={(e) => onToChange(e.target.value)}
           />
         </Field>
