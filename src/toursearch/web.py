@@ -379,17 +379,43 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
     # ---------------- Автотесты ----------------
     pending: dict[str, list[str]] = {}
 
+    def _category(group: str) -> str:
+        """Категория группы тестов: health-check / live / fast (быстрые)."""
+        g = group.lower()
+        if g.startswith("health"):
+            return "healthcheck"
+        if g.startswith("live"):
+            return "live"
+        return "fast"
+
+    # Порядок прогона/показа категорий: сначала быстрые, потом health-check, потом live.
+    _CAT_ORDER = {"fast": 0, "healthcheck": 1, "live": 2}
+
     def _ordered_groups():
         grouped = REGISTRY.grouped()
-        # группы Live — в конец
-        keys = sorted(grouped, key=lambda g: (g.lower().startswith("live"), g))
+        # сортируем по категории (fast → healthcheck → live), внутри — по имени
+        keys = sorted(grouped, key=lambda g: (_CAT_ORDER[_category(g)], g))
         return [(g, REGISTRY.group_description(g), grouped[g]) for g in keys]
+
+    def _healthcheck_anchors() -> dict[str, list[dict]]:
+        """Якоря health-check обеих площадок (что проверяем и каким селектором)."""
+        from toursearch.providers import get_provider, load_browser_providers
+
+        load_browser_providers()
+        out: dict[str, list[dict]] = {}
+        for name in ("sletat", "tourvisor"):
+            try:
+                anchors = getattr(get_provider(name), "HEALTH_ANCHORS", {}) or {}
+                out[name] = [{"label": k, "selector": v} for k, v in anchors.items()]
+            except Exception:  # noqa: BLE001
+                out[name] = []
+        return out
 
     @app.get("/api/tests/catalog")
     async def api_tests_catalog():
         groups = [
             {
-                "group": g, "description": desc,
+                "group": g, "description": desc, "category": _category(g),
                 "cases": [
                     {"id": c.id, "name": c.name, "live": c.live, "description": c.description}
                     for c in cases
@@ -397,7 +423,11 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
             }
             for g, desc, cases in _ordered_groups()
         ]
-        return {"groups": groups, "total": REGISTRY.count()}
+        return {
+            "groups": groups,
+            "total": REGISTRY.count(),
+            "healthcheck_anchors": _healthcheck_anchors(),
+        }
 
     @app.get("/tests", response_class=HTMLResponse)
     async def tests_page(request: Request):
@@ -408,10 +438,24 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
 
     @app.post("/tests/prepare")
     async def tests_prepare(payload: dict):
-        ids = [i for i in payload.get("ids", []) if REGISTRY.get(i)]
+        req = [i for i in payload.get("ids", []) if REGISTRY.get(i)]
+        cat = lambda i: _category(REGISTRY.get(i).group)  # noqa: E731
+
+        ids = list(req)
+        # Если выбран хоть один health-check — ВСЕГДА сначала гоняем все быстрые тесты
+        # (убедиться, что логика обработки не сломана, прежде чем лезть на сайт).
+        if any(cat(i) == "healthcheck" for i in req):
+            fast_ids = [c.id for c in REGISTRY.cases() if _category(c.group) == "fast"]
+            ids = fast_ids + req
+
+        # Порядок прогона: быстрые → health-check → live; дубликаты убираем (стабильно).
+        seen: set[str] = set()
+        uniq = [i for i in ids if not (i in seen or seen.add(i))]
+        uniq.sort(key=lambda i: _CAT_ORDER[cat(i)])
+
         token = uuid.uuid4().hex
-        pending[token] = ids
-        return {"token": token, "count": len(ids)}
+        pending[token] = uniq
+        return {"token": token, "count": len(uniq)}
 
     @app.get("/tests/stream")
     async def tests_stream(token: str):
