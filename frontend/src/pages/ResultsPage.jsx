@@ -1,19 +1,23 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Trophy, Zap, Turtle, Hotel, Plane, ArrowLeft, ImageIcon,
-  ExternalLink, AlertTriangle, Loader2, Star,
+  Hotel, Plane, ArrowLeft, ImageIcon, ExternalLink, AlertTriangle, Loader2, Star, Trophy,
 } from "lucide-react";
 import GlassCard from "../components/ui/GlassCard.jsx";
 import { staggerContainer, fadeUp } from "../lib/animations.js";
 import { formatPrice, formatDate } from "../lib/format.js";
 
-/** ResultsPage — отчёт сравнения одного прогона (#/run/{id}) в стиле дашборда. */
+/**
+ * ResultsPage — отчёт сравнения одного прогона (#/run/{id}).
+ * Главное содержимое — по КАЖДОЙ площадке таблица «Туроператор / Наименьшая цена /
+ * Скорость», ниже (в режиме «Отели») первые 10 отелей. Без дублирующей сводной
+ * таблицы — сравнение читается из двух карточек рядом.
+ */
 export default function ResultsPage({ runId }) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [shot, setShot] = useState(null); // {src, cap} для модалки скриншота
-  const [zoom, setZoom] = useState(false); // приближён ли скриншот в модалке
+  const [zoom, setZoom] = useState(false); // приближён ли скриншот
 
   useEffect(() => {
     let alive = true;
@@ -36,8 +40,8 @@ export default function ResultsPage({ runId }) {
 
   return (
     <motion.div variants={staggerContainer} initial="hidden" animate="show" className="mx-auto max-w-5xl space-y-5">
-      {/* Заголовок + сводка */}
-      <GlassCard variants={fadeUp} className="p-6">
+      {/* Шапка: маршрут + лучший вариант одной строкой */}
+      <GlassCard variants={fadeUp} className="p-5">
         <div className="flex flex-wrap items-center gap-3">
           <span className="grid size-10 place-items-center rounded-xl bg-gradient-to-br from-brand to-brand-deep shadow-glow">
             {hotels ? <Hotel className="size-5 text-white" /> : <Plane className="size-5 text-white" />}
@@ -61,113 +65,70 @@ export default function ResultsPage({ runId }) {
           </a>
         </div>
 
-        {/* Таблица площадок */}
-        <div className="mt-5 overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wider text-muted">
-                <th className="py-2 pr-3 font-semibold">Площадка</th>
-                <th className="py-2 pr-3 font-semibold">Время</th>
-                <th className="py-2 pr-3 font-semibold">Мин. цена</th>
-                <th className="py-2 pr-3 font-semibold">Лучшее предложение</th>
-                <th className="py-2 font-semibold">Выдача</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.results.map((r) => (
-                <tr key={r.provider} className="border-b border-white/5">
-                  <td className="py-2.5 pr-3 font-semibold capitalize text-ink">{r.provider}</td>
-                  <td className="py-2.5 pr-3 tabular-nums text-muted">{r.success ? `${r.duration_seconds.toFixed(1)} с` : "—"}</td>
-                  <td className="py-2.5 pr-3 font-semibold tabular-nums text-ink">{r.cheapest ? formatPrice(r.cheapest.price, r.cheapest.currency) : "—"}</td>
-                  <td className="py-2.5 pr-3">
-                    {r.success ? (
-                      <span className="text-ink">{r.cheapest ? r.cheapest.label : "нет результатов"}</span>
-                    ) : (
-                      <span className="text-rose-300">{r.error || "ошибка"}</span>
-                    )}
-                  </td>
-                  <td className="py-2.5">
-                    <div className="flex items-center gap-3">
-                      {r.screenshot_path ? (
-                        <button
-                          type="button"
-                          onClick={() => { setZoom(false); setShot({ src: `/${r.screenshot_path}`, cap: `${r.provider} — выдача` }); }}
-                          className="flex items-center gap-1 text-ocean transition-colors hover:text-brand-soft"
-                        >
-                          <ImageIcon className="size-3.5" /> скриншот
-                        </button>
-                      ) : (
-                        <span className="text-muted">—</span>
-                      )}
-                      {r.search_url && (
-                        <a href={r.search_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-ocean transition-colors hover:text-brand-soft">
-                          <ExternalLink className="size-3.5" /> поиск
-                        </a>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Итоги */}
-        <div className="mt-4 flex flex-wrap gap-2">
-          {data.best && (
-            <Badge tone="best" icon={Trophy}>
-              Лучшее: {formatPrice(data.best.price)} — {data.best.label} ({data.best.provider})
-            </Badge>
-          )}
-          {data.fastest_provider && (
-            <Badge tone="info" icon={Zap}>Быстрее всех: {data.fastest_provider}</Badge>
-          )}
-          {data.slowest_provider && data.slowest_provider !== data.fastest_provider && (
-            <Badge tone="muted" icon={Turtle}>Медленнее: {data.slowest_provider}</Badge>
-          )}
-        </div>
+        {data.best && (
+          <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-500/15 px-3 py-1.5 text-sm font-semibold text-emerald-200">
+            <Trophy className="size-4" /> Лучшее: {formatPrice(data.best.price)} — {data.best.label} ({data.best.provider})
+          </div>
+        )}
       </GlassCard>
 
-      {/* Детальные карточки площадок */}
+      {/* По каждой площадке: операторы (3 колонки) + первые 10 отелей */}
       <div className="grid gap-5 md:grid-cols-2">
         {data.results.map((r) => (
           <GlassCard key={r.provider} variants={fadeUp} className="p-5">
-            <h3 className="mb-3 flex items-center gap-2 text-base font-bold text-white">
-              <span className="capitalize">{r.provider}</span>
-              {r.success && <span className="text-xs font-normal text-muted">({r.duration_seconds.toFixed(1)} с)</span>}
-            </h3>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <h3 className="text-base font-bold capitalize text-white">{r.provider}</h3>
+              {r.success && <span className="text-xs text-muted">{r.duration_seconds.toFixed(1)} с</span>}
+              <div className="ml-auto flex items-center gap-3 text-xs">
+                {r.screenshot_path && (
+                  <button
+                    type="button"
+                    onClick={() => { setZoom(false); setShot({ src: `/${r.screenshot_path}`, cap: `${r.provider} — выдача` }); }}
+                    className="flex items-center gap-1 text-ocean transition-colors hover:text-brand-soft"
+                  >
+                    <ImageIcon className="size-3.5" /> скриншот
+                  </button>
+                )}
+                {r.search_url && (
+                  <a href={r.search_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-ocean transition-colors hover:text-brand-soft">
+                    <ExternalLink className="size-3.5" /> поиск
+                  </a>
+                )}
+              </div>
+            </div>
+
             {!r.success ? (
               <p className="text-sm text-rose-300">⚠️ {r.error || "поиск не дал результатов"}</p>
             ) : (
               <div className="space-y-4">
-                {r.hotel_offers.length > 0 && (
+                {r.operator_offers?.length > 0 ? (
                   <ProviderTable
-                    head={["Отель", "★", "Рейтинг", "Цена"]}
-                    rows={r.hotel_offers.map((h) => [
-                      h.hotel_name,
-                      h.stars ? <Stars n={h.stars} /> : "—",
-                      h.rating ?? "—",
-                      formatPrice(h.price, h.currency),
+                    head={["Туроператор", "Наименьшая цена", "Скорость"]}
+                    emphasizeCol={1}
+                    rows={r.operator_offers.map((o) => [
+                      o.operator,
+                      formatPrice(o.price, o.currency),
+                      o.load_seconds != null ? `${o.load_seconds} с` : "—",
                     ])}
                   />
+                ) : (
+                  <p className="text-sm text-muted">Предложений по операторам не найдено.</p>
                 )}
-                {r.operator_offers?.length > 0 && (
+
+                {r.hotel_offers?.length > 0 && (
                   <div>
                     <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted">
-                      Туроператоры
+                      Отели (первые 10)
                     </h4>
                     <ProviderTable
-                      head={["Оператор", "Цена", "Скорость"]}
-                      rows={r.operator_offers.map((o) => [
-                        o.operator,
-                        formatPrice(o.price, o.currency),
-                        o.load_seconds != null ? `${o.load_seconds} с` : "—",
+                      head={["Отель", "★", "Цена"]}
+                      rows={r.hotel_offers.slice(0, 10).map((h) => [
+                        h.hotel_name,
+                        h.stars ? <Stars n={h.stars} /> : "—",
+                        formatPrice(h.price, h.currency),
                       ])}
                     />
                   </div>
-                )}
-                {r.hotel_offers.length === 0 && (r.operator_offers?.length ?? 0) === 0 && (
-                  <p className="text-sm text-muted">Предложений не найдено.</p>
                 )}
               </div>
             )}
@@ -204,7 +165,8 @@ export default function ResultsPage({ runId }) {
   );
 }
 
-function ProviderTable({ head, rows }) {
+function ProviderTable({ head, rows, emphasizeCol }) {
+  const emph = emphasizeCol ?? head.length - 1; // какую колонку выделить (по умолчанию последнюю)
   return (
     <div className="max-h-80 overflow-y-auto">
       <table className="w-full text-sm">
@@ -217,7 +179,7 @@ function ProviderTable({ head, rows }) {
           {rows.map((cells, i) => (
             <tr key={i} className="border-b border-white/5">
               {cells.map((c, j) => (
-                <td key={j} className={`py-1.5 pr-3 ${j === cells.length - 1 ? "font-semibold tabular-nums text-ink" : "text-muted"}`}>{c}</td>
+                <td key={j} className={`py-1.5 pr-3 ${j === emph ? "font-semibold tabular-nums text-ink" : "text-muted"}`}>{c}</td>
               ))}
             </tr>
           ))}
@@ -231,19 +193,6 @@ function Stars({ n }) {
   return (
     <span className="inline-flex items-center gap-0.5 text-amber-300">
       {Array.from({ length: n }).map((_, i) => <Star key={i} className="size-3 fill-current" />)}
-    </span>
-  );
-}
-
-function Badge({ tone, icon: Icon, children }) {
-  const tones = {
-    best: "border-emerald-400/30 bg-emerald-500/15 text-emerald-200",
-    info: "border-brand/30 bg-brand/15 text-brand-soft",
-    muted: "border-white/10 bg-white/[0.04] text-muted",
-  };
-  return (
-    <span className={`flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold ${tones[tone]}`}>
-      <Icon className="size-3.5" /> {children}
     </span>
   );
 }
