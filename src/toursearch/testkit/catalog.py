@@ -1332,7 +1332,8 @@ from toursearch.providers.sletat import SletatProvider as _SletatProv  # noqa: E
 from toursearch.providers.sletat import _parse_price as _sl_pp  # noqa: E402
 
 _sl = _SletatProv(headless=True)
-_RESULTS_PAGE = {"page": None}
+_RESULTS_PAGE = {"page": None, "params": None}
+_RESULTS_HOTELS = {"page": None, "params": None}
 
 
 async def _results_page():
@@ -1340,17 +1341,43 @@ async def _results_page():
     if p is not None and not p.is_closed():
         return p
     from datetime import date, timedelta
+    df = date.today() + timedelta(days=21)
+    dt = df + timedelta(days=7)
     page = await get_session("results-tours").page()
     await _sl._select_departure_city(page, "Москва")
     await _sl._select_country(page, "Турция")
-    df = date.today() + timedelta(days=21)
-    await _sl._select_dates(page, df, df + timedelta(days=7))
+    await _sl._select_dates(page, df, dt)
     await _sl._set_nights(page, 7, 10)
     await _sl._select_tourists(page, 2, [])
     await _sl._click_search(page)
     await _sl._ensure_panel_open(page)   # блинчик открыть сразу — для проверок операторов
     await _sl._wait_for_completion(page)
+    _RESULTS_PAGE["params"] = SearchParams(
+        departure_city="Москва", destination_country="Турция",
+        date_from=df, date_to=dt, nights_min=7, nights_max=10, adults=2)
     _RESULTS_PAGE["page"] = page
+    return page
+
+
+async def _results_hotels_page():
+    p = _RESULTS_HOTELS["page"]
+    if p is not None and not p.is_closed():
+        return p
+    from datetime import date, timedelta
+    df = date.today() + timedelta(days=21)
+    dt = df + timedelta(days=7)
+    page = await get_session("results-hotels").page()
+    await _sl._switch_to_hotels(page)
+    await _sl._select_country(page, "Турция")
+    await _sl._select_dates(page, df, dt)
+    await _sl._select_tourists(page, 2, [])
+    await _sl._click_search(page)
+    await _sl._ensure_panel_open(page)
+    await _sl._wait_for_completion(page)
+    _RESULTS_HOTELS["params"] = SearchParams(
+        departure_city="Москва", destination_country="Турция",
+        date_from=df, date_to=dt, nights_min=7, nights_max=10, adults=2, search_mode="hotels")
+    _RESULTS_HOTELS["page"] = page
     return page
 
 
@@ -1626,3 +1653,79 @@ _reg(GUI16, [
     (_ho_meals, "питание доступно", "Выбор питания доступен в «Отелях»."),
     (_ho_search, "кнопка поиска присутствует", "Кнопка запуска есть и в режиме «Отели»."),
 ], "⏱ Live UI: форма «Отели» Sletat (без перелёта) — скрытие города/ночей, доступность страны/звёзд/питания/кнопки.")
+
+
+# --- Группа: Выдача — отели (сессия RESULTS-HOTELS) ---
+GUI17 = "Live: Выдача — отели"
+
+
+async def _hres_cards():
+    page = await _results_hotels_page()
+    _assert(await page.locator(".search-result__list-item").count() > 0, "нет карточек отелей")
+
+
+async def _hres_parse():
+    page = await _results_hotels_page()
+    hotels = await _sl._parse_hotels(page)
+    _assert(len(hotels) >= 3, f"мало распарсенных отелей: {len(hotels)}")
+    _assert(all(h.hotel_name and h.price > 0 for h in hotels), "у отеля пустое имя или цена ≤ 0")
+
+
+async def _hres_price_sane():
+    page = await _results_hotels_page()
+    # сортируем отели по цене, чтобы дешёвый отель попал на первую страницу карточек
+    # (по умолчанию сортировка по популярности → мин. карточки ≠ глобальный минимум).
+    try:
+        await page.click(
+            "xpath=//li[contains(@class,'uis-button-group__button') and normalize-space(text())='Цена']",
+            timeout=5000,
+        )
+        await page.wait_for_timeout(2500)
+    except Exception:
+        pass
+    hotels = await _sl._parse_hotels(page)
+    blink = await _sl._parse_blinchik(page)
+    ops = sl_ops("sletat", blink["priced"])
+    _assert(hotels and ops, "нет отелей или операторов для сверки цены")
+    mh = min(h.price for h in hotels)
+    mo = min(o.price for o in ops)
+    ratio = max(mh, mo) / min(mh, mo)
+    _assert(ratio < 3, f"мин. цена отеля и оператора расходятся в {float(ratio):.1f}x — возможен хвост «N тур» в цене (отель={mh}, оператор={mo})")
+
+
+async def _hres_stars():
+    page = await _results_hotels_page()
+    hotels = await _sl._parse_hotels(page)
+    _assert(any(h.stars for h in hotels), "ни у одного отеля не распарсились звёзды")
+
+
+_reg(GUI17, [
+    (_hres_cards, "карточки отелей присутствуют", "В режиме «Отели» поиск даёт карточки отелей."),
+    (_hres_parse, "отели парсятся (имя + цена)", "Распарсенные отели имеют непустое имя и цену > 0."),
+    (_hres_price_sane, "цена отеля без хвоста «N тур»", "Мин. цена отеля сопоставима с мин. ценой оператора (регресс: раньше цена отеля была ~10× из-за склеенного счётчика туров)."),
+    (_hres_stars, "звёзды отелей парсятся", "Хотя бы у части отелей определяется звёздность."),
+], "⏱ Live UI: выдача ОТЕЛЕЙ Sletat — карточки, парсинг (имя/цена/звёзды), цена без хвоста «N тур» (один прогон в режиме «Отели»).")
+
+
+# --- Группа: Состояние формы (URL результата) ---
+GUI18 = "Live: Состояние формы (URL)"
+
+
+async def _url_tours():
+    page = await _results_page()
+    params = _RESULTS_PAGE["params"]
+    probs = verify_sletat_search_url(page.url, params)
+    _assert(not probs, f"URL туров не совпал с параметрами формы: {probs}")
+
+
+async def _url_hotels():
+    page = await _results_hotels_page()
+    params = _RESULTS_HOTELS["params"]
+    probs = verify_sletat_search_url(page.url, params)
+    _assert(not probs, f"URL отелей не совпал с параметрами формы: {probs}")
+
+
+_reg(GUI18, [
+    (_url_tours, "URL результата (туры) = параметры формы", "После поиска URL Sletat кодирует ровно заданные параметры (город/страна/ночи/туристы/даты) — сверка verify_sletat_search_url без расхождений."),
+    (_url_hotels, "URL результата (отели) = параметры формы", "В режиме «Отели» URL соответствует параметрам (ночи/дату выезда сверка не проверяет — это by design)."),
+], "⏱ Live UI: персистенция формы Sletat — URL выдачи кодирует заданные параметры (защита от «виджет показал одно, ушло другое»).")
