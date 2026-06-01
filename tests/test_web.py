@@ -72,6 +72,40 @@ def test_api_runs_and_run_detail(tmp_path):
     assert client.get("/api/runs/999999").status_code == 404
 
 
+def test_search_prepare_rejects_bad_price_gracefully(tmp_path):
+    # Регрессия: нечисловая «Макс. цена» роняла /search/prepare в 500 — Decimal('abc')
+    # бросает InvalidOperation, а это НЕ ValueError, поэтому except его не ловил.
+    # Теперь мусор в цене → None (фильтр просто не применяется), запрос принят.
+    client = TestClient(create_app(db_path=str(tmp_path / "w.db")))
+    common = {
+        "mode": "tours", "departure_city": "Москва", "destination_country": "Турция",
+        "date_from": "2026-07-01", "date_to": "2026-07-08",
+        "nights_min": "7", "nights_max": "10", "adults": "2",
+    }
+    resp = client.post("/search/prepare", data={**common, "price_max": "не число"})
+    assert resp.status_code == 200
+    assert "token" in resp.json(), resp.json()
+
+    # «12 000 ₽» — допустимый ввод с разделителями/символом валюты: тоже принимается.
+    resp = client.post("/search/prepare", data={**common, "price_max": "12 000 ₽"})
+    assert resp.status_code == 200 and "token" in resp.json()
+
+    # Кривые даты не валят сервер, а возвращают понятную ошибку.
+    resp = client.post("/search/prepare", data={**common, "date_from": "oops"})
+    assert resp.status_code == 200 and "error" in resp.json()
+
+
+def test_api_refdata(tmp_path):
+    # Справочники формы отдаются бэкендом (единый источник правды; фронт берёт их отсюда).
+    client = TestClient(create_app(db_path=str(tmp_path / "w.db")))
+    rd = client.get("/api/refdata").json()
+    assert "Москва" in rd["departure_cities"]
+    assert "Турция" in rd["countries"]
+    assert isinstance(rd["operators"], list) and rd["operators"]
+    assert "sletat" in rd["providers"] and "tourvisor" in rd["providers"]
+    assert rd["max_date_span_days"] == 13
+
+
 def test_api_tests_catalog(tmp_path):
     client = TestClient(create_app(db_path=str(tmp_path / "w.db")))
     cat = client.get("/api/tests/catalog").json()

@@ -27,7 +27,12 @@ from toursearch.providers.sletat import _OPERATOR_MAP as SL_OPS
 from toursearch.providers.sletat import build_hotel_offers as sl_hotels
 from toursearch.providers.sletat import build_operator_offers as sl_ops
 from toursearch.providers.tourvisor import _OPERATOR_MAP as TV_OPS
-from toursearch.providers.tourvisor import _parse_price, _split_name_stars, build_hotel_offers as tv_hotels
+from toursearch.providers.tourvisor import (
+    _parse_price,
+    _split_name_stars,
+    build_hotel_offers as tv_hotels,
+    filter_offers_by_operators as tv_filter,
+)
 from toursearch.providers.tourvisor import build_offers as tv_ops
 from toursearch.reporting import format_price, format_report
 from toursearch.storage import Storage
@@ -284,6 +289,25 @@ for base, wrong, field in [
     add(G, f"{field} пойман", (lambda b=base, w=wrong, f=field: _assert(any(x == f for x, _, _ in verify_tourvisor_search_url(_tv_url(b), w)))))
 
 
+# ===================== 7b. Tourvisor: фильтр операторов =====================
+G = "Tourvisor: фильтр операторов"
+
+
+def _tv_ofs(*names):
+    return [Offer(provider="tourvisor", operator=n, price=Decimal("100000")) for n in names]
+
+
+add(G, "пустой запрос — все офферы", lambda: _assert(len(tv_filter(_tv_ofs("Anex", "Biblioglobus"), [])) == 2))
+add(G, "оставляет только запрошенного", lambda: _assert([o.operator for o in tv_filter(_tv_ofs("Anex", "Biblioglobus", "Coral"), ["anex"])] == ["Anex"]))
+add(G, "отбрасывает дефолтный Biblioglobus", lambda: _assert("Biblioglobus" not in [o.operator for o in tv_filter(_tv_ofs("Anex", "Biblioglobus"), ["anex"])]))
+add(G, "алиас Спектрум→Spectrum", lambda: _assert([o.operator for o in tv_filter(_tv_ofs("Spectrum", "Anex"), ["спектрум"])] == ["Spectrum"]))
+add(G, "регион: Coral не цепляет Coral (BY)", lambda: _assert([o.operator for o in tv_filter(_tv_ofs("Coral", "Coral Travel (BY)"), ["coral"])] == ["Coral"]))
+add(G, "вхождение: 'Coral Travel' матчит coral", lambda: _assert([o.operator for o in tv_filter(_tv_ofs("Coral Travel", "Anex"), ["coral"])] == ["Coral Travel"]))
+add(G, "funsun→FUN&SUN (TUI)", lambda: _assert([o.operator for o in tv_filter(_tv_ofs("FUN&SUN (TUI)", "Anex"), ["funsun"])] == ["FUN&SUN (TUI)"]))
+add(G, "несколько операторов сразу", lambda: _assert({o.operator for o in tv_filter(_tv_ofs("Anex", "Pegas Touristik", "Biblioglobus"), ["anex", "pegas"])} == {"Anex", "Pegas Touristik"}))
+add(G, "запрошен отсутствующий → пусто", lambda: _assert(tv_filter(_tv_ofs("Biblioglobus", "Anex"), ["myholidays"]) == []))
+
+
 # ============================ 8. Сверка формы: матчеры ============================
 G = "Сверка формы: матчеры"
 add(G, "norm схлопывает пробелы", lambda: _assert(norm("  Турция \n ") == "турция"))
@@ -454,6 +478,7 @@ _GROUP_DESC = {
     "URL Tourvisor: разбор": "Разбор URL результата Tourvisor (/tours/...): страна, город, ночи, взрослые, даты.",
     "URL Tourvisor: сверка совпадает": "Корректный URL Tourvisor сверяется с теми же параметрами без расхождений.",
     "URL Tourvisor: детект расхождений": "Подмена поля → сверка URL Tourvisor ловит расхождение.",
+    "Tourvisor: фильтр операторов": "Проверяют подстраховку корректности: из выдачи Tourvisor остаются только запрошенные операторы (с алиасами и учётом региона BY/KZ/UZ), даже если фильтр на сайте не применился — иначе «самое дешёвое» могло прийти от лишнего/дефолтного оператора (Biblioglobus).",
     "Сверка формы: матчеры": "Проверяют вспомогательные функции сверки значений формы (нормализация текста, сравнение множеств операторов без лишних).",
     "Маппинги: операторы/питание": "Проверяют таблицы соответствия: ключи операторов и коды питания корректно мапятся на подписи сайтов.",
     "Отчёт": "Проверяют формирование текстового отчёта сравнения (лучший/худший, площадки, режим).",

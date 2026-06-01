@@ -270,18 +270,25 @@ class Storage:
             results=results,
         )
 
-    def list_runs(self, limit: int = 50) -> list[RunSummary]:
-        """Список последних прогонов (свежие сверху) с краткой сводкой."""
+    def list_reports(self, limit: int = 50) -> list[tuple[int, ComparisonReport]]:
+        """Последние прогоны (свежие сверху) как (run_id, полный отчёт).
+
+        Единый проход чтения: и краткая история, и JSON для дашборда строятся из
+        этого, чтобы не реконструировать один и тот же прогон по нескольку раз.
+        """
         rows = self._conn.execute(
             "SELECT id FROM runs ORDER BY datetime(run_at) DESC, id DESC LIMIT ?", (limit,)
         ).fetchall()
+        return [(row["id"], self.get_report(row["id"])) for row in rows]
+
+    def list_runs(self, limit: int = 50) -> list[RunSummary]:
+        """Список последних прогонов (свежие сверху) с краткой сводкой."""
         summaries: list[RunSummary] = []
-        for row in rows:
-            report = self.get_report(row["id"])
+        for run_id, report in self.list_reports(limit=limit):
             cheapest = report.cheapest
             summaries.append(
                 RunSummary(
-                    run_id=row["id"],
+                    run_id=run_id,
                     run_at=report.run_at,
                     cheapest_label=cheapest.label if cheapest else None,
                     cheapest_price=cheapest.price if cheapest else None,

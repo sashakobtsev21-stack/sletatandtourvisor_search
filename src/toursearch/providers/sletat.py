@@ -797,5 +797,5 @@ class SletatProvider:
     async def _safe_screenshot(self, page: Page) -> str | None:
         # Верхняя часть страницы во всю ширину (форма + «нашли N туров» + первые
         # результаты), но не вся бесконечная лента — так скриншот информативен и читабелен.
-        path = f"screenshots/sletat_{datetime.now():%Y%m%d_%H%M%S}.png"
+        path = f"screenshots/sletat_{datetime.now():%Y%m%d_%H%M%S_%f}.png"
         return await _capture_top(page, path)

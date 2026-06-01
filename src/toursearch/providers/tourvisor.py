@@ -68,6 +68,52 @@ def _operator_norm(s: str) -> str:
     import re as _re
     return _re.sub(r"[^a-zа-я0-9]", "", (s or "").lower())
 
+
+def _op_core(s: str) -> str:
+    """Ядро имени оператора: нижний регистр, без скобок/«and»/«и» и не-буквоцифр.
+    Зеркало JS-нормализации из `_select_operators` — чтобы матчинг был идентичным."""
+    s = (s or "").lower()
+    s = re.sub(r"\(.*?\)", "", s)
+    s = re.sub(r"\band\b|\bи\b", "", s)
+    return re.sub(r"[^a-zа-я0-9]", "", s, flags=re.IGNORECASE)
+
+
+def _op_region(s: str) -> str:
+    """Региональный суффикс оператора (BY/KZ/UZ) — чтобы не путать клоны
+    («Coral» ↔ «Coral Travel (BY)»). Зеркало JS-логики из `_select_operators`."""
+    m = re.search(r"\((BY|KZ|UZ)\)", s or "", re.IGNORECASE)
+    return m.group(1).lower() if m else ""
+
+
+def filter_offers_by_operators(offers: list[Offer], operators: list[str]) -> list[Offer]:
+    """Оставить только офферы ЗАПРОШЕННЫХ операторов (region-aware + алиасы).
+
+    Подстраховка корректности: на Tourvisor фильтр операторов best-effort и НЕ
+    верифицируется (ни форма, ни URL-сверка его не покрывают). Если фильтр на сайте не
+    применился, в выдаче остаются лишние операторы (в т.ч. промо-дефолт Biblioglobus) —
+    тогда «самое дешёвое» могло прийти от НЕзапрошенного оператора и сравнение стало бы
+    неверным. Поэтому отбрасываем всё, что не входит в запрос. Пустой запрос = без фильтра.
+    Матчинг идентичен выбору в `_select_operators` (алиас → ядро → регион → вхождение).
+    """
+    if not operators:
+        return offers
+    wanted = []
+    for o in operators:
+        name = _TV_OPERATOR_ALIASES.get(_operator_norm(o), o)
+        wanted.append((_op_core(name), _op_region(name)))
+
+    def matches(op_name: str) -> bool:
+        bc, br = _op_core(op_name), _op_region(op_name)
+        for wc, wr in wanted:
+            if not wc or br != wr:
+                continue
+            if bc == wc or (bc and (wc in bc or bc in wc)):
+                return True
+        return False
+
+    return [o for o in offers if matches(o.operator)]
+
+
 # Подписи городов вылета на Tourvisor сокращённые и отличаются от Sletat.
 _DEPARTURE_MAP = {
     "Санкт-Петербург": "С.Петербург",
@@ -210,6 +256,8 @@ class TourvisorProvider:
                         op_raw = await self._parse_operators(page)
                     except Exception:
                         op_raw = []
+                    if params.operators:
+                        op_raw = filter_offers_by_operators(op_raw, params.operators)
                     operator_offers = self._to_operator_offers(op_raw, hotel_offers)
                     shot = await self._safe_screenshot(page)
                     return ProviderResult(
@@ -246,6 +294,14 @@ class TourvisorProvider:
                 search_url = page.url
                 url_problems = verify_tourvisor_search_url(search_url, params)
                 offers = await self._parse_operators(page)
+                # Фильтр операторов на сайте не верифицируется (см. filter_offers_by_operators):
+                # оставляем строго запрошенных, иначе «дешёвое» могло прийти от лишнего оператора.
+                if params.operators:
+                    kept = filter_offers_by_operators(offers, params.operators)
+                    if len(kept) != len(offers):
+                        log.info("Tourvisor: фильтр операторов неточен — оставляю %d из %d по запросу",
+                                 len(kept), len(offers))
+                    offers = kept
                 if url_problems:
                     return ProviderResult(
                         provider=self.name, success=False,
@@ -770,29 +826,42 @@ class TourvisorProvider:
     # --- ожидание и парсинг ---
 
     async def _wait_for_completion(self, page: Page, timeout_s: int = 120) -> None:
-        """Ждать полного завершения поиска.
+        """Ждать завершения поиска.
 
-        Сигнал (см. RESULTS.md): прогресс достигает «100%» и `.TVProgressBar`
-        становится невидимым, а число `.TVResultItem` стабилизируется. Спиннеры
-        в счёт не идут (это ленивые картинки).
+        Сигнал (см. RESULTS.md): `.TVProgressBar` виден на старте и СКРЫВАЕТСЯ по
+        завершении, после чего число `.TVResultItem` стабилизируется. Спиннеры в счёт
+        не идут (ленивые картинки).
+
+        ВАЖНО: поиск может завершиться и с НУЛЁМ результатов — тогда `.TVResultItem`
+        не появится никогда. Поэтому НЕЛЬЗЯ просто висеть в `wait_for_selector(.TVResultItem)`
+        весь таймаут (раньше пустая выдача держала ~120 c): ориентир — прогресс-бар.
         """
+        # 1) старт: прогресс-бар стал видим (поиск реально пошёл)
         try:
-            await page.wait_for_selector(".TVResultItem", timeout=timeout_s * 1000)
+            await page.wait_for_selector(".TVProgressBar", state="visible", timeout=20_000)
+            started = True
         except PWTimeout:
-            return
+            # бар не показался — возможно, результаты появились мгновенно или поиск
+            # не стартовал; не висим, сразу к стабилизации счётчика
+            started = False
+        # 2) завершение: прогресс-бар скрылся — надёжно и для пустой выдачи
+        if started:
+            try:
+                await page.wait_for_selector(".TVProgressBar", state="hidden", timeout=timeout_s * 1000)
+            except PWTimeout:
+                pass
+        # 3) стабилизация числа карточек (часть догружается чуть позже бара); count==0 = честно пусто
         deadline = time.monotonic() + timeout_s
         last_count, stable = -1, 0
         while time.monotonic() < deadline:
             await page.wait_for_timeout(1000)
             try:
-                progress_visible = await page.locator(".TVProgressBar").first.is_visible()
+                count = await page.locator(".TVResultItem").count()
             except Exception:
-                progress_visible = False
-            count = await page.locator(".TVResultItem").count()
+                count = 0
             stable = stable + 1 if count == last_count else 0
             last_count = count
-            # завершено: прогресс скрыт и результаты не меняются ~3 c
-            if not progress_visible and stable >= 3 and count > 0:
+            if stable >= 2:
                 return
 
     async def _parse_hotels(self, page: Page) -> list[HotelOffer]:
@@ -874,5 +943,5 @@ class TourvisorProvider:
     async def _safe_screenshot(self, page: Page) -> str | None:
         # Верхняя часть страницы во всю ширину (форма + «нашлось N» + первые
         # результаты), но не вся бесконечная лента — информативно и читабельно.
-        path = f"screenshots/tourvisor_{datetime.now():%Y%m%d_%H%M%S}.png"
+        path = f"screenshots/tourvisor_{datetime.now():%Y%m%d_%H%M%S_%f}.png"
         return await _capture_top(page, path)
