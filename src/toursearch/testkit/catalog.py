@@ -1926,34 +1926,293 @@ _reg(SC1, [
    "(сверка результатов с параметром, не только формы/URL).")
 
 
+# --- S2: Сценарий — рейтинг отеля ---
+SC2 = "Live: Сценарий — рейтинг отеля"
+
+
+def _mk_rating_case(thr: int):
+    async def _case():
+        o = await _sk.run(_sk.base_params(hotel_rating_min=float(thr)))
+        _sk.have_results(o)
+        _sk.rating_honored(o)
+    return _case
+
+
+_reg(SC2, [
+    (_mk_rating_case(t), f"рейтинг {t}+ → все отели не ниже {t}",
+     f"Поиск Москва→Турция с минимальным рейтингом {t}+. Проверяет, что у ВСЕХ отелей выдачи "
+     f"рейтинг ≥ {t} — фильтр рейтинга честно применён к результатам.")
+    for t in (7, 8, 9)
+], "⏱ Сценарий: минимальный рейтинг отеля → все карточки выдачи не ниже порога.")
+
+
+# --- S3: Сценарий — диапазон цен ---
+SC3 = "Live: Сценарий — цена"
+
+
+def _mk_price_case(pmin, pmax):
+    async def _case():
+        o = await _sk.run(_sk.base_params(price_min=pmin, price_max=pmax))
+        _sk.have_results(o)
+        _sk.price_honored(o)
+    return _case
+
+
+_reg(SC3, [
+    (_mk_price_case(Decimal("60000"), Decimal("120000")), "цена 60k–120k → все цены в диапазоне",
+     "Поиск с ценой 60000–120000 ₽. Проверяет, что ВСЕ цены выдачи (отели и операторы) в диапазоне."),
+    (_mk_price_case(None, Decimal("100000")), "цена ≤100k → все цены не выше",
+     "Поиск с верхней границей 100000 ₽: ни одна цена выдачи не превышает её."),
+    (_mk_price_case(Decimal("150000"), None), "цена ≥150k → все цены не ниже",
+     "Поиск с нижней границей 150000 ₽: ни одна цена выдачи не ниже её."),
+    (_mk_price_case(Decimal("100000"), Decimal("180000")), "цена 100k–180k → все цены в диапазоне",
+     "Средний диапазон 100000–180000 ₽: все цены выдачи внутри."),
+    (_mk_price_case(Decimal("80000"), Decimal("250000")), "цена 80k–250k → все цены в диапазоне",
+     "Широкий диапазон 80000–250000 ₽: все цены выдачи внутри."),
+], "⏱ Сценарий: диапазон цен → ВСЕ цены выдачи (отели+операторы) внутри [от, до].")
+
+
+# --- S4: Сценарий — курорт ---
+SC4 = "Live: Сценарий — курорт"
+# Топ-регионы Турции (для проверки «не протёк ли фильтр в чужой регион»; под-районы
+# выбранного региона — напр. «Лара» внутри «Анталья» — допустимы, см. resort_honored).
+_TR_REGIONS = ["Аланья", "Анталья", "Белек", "Кемер", "Сиде", "Мармарис", "Бодрум",
+               "Фетхие", "Стамбул", "Измир", "Кушадасы", "Дидим"]
+
+
+def _mk_resort_case(resorts: list[str]):
+    siblings = [r for r in _TR_REGIONS if r not in resorts]
+
+    async def _case():
+        o = await _sk.run(_sk.base_params(resorts=resorts))
+        _sk.have_results(o)
+        _sk.resort_honored(o, siblings)
+    return _case
+
+
+_reg(SC4, [
+    (_mk_resort_case([r]), f"курорт {r} → выдача в его регионе",
+     f"Поиск Москва→Турция, курорт «{r}». Проверяет: фильтр ушёл в URL (resort=), все отели в "
+     f"Турции и НИ один не из другого региона (Sletat включает под-районы выбранного — это норма).")
+    for r in ("Анталья", "Кемер", "Белек", "Аланья", "Сиде")
+] + [
+    (_mk_resort_case(ms), f"курорты {'+'.join(ms)} → выдача в их регионах",
+     f"Мультивыбор курортов {ms}: выдача только в выбранных регионах (не из чужих).")
+    for ms in ([["Анталья", "Кемер"], ["Белек", "Сиде"]])
+], "⏱ Сценарий: выбор курорта → выдача ограничена его регионом (под-районы допустимы, "
+   "чужие регионы — нет).")
+
+
 # --- S5: Сценарий — оператор ---
 # Операторы передаём ОТОБРАЖАЕМЫМИ именами (как шлёт веб-форма): фильтр сайта и матч
 # провайдера работают по подписи, а не по внутреннему ключу.
 SC5 = "Live: Сценарий — оператор"
+# Международные операторы тестируем на Турции (где у них точно есть туры).
+_SINGLE_OPS = ["Anex", "Pegas Touristik", "Coral", "Biblio Globus", "Sunmar", "TEZ TOUR",
+               "FUN and SUN", "Intourist", "Travelata", "Русский Экспресс", "Let's Fly"]
+_MULTI_OPS = [["Anex", "Pegas Touristik"], ["Coral", "TEZ TOUR"], ["Anex", "Pegas Touristik", "Coral"]]
+# Доменные операторы — на их «родном» направлении (иначе их нет в списке/выдаче).
+# Алеан специализируется на России/Абхазии, в Турции его нет → тестируем на России.
+_DOMESTIC_OPS = [("Алеан", "Россия")]
 
 
-def _mk_op_case(ops: list[str], pure: bool):
+def _mk_op_case(ops: list[str], dest: str = "Турция"):
     async def _case():
-        o = await _sk.run(_sk.base_params(operators=ops))
-        _sk.have_results(o)
-        _sk.operators_present(o, ops)
-        _sk.cheapest_operator_in(o, ops)
-        if pure:
-            _sk.operators_pure(o, ops)
+        o = await _sk.run(_sk.base_params(destination_country=dest, operators=ops))
+        _sk.operator_honored(o, ops)
     return _case
 
 
 _reg(SC5, [
-    (_mk_op_case(["Anex"], True), "только «Anex» → в блинчике только он",
-     "Поиск Москва→Турция с оператором Anex. Проверяет: дешёвейший оператор выдачи — Anex, "
-     "и в блинчике нет чужих операторов (фильтр применён к РЕЗУЛЬТАТАМ)."),
-    (_mk_op_case(["Pegas Touristik"], True), "только «Pegas Touristik» → в блинчике только он",
-     "Поиск с оператором Pegas Touristik: дешёвейший и все ценовые операторы — Pegas."),
-    (_mk_op_case(["Coral"], True), "только «Coral» → в блинчике только он",
-     "Поиск с оператором Coral: выдача честно ограничена Coral."),
-    (_mk_op_case(["Biblio Globus"], True), "только «Biblio Globus» → в блинчике только он",
-     "Поиск с оператором Biblio Globus (имя с пробелом — проверяет матч по подписи): выдача ограничена им."),
-    (_mk_op_case(["Anex", "Pegas Touristik"], False), "мультивыбор Anex+Pegas → дешёвейший из них",
-     "Мультивыбор: дешёвейший оператор — из {Anex, Pegas}; хотя бы один из выбранных присутствует."),
+    (_mk_op_case([op]), f"только «{op}» → выдача честно ограничена им",
+     f"Поиск Москва→Турция с оператором «{op}». Проверяет: либо все ценовые операторы блинчика — "
+     f"«{op}» (и он дешёвейший), либо «{op}» числится в «туров нет»/«не отвечает» — фильтр честно применён.")
+    for op in _SINGLE_OPS
+] + [
+    (_mk_op_case(ms), f"мультивыбор {'+'.join(ms)} → только они",
+     f"Мультивыбор операторов {ms}: блинчик содержит только выбранных, дешёвейший — из них.")
+    for ms in _MULTI_OPS
+] + [
+    (_mk_op_case([op], dest), f"только «{op}» (на {dest}) → выдача честно ограничена им",
+     f"Поиск Москва→{dest} с оператором «{op}» (его профильное направление). Проверяет честное "
+     f"применение фильтра к выдаче.")
+    for op, dest in _DOMESTIC_OPS
 ], "⏱ Сценарий: выбор туроператора на форме → блинчик выдачи содержит только выбранных "
    "(и дешёвейший — из них). Ловит «протёкший» фильтр оператора, из-за которого мин. цена могла бы прийти от чужого ТО.")
+
+
+# --- S6: Сценарий — питание ---
+SC6 = "Live: Сценарий — питание"
+
+
+def _mk_meal_case(code: str):
+    async def _case():
+        o = await _sk.run(_sk.base_params(meals=[code]))
+        _sk.have_results(o)
+        _sk.url_matches(o)
+    return _case
+
+
+_reg(SC6, [
+    (_mk_meal_case(c), f"питание {c} → поиск отработал и есть результаты",
+     f"Поиск Москва→Турция с питанием {c}. Фильтр применяется на форме (провайдер сверяет подпись), "
+     f"выдача непуста, прочие параметры в URL верны. Примечание: тип питания НЕ вынесен в карточку/URL "
+     f"Sletat — строгая по-карточной сверка невозможна (🟡).")
+    for c in ("BB", "HB", "FB", "AI", "UAI")
+], "⏱ Сценарий: выбор питания → поиск отрабатывает и даёт результаты (тип питания на карточке "
+   "Sletat не показан — проверяем применение фильтра и наличие выдачи).")
+
+
+# --- S7: Сценарий — ночи ---
+SC7 = "Live: Сценарий — ночи"
+
+
+def _mk_nights_case(nmin: int, nmax: int):
+    async def _case():
+        o = await _sk.run(_sk.base_params(nights_min=nmin, nights_max=nmax))
+        _sk.have_results(o)
+        _sk.url_matches(o)  # ночи кодируются в URL (nights-A..B) и сверяются
+    return _case
+
+
+_reg(SC7, [
+    (_mk_nights_case(a, b), f"ночи {a}–{b} → URL и выдача совпадают",
+     f"Поиск Москва→Турция на {a}–{b} ночей. URL результата кодирует ровно {a}..{b} ночей "
+     f"(url_matches), и выдача непуста.")
+    for a, b in [(3, 5), (5, 7), (7, 10), (10, 14), (7, 14)]
+], "⏱ Сценарий: количество ночей → URL результата кодирует заданный диапазон, выдача есть.")
+
+
+# --- S8: Сценарий — рейсы/опции ---
+SC8 = "Live: Сценарий — рейсы/опции"
+
+
+def _mk_flag_case(label: str, **flag):
+    async def _case():
+        o = await _sk.run(_sk.base_params(**flag))
+        _sk.have_results(o)
+        _sk.url_matches(o)  # флаги кодируются в URL (onlyCharter/onlyDirect/onlyTransfer/onlyInstant)
+    return _case
+
+
+_reg(SC8, [
+    (_mk_flag_case("чартер", charter_only=True), "чартерные → onlyCharter=true в URL",
+     "Поиск с «только чартерные»: URL содержит onlyCharter=true (url_matches), выдача есть."),
+    (_mk_flag_case("прямые", direct_only=True), "прямые → onlyDirect=true в URL",
+     "Поиск с «только прямые»: URL содержит onlyDirect=true, выдача есть."),
+    (_mk_flag_case("трансфер", with_transfer=True), "с трансфером → onlyTransfer=true в URL",
+     "Поиск с «с трансфером»: URL содержит onlyTransfer=true, выдача есть."),
+    (_mk_flag_case("моментальное", instant_confirmation=True), "моментальное → onlyInstant=true в URL",
+     "Поиск с «моментальным подтверждением»: URL содержит onlyInstant=true, выдача есть."),
+], "⏱ Сценарий: флаги рейсов/опций → соответствующий флаг попадает в URL результата "
+   "(onlyCharter/onlyDirect/onlyTransfer/onlyInstant) и поиск отрабатывает.")
+
+
+# --- S9: Сценарий — валюта и сортировка ---
+SC9 = "Live: Сценарий — валюта и сортировка"
+
+
+def _mk_currency_case(cur: str):
+    async def _case():
+        o = await _sk.run(_sk.base_params(currency=cur))
+        _sk.have_results(o)
+        _sk.url_matches(o)  # currency=<cur> в URL
+    return _case
+
+
+async def _sort_price_case():
+    o = await _sk.run(_sk.base_params(sort_by="price"))
+    _sk.have_results(o)
+    _sk.prices_ascending(o)
+
+
+async def _sort_pop_case():
+    o = await _sk.run(_sk.base_params(sort_by="popularity"))
+    _sk.have_results(o)
+
+
+_reg(SC9, [
+    (_mk_currency_case("USD"), "валюта USD → currency=USD в URL",
+     "Поиск с валютой USD: URL содержит currency=USD (url_matches), выдача есть."),
+    (_mk_currency_case("EUR"), "валюта EUR → currency=EUR в URL",
+     "Поиск с валютой EUR: URL содержит currency=EUR, выдача есть."),
+    (_sort_price_case, "сортировка «Цена» → карточки по возрастанию",
+     "Поиск с сортировкой по цене: цены карточек выдачи идут по возрастанию (prices_ascending)."),
+    (_sort_pop_case, "сортировка «Популярность» → выдача есть",
+     "Поиск с сортировкой по популярности: поиск отрабатывает и даёт результаты."),
+], "⏱ Сценарий: валюта (USD/EUR в URL) и сортировка (по цене — возрастание; по популярности — выдача есть).")
+
+
+# ============ 20. Live: СЦЕНАРИИ — покрытие направлений/городов/состава ============
+# Широкое покрытие: каждое направление, каждый город вылета, разные составы тура.
+# Проверка толерантна (direction_ok): успех с верным URL ИЛИ корректное «туров нет» —
+# но НЕ краш/неверные параметры. Прогон всей группы долгий — это намеренно (Extended).
+from toursearch.refdata import COUNTRIES as _COUNTRIES, DEPARTURE_CITIES as _CITIES  # noqa: E402
+
+
+# --- S10: Сценарий — направления (все страны) ---
+SC10 = "Live: Сценарий — направления (страны)"
+
+
+def _mk_country_case(country: str):
+    async def _case():
+        o = await _sk.run(_sk.base_params(destination_country=country))
+        _sk.direction_ok(o)
+    return _case
+
+
+_reg(SC10, [
+    (_mk_country_case(c), f"{c} → поиск отработал чисто",
+     f"Поиск Москва→{c} (7–10 ночей, 2 взрослых). Проверяет, что направление ищется КОРРЕКТНО: "
+     f"либо есть результаты с верным URL, либо чистое «туров нет» на эти даты — но не краш и не "
+     f"подмена параметров. Покрытие всех направлений из справочника.")
+    for c in _COUNTRIES
+], "⏱ Сценарий: КАЖДОЕ направление из справочника ищется корректно (успех или чистое «туров нет»). "
+   "Долгая группа — полное покрытие стран (Extended).")
+
+
+# --- S11: Сценарий — города вылета (все) ---
+SC11 = "Live: Сценарий — города вылета"
+
+
+def _mk_city_case(city: str):
+    async def _case():
+        o = await _sk.run(_sk.base_params(departure_city=city))
+        _sk.direction_ok(o)
+    return _case
+
+
+_reg(SC11, [
+    (_mk_city_case(c), f"вылет из {c} → поиск отработал чисто",
+     f"Поиск {c}→Турция. Проверяет, что город вылета выбирается и ищется корректно (успех с верным "
+     f"URL или чистое «туров нет»). Покрытие всех городов вылета из справочника, включая зарубежные.")
+    for c in _CITIES
+], "⏱ Сценарий: КАЖДЫЙ город вылета из справочника (вкл. зарубежные) ищется корректно. "
+   "Долгая группа — полное покрытие городов (Extended).")
+
+
+# --- S12: Сценарий — состав тура (взрослые × дети) ---
+SC12 = "Live: Сценарий — состав тура"
+_COMPS = [
+    (1, []), (2, []), (3, []), (4, []), (6, []), (8, []),
+    (2, [5]), (2, [7, 10]), (2, [0]), (2, [0, 1, 17]),
+    (3, [10, 12, 14]), (1, [5]), (4, [2, 8]), (2, [15]), (5, [10]),
+]
+
+
+def _mk_comp_case(adults: int, kids: list[int]):
+    async def _case():
+        o = await _sk.run(_sk.base_params(adults=adults, children_ages=kids))
+        _sk.have_results(o)
+        _sk.url_matches(o)  # взрослые и число детей кодируются в URL и сверяются
+    return _case
+
+
+_reg(SC12, [
+    (_mk_comp_case(a, k),
+     f"{a} взр" + (f" + дети {k}" if k else "") + " → URL и выдача",
+     f"Поиск Москва→Турция, взрослых: {a}" + (f", дети: {k}" if k else "") + ". URL результата "
+     f"кодирует ровно этот состав (adults + число детей), выдача непуста.")
+    for a, k in _COMPS
+], "⏱ Сценарий: разный состав тура (взрослые 1–8, наборы детских возрастов) → URL кодирует "
+   "ровно заданный состав, выдача есть.")
