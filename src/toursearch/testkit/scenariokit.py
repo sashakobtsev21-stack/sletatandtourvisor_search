@@ -36,6 +36,7 @@ class Outcome:
     operators: list[Offer] = field(default_factory=list)         # блинчик: оператор+мин.цена
     no_tours: list[str] = field(default_factory=list)            # блинчик: «Туров нет»
     not_responding: list[str] = field(default_factory=list)      # блинчик: «не отвечает»
+    screenshot_path: str | None = None                           # скриншот страницы выдачи (для отчёта)
 
     @property
     def cheapest_operator(self) -> Offer | None:
@@ -61,10 +62,14 @@ def base_params(**over) -> SearchParams:
 
 
 async def run(params: SearchParams) -> Outcome:
-    """Запустить (или взять из кэша) реальный поиск Sletat и вернуть распарсенный итог."""
+    """Запустить (или взять из кэша) реальный поиск Sletat и вернуть распарсенный итог.
+    Скриншот страницы выдачи регистрируется в `artifacts` — раннер положит его в отчёт."""
+    from toursearch.testkit import artifacts
+
     key = params.model_dump_json()
     cached = _CACHE.get(key)
     if cached is not None:
+        artifacts.set_screenshot(cached.screenshot_path)
         return cached
     # Лок на ключ: при параллельном прогоне два теста с ОДИНАКОВЫМИ параметрами не
     # запускают двойной поиск — второй дождётся и возьмёт результат из кэша.
@@ -72,6 +77,7 @@ async def run(params: SearchParams) -> Outcome:
     async with lock:
         cached = _CACHE.get(key)
         if cached is not None:
+            artifacts.set_screenshot(cached.screenshot_path)
             return cached
         from toursearch.providers.sletat import SletatProvider  # ленивый импорт (браузер)
 
@@ -80,8 +86,10 @@ async def run(params: SearchParams) -> Outcome:
             params=params, success=r.success, error=r.error, search_url=r.search_url,
             hotels=list(r.hotel_offers), operators=list(r.offers),
             no_tours=list(r.operators_no_tours), not_responding=list(r.operators_not_responding),
+            screenshot_path=r.screenshot_path,
         )
         _CACHE[key] = out
+        artifacts.set_screenshot(out.screenshot_path)
         return out
 
 

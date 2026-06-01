@@ -34,7 +34,9 @@ class LiveSession:
 
     async def page(self):
         """Лениво открыть форму Sletat (один раз) и вернуть страницу."""
+        global _LAST_PAGE
         if self._page is not None:
+            _LAST_PAGE = self._page
             return self._page
         from playwright.async_api import async_playwright  # ленивый импорт
 
@@ -56,6 +58,7 @@ class LiveSession:
             except Exception:
                 pass
         self._page = page
+        _LAST_PAGE = page
         return page
 
     async def ensure_tours_mode(self):
@@ -93,6 +96,27 @@ class LiveSession:
 
 
 _SESSIONS: dict[str, LiveSession] = {}
+_LAST_PAGE = None  # последняя открытая страница-сессия (для скриншота UI-теста в отчёте)
+
+
+async def capture_last(label: str = "ui") -> str | None:
+    """Снять скриншот последней использованной страницы-сессии (для отчёта UI-теста).
+    best-effort: если страницы нет/закрыта — None. Файл кладётся в screenshots/."""
+    page = _LAST_PAGE
+    if page is None:
+        return None
+    try:
+        if page.is_closed():
+            return None
+    except Exception:
+        return None
+    from datetime import datetime
+    from toursearch.providers.base import capture_top
+    path = f"screenshots/{label}_{datetime.now():%Y%m%d_%H%M%S_%f}.png"
+    try:
+        return await capture_top(page, path)
+    except Exception:
+        return None
 
 
 def get_session(name: str, headless: bool = True) -> LiveSession:
@@ -106,9 +130,11 @@ def get_session(name: str, headless: bool = True) -> LiveSession:
 
 async def close_all_sessions() -> None:
     """Закрыть все открытые сессии (вызывается раннером после прогона)."""
+    global _LAST_PAGE
     for s in list(_SESSIONS.values()):
         await s.close()
     _SESSIONS.clear()
+    _LAST_PAGE = None
 
 
 async def visible(page, selector: str) -> bool:

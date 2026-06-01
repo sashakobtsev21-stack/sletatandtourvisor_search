@@ -57,6 +57,7 @@ export default function TestsPage() {
   const [logs, setLogs] = useState([]);
   const [report, setReport] = useState(null);
   const [elapsed, setElapsed] = useState(0); // секундомер прогона (сек)
+  const [lightbox, setLightbox] = useState(null); // URL скриншота для зума
   const logRef = useRef(null);
   const esRef = useRef(null);
   const timerRef = useRef(null);
@@ -160,11 +161,11 @@ export default function TestsPage() {
             const secs = e.seconds != null ? ` (${e.seconds} c)` : "";
             if (e.ok) {
               passed += 1;
-              setStatuses((s) => ({ ...s, [e.id]: { state: "pass", seconds: e.seconds } }));
+              setStatuses((s) => ({ ...s, [e.id]: { state: "pass", seconds: e.seconds, screenshot: e.screenshot } }));
               pushLog(`  ✓ ${e.name}${secs}`, "pass");
             } else {
               failed += 1;
-              setStatuses((s) => ({ ...s, [e.id]: { state: "fail", error: e.error, seconds: e.seconds } }));
+              setStatuses((s) => ({ ...s, [e.id]: { state: "fail", error: e.error, seconds: e.seconds, screenshot: e.screenshot } }));
               pushLog(`  ✗ ${e.name}${secs} — ${e.error || ""}`, "fail");
             }
             setStats({ passed, failed, total, done, duration: null });
@@ -343,17 +344,35 @@ export default function TestsPage() {
         })}
       </div>
 
-      {/* Отчёт */}
-      {report && <ReportCard report={report} statuses={statuses} catalog={catalog} />}
+      {/* Отчёт (только LIVE-тесты: время + скриншот сайта) */}
+      {report && <ReportCard report={report} statuses={statuses} catalog={catalog} onZoom={setLightbox} />}
+
+      {/* Лайтбокс: зум скриншота сайта */}
+      {lightbox && (
+        <div
+          onClick={() => setLightbox(null)}
+          className="fixed inset-0 z-50 flex cursor-zoom-out items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
+        >
+          <img src={lightbox} alt="скриншот сайта" className="max-h-full max-w-full rounded-xl shadow-2xl ring-1 ring-white/20" />
+          <button
+            onClick={() => setLightbox(null)}
+            className="absolute right-4 top-4 grid size-9 place-items-center rounded-full bg-white/10 text-lg text-white hover:bg-white/20"
+            aria-label="закрыть"
+          >
+            ✕
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
-/** Итоговый отчёт: сводка + упавшие + полный разбор по группам (что прошло / что упало). */
-function ReportCard({ report, statuses, catalog }) {
+/** Итоговый отчёт: ТОЛЬКО live-тесты — время каждого + скриншот сайта (зум по клику),
+ *  при ошибке — текст ошибки + скриншот. Сгруппировано по группам. */
+function ReportCard({ report, statuses, catalog, onZoom }) {
   const groups = (catalog?.groups ?? [])
     .map((g) => {
-      const ran = g.cases.filter((c) => statuses[c.id]);
+      const ran = g.cases.filter((c) => c.live && statuses[c.id]); // только LIVE, реально прогнанные
       return {
         group: g.group,
         ran,
@@ -363,61 +382,71 @@ function ReportCard({ report, statuses, catalog }) {
     })
     .filter((x) => x.ran.length);
 
+  const liveTotal = groups.reduce((n, x) => n + x.ran.length, 0);
+  const livePass = groups.reduce((n, x) => n + x.pass, 0);
+  const liveFail = groups.reduce((n, x) => n + x.fail, 0);
+
   return (
     <GlassCard variants={fadeUp} initial="hidden" animate="show" className="p-5">
-      <h3 className="mb-2 text-sm font-bold text-white">Отчёт</h3>
-      <p className="text-sm text-ink">
-        Итог: прошло <b className="text-emerald-300">{report.passed}</b> / упало{" "}
-        <b className="text-rose-300">{report.failed}</b> из {report.total} за {report.duration} c
-      </p>
-
-      {report.failures?.length > 0 && (
-        <div className="mt-3 space-y-1.5">
-          <div className="text-xs font-semibold text-rose-200">Упавшие ({report.failures.length}):</div>
-          {report.failures.map((f, i) => (
-            <div key={i} className="rounded-lg border border-rose-400/20 bg-rose-500/10 p-2.5 text-xs">
-              <div className="font-semibold text-rose-200">✗ [{f.group}] {f.name}</div>
-              <div className="mt-0.5 font-mono text-rose-300/80">{f.error}</div>
-            </div>
-          ))}
-        </div>
+      <h3 className="mb-2 text-sm font-bold text-white">Отчёт — LIVE-тесты</h3>
+      {liveTotal === 0 ? (
+        <p className="text-sm text-muted">
+          В этом прогоне не было live-тестов (выбраны только быстрые/health). Запусти раздел
+          «Смоук»/«Позитивные»/… — здесь появятся время и скриншоты сайта.
+        </p>
+      ) : (
+        <p className="text-sm text-ink">
+          LIVE: прошло <b className="text-emerald-300">{livePass}</b> / упало{" "}
+          <b className="text-rose-300">{liveFail}</b> из {liveTotal}
+          <span className="text-muted"> · весь прогон {report.duration} c</span>
+        </p>
       )}
-      {report.failed === 0 && <p className="mt-2 text-sm text-emerald-300">Все выбранные тесты прошли ✅</p>}
 
-      {/* Полный разбор по группам — что прошло и что упало */}
-      <details open className="mt-4">
-        <summary className="cursor-pointer text-xs font-semibold text-muted hover:text-ink">
-          Полный отчёт по группам ({groups.length})
-        </summary>
-        <div className="mt-2 space-y-1.5">
-          {groups.map((x) => (
-            <details key={x.group} open={x.fail > 0} className="rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2">
-              <summary className="flex cursor-pointer list-none items-center gap-2 text-xs">
-                <span className="font-semibold text-ink">{x.group}</span>
-                <span className="ml-auto tabular-nums">
-                  <b className="text-emerald-300">✓{x.pass}</b>{" "}
-                  {x.fail > 0 ? <b className="text-rose-300">✗{x.fail}</b> : <span className="text-muted">✗0</span>}
-                  <span className="text-muted"> / {x.ran.length}</span>
-                </span>
-              </summary>
-              <div className="mt-1.5 space-y-0.5">
-                {x.ran.map((c) => {
-                  const st = statuses[c.id];
-                  const ok = st?.state === "pass";
-                  return (
-                    <div key={c.id} className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                      <span className={ok ? "text-emerald-300" : "text-rose-300"}>{ok ? "✓" : "✗"}</span>
-                      <span className="text-ink/85">{c.name}</span>
-                      {st?.seconds != null && <span className="tabular-nums text-muted">{st.seconds} c</span>}
-                      {!ok && st?.error && <span className="basis-full pl-4 font-mono text-rose-300/70">{st.error}</span>}
+      <div className="mt-3 space-y-2">
+        {groups.map((x) => (
+          <details key={x.group} open={x.fail > 0} className="rounded-xl border border-white/5 bg-white/[0.02] px-3 py-2.5">
+            <summary className="flex cursor-pointer list-none items-center gap-2 text-sm">
+              <span className="font-semibold text-ink">{x.group}</span>
+              <span className="ml-auto tabular-nums text-xs">
+                <b className="text-emerald-300">✓{x.pass}</b>{" "}
+                {x.fail > 0 ? <b className="text-rose-300">✗{x.fail}</b> : <span className="text-muted">✗0</span>}
+                <span className="text-muted"> / {x.ran.length}</span>
+              </span>
+            </summary>
+            <div className="mt-2 space-y-2">
+              {x.ran.map((c) => {
+                const st = statuses[c.id];
+                const ok = st?.state === "pass";
+                return (
+                  <div key={c.id} className={`flex gap-3 rounded-lg p-2 ${ok ? "bg-white/[0.02]" : "bg-rose-500/10 ring-1 ring-rose-400/20"}`}>
+                    {st?.screenshot ? (
+                      <img
+                        src={st.screenshot}
+                        alt="скриншот сайта"
+                        onClick={() => onZoom?.(st.screenshot)}
+                        title="Нажми, чтобы призумить"
+                        className="h-16 w-24 shrink-0 cursor-zoom-in rounded-md object-cover object-top ring-1 ring-white/10 transition hover:ring-brand/60"
+                      />
+                    ) : (
+                      <div className="grid h-16 w-24 shrink-0 place-items-center rounded-md bg-white/[0.03] text-center text-[10px] text-muted ring-1 ring-white/10">
+                        нет скрина
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className={ok ? "text-emerald-300" : "text-rose-300"}>{ok ? "✓" : "✗"}</span>
+                        <span className="text-ink/90">{c.name}</span>
+                        {st?.seconds != null && <span className="ml-auto shrink-0 tabular-nums text-xs text-muted">{st.seconds} c</span>}
+                      </div>
+                      {!ok && st?.error && <div className="mt-1 break-words font-mono text-[11px] text-rose-300/85">{st.error}</div>}
                     </div>
-                  );
-                })}
-              </div>
-            </details>
-          ))}
-        </div>
-      </details>
+                  </div>
+                );
+              })}
+            </div>
+          </details>
+        ))}
+      </div>
     </GlassCard>
   );
 }

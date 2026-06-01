@@ -22,6 +22,7 @@ import os
 import time
 from typing import Awaitable, Callable
 
+from toursearch.testkit import artifacts
 from toursearch.testkit.registry import REGISTRY, TestCase
 
 Emit = Callable[[dict], Awaitable[None] | None]
@@ -57,10 +58,23 @@ async def run_selected(ids: list[str], emit: Emit, concurrency: int | None = Non
 
     outcomes: list[dict] = []
 
+    async def _resolve_shot(case: TestCase) -> str | None:
+        """Скриншот сайта для отчёта: из artifacts (сценарные тесты → страница выдачи),
+        иначе для live UI-тестов снимаем последнюю страницу-сессию. Возвращает URL."""
+        shot = artifacts.get_screenshot()
+        if not shot and case.live:
+            try:
+                from toursearch.testkit import livekit
+                shot = await livekit.capture_last()
+            except Exception:
+                shot = None
+        return artifacts.to_url(shot)
+
     async def _exec(case: TestCase) -> dict:
-        """Выполнить один кейс: emit running → (ретрай для live-инфра-ошибок) → emit result."""
+        """Выполнить один кейс: emit running → (ретрай) → собрать скриншот → emit result."""
         await _emit(emit, {"type": "running", "index": index_of[case.id], "id": case.id,
                            "group": case.group, "name": case.name, "live": case.live})
+        artifacts.reset()
         t_case = time.monotonic()
         attempts = 2 if case.live else 1
         last_exc: Exception | None = None
@@ -73,9 +87,11 @@ async def run_selected(ids: list[str], emit: Emit, concurrency: int | None = Non
                 if inspect.isawaitable(result):
                     await result
                 secs = round(time.monotonic() - t_case, 1)
+                shot = await _resolve_shot(case)
                 await _emit(emit, {"type": "result", "id": case.id, "ok": True, "seconds": secs,
-                                   "group": case.group, "name": case.name})
-                return {"ok": True, "id": case.id, "group": case.group, "name": case.name, "seconds": secs}
+                                   "screenshot": shot, "group": case.group, "name": case.name})
+                return {"ok": True, "id": case.id, "group": case.group, "name": case.name,
+                        "seconds": secs, "screenshot": shot}
             except AssertionError as exc:  # реальный провал проверки — НЕ ретраим
                 last_exc = exc
                 break
@@ -86,9 +102,11 @@ async def run_selected(ids: list[str], emit: Emit, concurrency: int | None = Non
                 break
         secs = round(time.monotonic() - t_case, 1)
         err = f"{type(last_exc).__name__}: {last_exc}"
+        shot = await _resolve_shot(case)
         await _emit(emit, {"type": "result", "id": case.id, "ok": False, "error": err, "seconds": secs,
-                           "group": case.group, "name": case.name})
-        return {"ok": False, "id": case.id, "group": case.group, "name": case.name, "error": err, "seconds": secs}
+                           "screenshot": shot, "group": case.group, "name": case.name})
+        return {"ok": False, "id": case.id, "group": case.group, "name": case.name,
+                "error": err, "seconds": secs, "screenshot": shot}
 
     await _emit(emit, {"type": "begin", "total": total})
     t0 = time.monotonic()
