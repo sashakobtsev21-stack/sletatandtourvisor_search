@@ -28,6 +28,7 @@ from toursearch.providers.sletat import build_hotel_offers as sl_hotels
 from toursearch.providers.sletat import build_operator_offers as sl_ops
 from toursearch.providers.tourvisor import _OPERATOR_MAP as TV_OPS
 from toursearch.providers.tourvisor import (
+    _departure_candidates as tv_dep,
     _parse_price,
     _split_name_stars,
     build_hotel_offers as tv_hotels,
@@ -308,6 +309,15 @@ add(G, "несколько операторов сразу", lambda: _assert({o.
 add(G, "запрошен отсутствующий → пусто", lambda: _assert(tv_filter(_tv_ofs("Biblioglobus", "Anex"), ["myholidays"]) == []))
 
 
+# ============ 7c. Tourvisor: сокращения города вылета ============
+G = "Tourvisor: город вылета (сокращения)"
+add(G, "кандидаты включают сокращение С.Петербург", lambda: _assert("С.Петербург" in tv_dep("Санкт-Петербург")))
+add(G, "С.Петербург матчит подпись формы", lambda: _assert(any(text_contains(c, "Город вылетаС.Петербург") for c in tv_dep("Санкт-Петербург"))))
+add(G, "Москва матчит подпись формы", lambda: _assert(any(text_contains(c, "Город вылетаМосква") for c in tv_dep("Москва"))))
+add(G, "Н.Новгород матчит Нижний Новгород", lambda: _assert(any(text_contains(c, "Город вылетаН.Новгород") for c in tv_dep("Нижний Новгород"))))
+add(G, "полное имя без сокращения (Казань)", lambda: _assert(any(text_contains(c, "Город вылетаКазань") for c in tv_dep("Казань"))))
+
+
 # ============================ 8. Сверка формы: матчеры ============================
 G = "Сверка формы: матчеры"
 add(G, "norm схлопывает пробелы", lambda: _assert(norm("  Турция \n ") == "турция"))
@@ -479,6 +489,7 @@ _GROUP_DESC = {
     "URL Tourvisor: сверка совпадает": "Корректный URL Tourvisor сверяется с теми же параметрами без расхождений.",
     "URL Tourvisor: детект расхождений": "Подмена поля → сверка URL Tourvisor ловит расхождение.",
     "Tourvisor: фильтр операторов": "Проверяют подстраховку корректности: из выдачи Tourvisor остаются только запрошенные операторы (с алиасами и учётом региона BY/KZ/UZ), даже если фильтр на сайте не применился — иначе «самое дешёвое» могло прийти от лишнего/дефолтного оператора (Biblioglobus).",
+    "Tourvisor: город вылета (сокращения)": "Проверяют, что сверка города вылета терпима к сокращённым подписям Tourvisor («С.Петербург» ← «Санкт-Петербург», «Н.Новгород» ← «Нижний Новгород») — иначе поиск ложно падал FormVerificationError.",
     "Сверка формы: матчеры": "Проверяют вспомогательные функции сверки значений формы (нормализация текста, сравнение множеств операторов без лишних).",
     "Маппинги: операторы/питание": "Проверяют таблицы соответствия: ключи операторов и коды питания корректно мапятся на подписи сайтов.",
     "Отчёт": "Проверяют формирование текстового отчёта сравнения (лучший/худший, площадки, режим).",
