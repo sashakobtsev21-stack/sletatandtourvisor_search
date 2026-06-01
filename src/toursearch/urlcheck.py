@@ -42,6 +42,12 @@ def parse_sletat_url(url: str) -> dict:
     m = _SLETAT_PATH.search(u.path)
     if m:
         out.update(m.groupdict())
+        # Капча kids жадная (`[^/?]+`): после kids в пути могут идти ещё сегменты —
+        # напр. `-kids-zero-stars-3,4,5` при выбранных звёздах. Иначе цифры звёзд
+        # считались бы за детей (children_count). Оставляем только сам kids-токен
+        # (`zero` или возрасты), отрезая последующие сегменты `-<буквы>-…`.
+        if out.get("kids"):
+            out["kids"] = re.split(r"-(?=[a-zA-Z])", out["kids"], maxsplit=1)[0]
     return out
 
 
