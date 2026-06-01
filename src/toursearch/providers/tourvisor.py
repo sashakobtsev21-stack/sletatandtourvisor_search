@@ -271,6 +271,8 @@ class TourvisorProvider:
                         op_raw = filter_offers_by_operators(op_raw, params.operators)
                     operator_offers = self._to_operator_offers(op_raw, hotel_offers)
                     shot = await self._safe_screenshot(page)
+                    log.info("Tourvisor: результаты получены — %d отелей за %.1f с",
+                             len(hotel_offers), time.monotonic() - start)
                     return ProviderResult(
                         provider=self.name, success=bool(hotel_offers),
                         duration_seconds=time.monotonic() - start,
@@ -323,6 +325,8 @@ class TourvisorProvider:
                     )
                 operator_offers = self._to_operator_offers(offers, [])
                 shot = await self._safe_screenshot(page)
+                log.info("Tourvisor: результаты получены — %d предложений за %.1f с",
+                         len(offers), time.monotonic() - start)
                 return ProviderResult(
                     provider=self.name, success=bool(offers),
                     duration_seconds=time.monotonic() - start,
