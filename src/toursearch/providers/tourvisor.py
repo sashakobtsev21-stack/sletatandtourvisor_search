@@ -51,9 +51,16 @@ _OPERATOR_MAP = {
 }
 
 # Алиасы для случаев, которые нечёткий матчинг не покрывает (разные алфавиты/написание):
-# имя на Sletat (нормализованное) → имя на Tourvisor. Остальное матчится нечётко.
+# ключ = нормализованное имя на Sletat → значение = имя на Tourvisor. Остальное
+# матчится нечётко. (Получено сверкой полного списка Tourvisor с операторами Sletat.)
 _TV_OPERATOR_ALIASES = {
-    "спектрум": "Spectrum",
+    "спектрум": "Spectrum",            # Спектрум
+    "amigos": "Амиго-С",               # Amigo S
+    "amigotours": "Амиго-Турс",        # Amigo Tours
+    "пакс": "Paks",                    # ПАКС
+    "русскийэкспресс": "Russian Express",  # Русский Экспресс
+    "intourist": "Интурист",           # Intourist
+    "travelluxekz": "Space Travel KZ (Travel Luxe)",  # Travel Luxe (KZ)
 }
 
 
@@ -617,22 +624,27 @@ class TourvisorProvider:
         wanted = [_TV_OPERATOR_ALIASES.get(_operator_norm(o), o) for o in operators]
         indices = await page.evaluate(
             """(wanted) => {
-                const norm = s => (s || '').toLowerCase()
+                // region — извлекаем суффикс (BY)/(KZ)/(UZ), чтобы не путать
+                // региональные клоны оператора (Coral vs Coral Travel (BY)).
+                const region = s => { const m = (s||'').match(/\\((BY|KZ|UZ)\\)/i); return m ? m[1].toLowerCase() : ''; };
+                const core = s => (s || '').toLowerCase()
                     .replace(/\\(.*?\\)/g, '')
                     .replace(/\\band\\b|\\bи\\b/g, '')
                     .replace(/[^a-zа-я0-9]/gi, '');
                 const boxes = [...document.querySelectorAll('div.TVOperatorsList .TVCheckBox')];
-                const ok = i => i >= 0 && !/TVDisabled/.test(boxes[i].className || '');
+                const live = i => i >= 0 && !/TVDisabled/.test(boxes[i].className || '');
                 return wanted.map(w => {
-                    const wk = norm(w);
-                    if (!wk) return -1;
-                    let idx = boxes.findIndex(b => !/TVDisabled/.test(b.className||'') && norm(b.textContent) === wk);
-                    if (idx < 0) idx = boxes.findIndex(b => {
-                        if (/TVDisabled/.test(b.className||'')) return false;
-                        const bk = norm(b.textContent);
-                        return bk && (bk.includes(wk) || wk.includes(bk));
+                    const wc = core(w), wr = region(w);
+                    if (!wc) return -1;
+                    // только кандидаты того же региона (без региона ↔ без региона)
+                    const same = i => !/TVDisabled/.test(boxes[i].className||'') && region(boxes[i].textContent) === wr;
+                    let idx = boxes.findIndex((b,i) => same(i) && core(b.textContent) === wc);
+                    if (idx < 0) idx = boxes.findIndex((b,i) => {
+                        if (!same(i)) return false;
+                        const bc = core(b.textContent);
+                        return bc && (bc.includes(wc) || wc.includes(bc));
                     });
-                    return ok(idx) ? idx : -1;
+                    return live(idx) ? idx : -1;
                 });
             }""",
             wanted,
