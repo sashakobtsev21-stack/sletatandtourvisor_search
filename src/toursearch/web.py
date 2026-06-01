@@ -122,6 +122,8 @@ def _result_dict(r) -> dict:
         "offers": [_offer_dict(o) for o in sorted(r.offers, key=lambda x: x.price)],
         "hotel_offers": [_hotel_dict(h) for h in sorted(r.hotel_offers, key=lambda x: x.price)],
         "operator_offers": [_operator_dict(o) for o in sorted(r.operator_offers, key=lambda x: x.price)],
+        "operators_no_tours": r.operators_no_tours,
+        "operators_not_responding": r.operators_not_responding,
         "cheapest": ({"label": c.label, "price": str(c.price), "currency": c.currency} if c else None),
     }
 

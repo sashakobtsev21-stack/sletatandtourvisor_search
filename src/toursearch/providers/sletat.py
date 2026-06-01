@@ -188,6 +188,10 @@ class SletatProvider:
                 await self._verify_and_fix(page, params)
                 await self._click_search(page)
                 start = time.monotonic()
+                # Открываем блинчик СРАЗУ после клика «Найти»: только при открытой панели
+                # цены операторов прогружаются прогрессивно — иначе скорость по каждому
+                # оператору не засечь (цены появлялись все разом в конце).
+                await self._ensure_panel_open(page)
                 # Засекаем, за сколько каждый оператор появляется с ценой в блинчике.
                 op_seen: dict[str, float] = {}
                 log.info("Sletat: поиск запущен, жду полной загрузки результатов…")
@@ -197,14 +201,19 @@ class SletatProvider:
                 url_problems = verify_sletat_search_url(search_url, params)
                 if params.sort_by == "price":
                     await self._sort_by_price(page)
+                # Блинчик с группировкой: цены / «Туров нет» / «Оператор не отвечает».
+                blink = await self._parse_blinchik(page)
+                no_tours = blink["no_tours"]
+                not_responding = blink["not_responding"]
                 if params.search_mode == "hotels":
                     hotel_offers = await self._parse_hotels(page)
                     offers = []
                 else:
-                    offers = await self._parse_operators(page)
-                    hotel_offers = []
+                    offers = build_operator_offers(self.name, blink["priced"])
+                    # первые 10 отелей выдачи — для показа (в сравнении участвуют операторы)
+                    hotel_offers = (await self._parse_hotels(page))[:10]
                 # Таблица оператор → отель → цена → скорость (блинчик + тайминги).
-                operator_offers = await self._build_operator_offers(page, op_seen, hotel_offers)
+                operator_offers = self._operator_offers(blink["priced"], op_seen, hotel_offers)
                 if url_problems:
                     # площадка искала не то, что просили — результаты невалидны
                     return ProviderResult(
@@ -230,6 +239,8 @@ class SletatProvider:
                     offers=offers,
                     hotel_offers=hotel_offers,
                     operator_offers=operator_offers,
+                    operators_no_tours=no_tours,
+                    operators_not_responding=not_responding,
                     search_url=search_url,
                     screenshot_path=shot,
                     error=None if found else "Предложений не найдено по заданным параметрам.",
@@ -675,6 +686,7 @@ class SletatProvider:
             await page.wait_for_timeout(1500)
             if op_seen is not None and op_start is not None:
                 try:
+                    await self._ensure_panel_open(page)  # держим блинчик открытым — иначе цены не прогружаются
                     rows = await page.evaluate(
                         """() => [...document.querySelectorAll('li.blinchik__operator-item')].map(it => ({
                             name: (it.querySelector('label')?.textContent || '').trim(),
@@ -705,21 +717,10 @@ class SletatProvider:
             if stable >= 3 and (items > 0 or not_found > 0):
                 return
 
-    async def _build_operator_offers(
-        self, page: Page, op_seen: dict, hotel_offers: list[HotelOffer],
+    def _operator_offers(
+        self, rows: list[dict], op_seen: dict, hotel_offers: list[HotelOffer],
     ) -> list[OperatorOffer]:
-        """Из блинчика: оператор → мин. цена + скорость (op_seen) + отель (по цене)."""
-        rows = await page.evaluate(
-            """() => {
-                const out = [];
-                document.querySelectorAll('li.blinchik__operator-item').forEach(it => {
-                    const name = (it.querySelector('label')?.textContent || '').trim();
-                    const price = (it.querySelector('.blinchik__price .sr-currency-rub, .sr-currency-rub')?.textContent || '').trim();
-                    if (name) out.push({name, price});
-                });
-                return out;
-            }"""
-        )
+        """Из строк блинчика (с ценой): оператор → мин. цена + скорость (op_seen) + отель (по цене)."""
         best: dict[str, tuple[Decimal, str]] = {}
         for r in rows:
             name = (r.get("name") or "").strip()
@@ -774,19 +775,55 @@ class SletatProvider:
         except PWTimeout:
             pass
 
-    async def _parse_operators(self, page: Page) -> list[Offer]:
-        rows = await page.evaluate(
-            """() => {
-                const out = [];
-                document.querySelectorAll('li.blinchik__operator-item').forEach(it => {
-                    const name = (it.querySelector('label')?.textContent || '').trim();
-                    const price = (it.querySelector('.blinchik__price .sr-currency-rub, .sr-currency-rub')?.textContent || '').trim();
-                    if (name) out.push({name, price});
+    async def _ensure_panel_open(self, page: Page) -> None:
+        """Открыть блинчик, если он закрыт (idempotent — не перелистывает состояние).
+        Держим панель открытой, пока засекаем скорость прогрузки цен по операторам."""
+        try:
+            await page.evaluate(
+                """() => {
+                    const b = document.querySelector('.blinchik');
+                    if (b && b.classList.contains('blinchik_closed')) {
+                        const btn = b.querySelector('.blinchik__hide-button, .blinchik__show-button');
+                        if (btn) btn.click();
+                        b.classList.remove('blinchik_closed');
+                    }
+                }"""
+            )
+        except Exception:
+            pass
+
+    async def _parse_blinchik(self, page: Page) -> dict:
+        """Снять блинчик с группировкой по статусу оператора.
+
+        Возвращает {priced: [{name, price}], no_tours: [name], not_responding: [name]}.
+        Группы разделены заголовками `li.blinchik__operator-list-title` («Туров нет»,
+        «Оператор не отвечает»); операторы после заголовка относятся к его группе.
+        """
+        return await page.evaluate(
+            r"""() => {
+                const res = {priced: [], no_tours: [], not_responding: []};
+                // На живой странице блинчик — в `.blinchik`; на офлайн-фикстуре может быть
+                // голый список без обёртки → fallback на весь документ.
+                const b = document.querySelector('.blinchik') || document;
+                const norm = s => (s || '').replace(/\s+/g, ' ').trim();
+                let group = 'priced';
+                b.querySelectorAll('.blinchik__operator-list-title, li.blinchik__operator-item').forEach(el => {
+                    if (el.classList.contains('blinchik__operator-list-title')) {
+                        const t = norm(el.textContent).toLowerCase();
+                        group = /туров нет/.test(t) ? 'no_tours'
+                              : (/не отвеча/.test(t) ? 'not_responding' : 'priced');
+                        return;
+                    }
+                    const name = norm(el.querySelector('label')?.textContent);
+                    const price = norm(el.querySelector('.blinchik__price .sr-currency-rub, .sr-currency-rub')?.textContent);
+                    if (!name) return;
+                    if (price || group === 'priced') res.priced.push({name, price});
+                    else if (group === 'no_tours') res.no_tours.push(name);
+                    else if (group === 'not_responding') res.not_responding.push(name);
                 });
-                return out;
+                return res;
             }"""
         )
-        return build_operator_offers(self.name, rows)
 
     async def _parse_hotels(self, page: Page) -> list[HotelOffer]:
         rows = await page.evaluate(

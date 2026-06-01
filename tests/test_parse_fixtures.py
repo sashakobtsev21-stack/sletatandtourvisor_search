@@ -39,8 +39,15 @@ async def test_sletat_hotels_fixture_parses():
 
 
 async def test_sletat_operators_fixture_parses():
+    from toursearch.providers.sletat import build_operator_offers
+
     html = (FX / "sletat_operators.html").read_text(encoding="utf-8")
-    offers = await _parse(html, SletatProvider()._parse_operators)
+
+    async def parse(page):
+        blink = await SletatProvider()._parse_blinchik(page)
+        return build_operator_offers("sletat", blink["priced"])
+
+    offers = await _parse(html, parse)
     assert len(offers) >= 3
     assert all(o.price > 0 for o in offers)
     assert all(o.operator for o in offers)
