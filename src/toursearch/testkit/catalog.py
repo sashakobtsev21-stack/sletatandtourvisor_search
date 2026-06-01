@@ -1323,3 +1323,138 @@ _reg(GUI11, [
     (_go_present, "кнопка «Найти туры» видна", "Проверяет наличие и видимость кнопки запуска (без клика — чтобы не уходить в выдачу)."),
     (_go_enabled, "кнопка «Найти туры» активна", "Кнопка запуска enabled и не disabled при валидной форме."),
 ], "⏱ Live UI: «Найти туры» Sletat — кнопка запуска present/enabled (без навигации; сам запуск — в тестах выдачи).")
+
+
+# ============ Live UI: выдача и блинчик (сессия RESULTS — один реальный прогон) ============
+# Отдельная сессия: один раз заполняем форму и запускаем поиск (через проверенные методы
+# провайдера), кэшируем страницу выдачи и гоняем по ней все проверки результатов/блинчика.
+from toursearch.providers.sletat import SletatProvider as _SletatProv  # noqa: E402
+from toursearch.providers.sletat import _parse_price as _sl_pp  # noqa: E402
+
+_sl = _SletatProv(headless=True)
+_RESULTS_PAGE = {"page": None}
+
+
+async def _results_page():
+    p = _RESULTS_PAGE["page"]
+    if p is not None and not p.is_closed():
+        return p
+    from datetime import date, timedelta
+    page = await get_session("results-tours").page()
+    await _sl._select_departure_city(page, "Москва")
+    await _sl._select_country(page, "Турция")
+    df = date.today() + timedelta(days=21)
+    await _sl._select_dates(page, df, df + timedelta(days=7))
+    await _sl._set_nights(page, 7, 10)
+    await _sl._select_tourists(page, 2, [])
+    await _sl._click_search(page)
+    await _sl._ensure_panel_open(page)   # блинчик открыть сразу — для проверок операторов
+    await _sl._wait_for_completion(page)
+    _RESULTS_PAGE["page"] = page
+    return page
+
+
+# --- Группа: Выдача — туры ---
+GUI12 = "Live: Выдача — туры"
+
+
+async def _res_count():
+    page = await _results_page()
+    txt = (await _ltext(page, ".search-status__tours-count")).lower()
+    _assert("тур" in txt or "наш" in txt, f"нет счётчика «Нашли N туров»: {txt!r}")
+
+
+async def _res_cards():
+    page = await _results_page()
+    _assert(await page.locator(".search-result__list-item").count() > 0, "нет карточек результатов")
+
+
+async def _res_card_fields():
+    page = await _results_page()
+    ok = await page.evaluate(
+        """() => {
+            const it = document.querySelector('.search-result__list-item');
+            if (!it) return false;
+            const name = (it.querySelector('.search-result__full-hotel-name-subscription, .search-result-text')?.textContent || '').trim();
+            const price = (it.querySelector('.search-result__full-price')?.textContent || '').trim();
+            return !!(name && price);
+        }"""
+    )
+    _assert(ok, "в карточке выдачи нет имени или цены")
+
+
+async def _res_sort_price():
+    page = await _results_page()
+    try:
+        await page.click(
+            "xpath=//li[contains(@class,'uis-button-group__button') and normalize-space(text())='Цена']",
+            timeout=5000,
+        )
+        await page.wait_for_timeout(2500)
+    except Exception:
+        pass
+    prices = await page.evaluate(
+        r"""() => [...document.querySelectorAll('.search-result__list-item .search-result__full-price')]
+            .slice(0, 8)
+            .map(e => { const m = (e.textContent || '').match(/\d{1,3}(?:\s\d{3})+|\d+/); return m ? parseInt(m[0].replace(/\D/g, ''), 10) : 0; })
+            .filter(Boolean)"""
+    )
+    _assert(len(prices) >= 2 and prices == sorted(prices), f"после сортировки «Цена» цены не по возрастанию: {prices}")
+
+
+_reg(GUI12, [
+    (_res_count, "счётчик «Нашли N туров» появился", "После поиска показывается строка статуса с числом туров."),
+    (_res_cards, "карточки результатов присутствуют", "В выдаче есть карточки .search-result__list-item."),
+    (_res_card_fields, "в карточке есть имя и цена", "Первая карточка содержит название отеля и цену."),
+    (_res_sort_price, "сортировка «Цена» — по возрастанию", "Клик по сортировке «Цена» упорядочивает карточки по возрастанию цены."),
+], "⏱ Live UI: выдача туров Sletat — счётчик, карточки, поля карточки, сортировка по цене (один общий прогон поиска).")
+
+
+# --- Группа: Блинчик (операторы в выдаче) ---
+GUI13 = "Live: Блинчик (операторы)"
+
+
+async def _blink():
+    page = await _results_page()
+    await _sl._ensure_panel_open(page)
+    return await _sl._parse_blinchik(page)
+
+
+async def _bl_present():
+    page = await _results_page()
+    await _sl._ensure_panel_open(page)
+    _assert(await page.locator(".blinchik").count() > 0, "панель операторов (блинчик) не найдена")
+
+
+async def _bl_operators():
+    blink = await _blink()
+    priced = [r for r in blink["priced"] if (r.get("price") or "").strip()]
+    _assert(len(priced) >= 3, f"мало операторов с ценами в блинчике: {len(priced)}")
+
+
+async def _bl_sorted():
+    blink = await _blink()
+    prices = []
+    for r in blink["priced"]:
+        p = _sl_pp(r.get("price") or "")
+        if p is not None:
+            prices.append(int(p))
+    prices = prices[:8]
+    _assert(len(prices) >= 2 and prices == sorted(prices), f"цены в блинчике не по возрастанию: {prices}")
+
+
+async def _bl_statuses():
+    blink = await _blink()
+    _assert(isinstance(blink["no_tours"], list) and isinstance(blink["not_responding"], list),
+            "группы статусов операторов не распарсились")
+    # Москва→Турция: обычно есть операторы без туров — мягкая проверка (не жёсткая, прогон-зависимо)
+    total = len(blink["priced"]) + len(blink["no_tours"]) + len(blink["not_responding"])
+    _assert(total >= 5, f"в блинчике подозрительно мало операторов всего: {total}")
+
+
+_reg(GUI13, [
+    (_bl_present, "блинчик присутствует в выдаче", "Панель операторов с ценами есть на странице результатов."),
+    (_bl_operators, "операторы с ценами (≥3)", "В блинчике несколько операторов с минимальными ценами."),
+    (_bl_sorted, "цены операторов по возрастанию", "Операторы в блинчике идут по возрастанию цены (как на сайте)."),
+    (_bl_statuses, "группы «туров нет»/«не отвечает» парсятся", "Блинчик группирует операторов; группы статусов читаются (списки)."),
+], "⏱ Live UI: блинчик Sletat — наличие, операторы с ценами, сортировка по цене, группы статусов.")
