@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -42,6 +43,7 @@ class Outcome:
 
 
 _CACHE: dict[str, Outcome] = {}
+_LOCKS: dict[str, asyncio.Lock] = {}  # дедуп одинаковых поисков при параллельном прогоне
 
 
 def base_params(**over) -> SearchParams:
@@ -64,16 +66,23 @@ async def run(params: SearchParams) -> Outcome:
     cached = _CACHE.get(key)
     if cached is not None:
         return cached
-    from toursearch.providers.sletat import SletatProvider  # ленивый импорт (браузер)
+    # Лок на ключ: при параллельном прогоне два теста с ОДИНАКОВЫМИ параметрами не
+    # запускают двойной поиск — второй дождётся и возьмёт результат из кэша.
+    lock = _LOCKS.setdefault(key, asyncio.Lock())
+    async with lock:
+        cached = _CACHE.get(key)
+        if cached is not None:
+            return cached
+        from toursearch.providers.sletat import SletatProvider  # ленивый импорт (браузер)
 
-    r = await SletatProvider(headless=True).search(params)
-    out = Outcome(
-        params=params, success=r.success, error=r.error, search_url=r.search_url,
-        hotels=list(r.hotel_offers), operators=list(r.offers),
-        no_tours=list(r.operators_no_tours), not_responding=list(r.operators_not_responding),
-    )
-    _CACHE[key] = out
-    return out
+        r = await SletatProvider(headless=True).search(params)
+        out = Outcome(
+            params=params, success=r.success, error=r.error, search_url=r.search_url,
+            hotels=list(r.hotel_offers), operators=list(r.offers),
+            no_tours=list(r.operators_no_tours), not_responding=list(r.operators_not_responding),
+        )
+        _CACHE[key] = out
+        return out
 
 
 def clear_cache() -> None:
