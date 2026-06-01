@@ -447,16 +447,19 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
     pending: dict[str, list[str]] = {}
 
     def _category(group: str) -> str:
-        """Категория группы тестов: health-check / live / fast (быстрые)."""
+        """Категория группы тестов: health-check / scenario / live / fast (быстрые).
+        «Сценарии» (Live: Сценарий — …) — отдельная категория от «Live» (UI-проверки)."""
         g = group.lower()
         if g.startswith("health"):
             return "healthcheck"
+        if g.startswith("live: сценарий"):
+            return "scenario"
         if g.startswith("live"):
             return "live"
         return "fast"
 
-    # Порядок прогона/показа категорий: сначала быстрые, потом health-check, потом live.
-    _CAT_ORDER = {"fast": 0, "healthcheck": 1, "live": 2}
+    # Порядок прогона/показа: быстрые → health-check → live (UI) → сценарии (тяжёлые).
+    _CAT_ORDER = {"fast": 0, "healthcheck": 1, "live": 2, "scenario": 3}
 
     def _ordered_groups():
         grouped = REGISTRY.grouped()
