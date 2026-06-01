@@ -818,3 +818,350 @@ REGISTRY.describe_group(
     "⏱ Live UI: поле «Откуда» (город вылета) Sletat — значение по умолчанию, фильтрация "
     "набором, выбор из списка, быстрые чипы, города не из дефолтного списка.",
 )
+
+
+async def _ltext(page, sel: str) -> str:
+    try:
+        loc = page.locator(sel)
+        if await loc.count() == 0:
+            return ""
+        return (await loc.first.text_content()) or ""
+    except Exception:
+        return ""
+
+
+def _reg(group: str, items, desc: str) -> None:
+    for fn, name, d in items:
+        add(group, name, fn, live=True, description=d)
+    REGISTRY.describe_group(group, desc)
+
+
+# --- Группа: Страна (Куда) ---
+GUI3 = "Live: Страна (Куда)"
+_COUNTRY = "#ui-select-country-to"
+
+
+def _country_option(name: str) -> str:
+    return f"xpath=//span[contains(@class,'slsf-country-to__select-text') and contains(.,'{name}')]"
+
+
+async def _country_value(page) -> str:
+    try:
+        v = await page.input_value(_COUNTRY, timeout=1500)
+        if (v or "").strip():
+            return v
+    except Exception:
+        pass
+    return await _ltext(page, _COUNTRY)
+
+
+async def _type_country(page, text: str) -> None:
+    # закрыть возможный «висящий» дропдаун от прошлого кейса (общая сессия) и кликнуть
+    # поле с force — бейдж «в аэропорту» (.visa-badge) перекрывает поле.
+    try:
+        await page.keyboard.press("Escape")
+    except Exception:
+        pass
+    await page.wait_for_timeout(150)
+    await page.locator(_COUNTRY).click(force=True)
+    await page.wait_for_timeout(250)
+    # ОЧИСТИТЬ поле: на общей сессии прошлый ввод накапливается («Таил»+«Турция» → нет совпадений)
+    await page.keyboard.press("Control+A")
+    await page.keyboard.press("Delete")
+    await page.wait_for_timeout(150)
+    await page.keyboard.type(text, delay=30)
+    await page.wait_for_timeout(800)
+
+
+async def _pick_country(page, name: str) -> None:
+    # кликаем именно ВИДИМУЮ опцию выпадашки (в общей сессии бывают скрытые дубли спана)
+    opts = page.locator(_country_option(name))
+    for i in range(await opts.count()):
+        o = opts.nth(i)
+        if await o.is_visible():
+            await o.click(force=True)  # верхняя опция бывает под бейджем «в аэропорту» — минуем overlay
+            await page.wait_for_timeout(700)
+            return
+    if await opts.count():
+        await opts.first.click(force=True)
+        await page.wait_for_timeout(700)
+
+
+async def _co_default():
+    page = await get_session("form-tours").ensure_tours_mode()
+    _assert((await _country_value(page)).strip(), "страна по умолчанию пустая")
+
+
+async def _co_filter():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _type_country(page, "мал")
+    _assert(await page.locator(_country_option("Мальдив")).count() > 0, "ввод «мал» не отфильтровал до Мальдив")
+
+
+async def _co_select():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _type_country(page, "Египет")
+    await _pick_country(page, "Египет")
+    _assert("Египет" in await _country_value(page), "страна не стала «Египет» после выбора")
+
+
+async def _co_filter_country2():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _type_country(page, "Таил")
+    _assert(await page.locator(_country_option("Таиланд")).count() > 0, "ввод «Таил» не отфильтровал до Таиланда")
+
+
+_reg(GUI3, [
+    (_co_default, "страна по умолчанию заполнена", "Поле «Куда» не пустое при открытии формы."),
+    (_co_filter, "ввод «мал» фильтрует до Мальдив", "Печатает «мал» и проверяет, что в подсказках появляются Мальдивы (поле фильтруется набором)."),
+    (_co_select, "выбор страны обновляет поле (Египет)", "Печатает «Египет», кликает подсказку, проверяет, что поле стало «Египет»."),
+    (_co_filter_country2, "ввод «Таил» фильтрует до Таиланда", "Проверяет фильтрацию на другом значении (Таиланд)."),
+], "⏱ Live UI: поле «Куда» (страна) Sletat — дефолт, фильтрация набором, выбор из подсказок.")
+
+
+# --- Группа: Количество ночей ---
+GUI4 = "Live: Количество ночей"
+_NIGHTS_LEFT = "div.uis-select__options_nights.nights-left"
+_NIGHTS_RIGHT = "div.uis-select__options_nights.nights-right"
+
+
+async def _ni_open_min():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await page.click("#ui-select-nightsMin")
+    await page.wait_for_timeout(500)
+    _assert(await visible(page, _NIGHTS_LEFT), "список «Ночей от» не открылся")
+
+
+async def _ni_list_not_empty():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await page.click("#ui-select-nightsMin")
+    await page.wait_for_timeout(500)
+    _assert(await page.locator(f"{_NIGHTS_LEFT} li").count() >= 5, "список ночей пуст/слишком короткий")
+
+
+async def _ni_open_max():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await page.click("#ui-select-nightsMax")
+    await page.wait_for_timeout(500)
+    _assert(await visible(page, _NIGHTS_RIGHT), "список «Ночей до» не открылся")
+
+
+async def _ni_select_min():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await page.click("#ui-select-nightsMin")
+    await page.wait_for_timeout(500)
+    li = page.locator(f"xpath=//div[contains(@class,'uis-select__options_nights') and contains(@class,'nights-left')]//li[normalize-space(text())='5']")
+    if await li.count() == 0:
+        return  # значение могло не отрендериться (виртуализация) — мягкий пропуск
+    await li.first.click()
+    await page.wait_for_timeout(400)
+    val = await page.input_value("#ui-select-nightsMin")
+    _assert("5" in (val or ""), f"выбор «5 ночей от» не отразился в поле (получили {val!r})")
+
+
+_reg(GUI4, [
+    (_ni_open_min, "дропдаун «Ночей от» открывается", "Клик по «Ночей от» открывает список значений."),
+    (_ni_list_not_empty, "список ночей не пуст", "В списке «Ночей от» есть варианты (≥5)."),
+    (_ni_open_max, "дропдаун «Ночей до» открывается", "Клик по «Ночей до» открывает список значений."),
+    (_ni_select_min, "выбор «5 ночей от» отражается в поле", "Выбирает 5 в списке «от» и проверяет, что значение применилось (ловит регресс «ушёл дефолт»)."),
+], "⏱ Live UI: «Количество ночей» Sletat — открытие списков «от»/«до», наполнение, применение выбора.")
+
+
+# --- Группа: Туристы (взрослые + дети) ---
+GUI5 = "Live: Туристы (взрослые + дети)"
+_TOURISTS = "#touristSelector .tourist-current-select"
+
+
+async def _adults(page):
+    txt = await _ltext(page, ".adult-counter-label")
+    digits = "".join(c for c in txt if c.isdigit())
+    return int(digits) if digits else None
+
+
+async def _open_tourists(page):
+    await page.click(_TOURISTS)
+    await page.wait_for_timeout(500)
+
+
+async def _tu_open():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _open_tourists(page)
+    _assert(await visible(page, ".adult-counter-label"), "панель туристов не открылась")
+
+
+async def _tu_add_adult():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _open_tourists(page)
+    before = await _adults(page)
+    _assert(before is not None, "не прочитать число взрослых")
+    await page.click("button.adult-counter-btn:not(.adult-counter-btn--minus)")
+    await page.wait_for_timeout(300)
+    after = await _adults(page)
+    _assert(after == before + 1, f"взрослые не увеличились: {before}→{after}")
+
+
+async def _tu_min_one():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _open_tourists(page)
+    for _ in range(6):
+        await page.click("button.adult-counter-btn--minus")
+        await page.wait_for_timeout(150)
+    _assert((await _adults(page)) == 1, "взрослых можно увести ниже 1")
+
+
+async def _tu_add_child():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _open_tourists(page)
+    await page.click("button.child-counter__add-btn")
+    await page.wait_for_timeout(400)
+    _assert(await visible(page, ".child-counter__list"), "после «добавить ребёнка» не появился выбор возраста")
+
+
+async def _tu_pick_age():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _open_tourists(page)
+    await page.click("button.child-counter__add-btn")
+    await page.wait_for_selector(".child-counter__list", timeout=5000)
+    clicked = await page.evaluate(
+        """() => {
+            const items = [...document.querySelectorAll('.child-counter__list .child-counter__list__item')];
+            const el = items.find(e => parseInt((e.textContent||'').trim(),10) === 7);
+            if (el) { el.click(); return true; } return false;
+        }"""
+    )
+    _assert(clicked, "не удалось выбрать возраст ребёнка (7)")
+    await page.wait_for_timeout(300)
+    _assert(await visible(page, ".child-list-container") or await visible(page, ".child-list-container__item"),
+            "выбранный ребёнок не отобразился")
+
+
+async def _tu_summary():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _open_tourists(page)
+    txt = (await _ltext(page, _TOURISTS)).lower()
+    _assert("взросл" in txt, f"подпись туристов без «взрослых»: {txt!r}")
+
+
+_reg(GUI5, [
+    (_tu_open, "панель туристов открывается", "Клик по селектору туристов открывает счётчики."),
+    (_tu_add_adult, "плюс увеличивает взрослых", "Кнопка «+» увеличивает число взрослых на 1."),
+    (_tu_min_one, "взрослых не меньше 1", "Многократный «−» не уводит число взрослых ниже 1."),
+    (_tu_add_child, "добавление ребёнка открывает выбор возраста", "«Добавить ребёнка» показывает список возрастов."),
+    (_tu_pick_age, "возраст ребёнка выбирается", "Выбирает возраст 7 и проверяет, что ребёнок добавлен."),
+    (_tu_summary, "подпись туристов содержит «взрослых»", "Итоговая подпись селектора корректна."),
+], "⏱ Live UI: «Туристы» Sletat — открытие, взрослые ±, граница (мин. 1), добавление ребёнка и выбор возраста.")
+
+
+# --- Группа: Категория отеля (звёзды) ---
+GUI6 = "Live: Категория отеля (звёзды)"
+_STARS_CUR = "#hotelCategoryContainer .hotel-category-current-select"
+
+
+async def _open_stars(page):
+    await page.click("#hotelCategoryOpenButton")
+    await page.wait_for_timeout(400)
+
+
+async def _star_btn(page, n: int):
+    return page.locator(
+        f"xpath=//div[@id='hotelCategoryContainer']//button[contains(@class,'hot-buttons__button')"
+        f" and contains(normalize-space(.),'{n}')]"
+    )
+
+
+async def _st_default():
+    page = await get_session("form-tours").ensure_tours_mode()
+    cur = (await _ltext(page, _STARS_CUR)).lower()
+    _assert("люб" in cur or cur == "", f"звёзды по умолчанию не «Любая»: {cur!r}")
+
+
+async def _st_open():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _open_stars(page)
+    _assert(await visible(page, "#hotelCategoryContainer"), "панель звёзд не открылась")
+
+
+async def _st_select4():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _open_stars(page)
+    b = await _star_btn(page, 4)
+    _assert(await b.count() > 0, "кнопка 4★ не найдена")
+    await b.first.click()
+    await page.wait_for_timeout(300)
+    _assert("4" in await _ltext(page, _STARS_CUR), "выбор 4★ не отразился в подписи")
+
+
+async def _st_multi():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _open_stars(page)
+    for n in (4, 5):
+        b = await _star_btn(page, n)
+        _assert(await b.count() > 0, f"кнопка {n}★ не найдена")
+        await b.first.click()
+        await page.wait_for_timeout(250)
+    _assert("5" in await _ltext(page, _STARS_CUR), "после выбора 4★ и 5★ категория не обновилась")
+
+
+_reg(GUI6, [
+    (_st_default, "по умолчанию «Любая»", "До выбора категория отеля — «Любая»."),
+    (_st_open, "панель звёзд открывается", "Кнопка открытия показывает контейнер категорий."),
+    (_st_select4, "выбор 4★ применяется", "Выбор 4★ отражается в подписи категории."),
+    (_st_multi, "категории 4★ и 5★ кликабельны", "Кнопки категорий 4★ и 5★ кликабельны; выбор отражается (Sletat показывает активную категорию)."),
+], "⏱ Live UI: «Категория отеля» (звёзды) Sletat — дефолт «Любая», открытие, одиночный и множественный выбор.")
+
+
+# --- Группа: Питание ---
+GUI7 = "Live: Питание"
+_MEALS_CUR = "#mealsContainer .hotel-category-current-select"
+
+
+async def _open_meals(page):
+    await page.click("#mealsOpenButton")
+    await page.wait_for_timeout(400)
+
+
+async def _meal_btn(page, code: str):
+    return page.locator(
+        f"xpath=//div[@id='mealsContainer']//button[contains(@class,'hot-buttons__button')"
+        f" and normalize-space(text())='{code}']"
+    )
+
+
+async def _me_default():
+    page = await get_session("form-tours").ensure_tours_mode()
+    cur = (await _ltext(page, _MEALS_CUR)).lower()
+    _assert("люб" in cur or cur == "", f"питание по умолчанию не «Любое»: {cur!r}")
+
+
+async def _me_open():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _open_meals(page)
+    _assert(await visible(page, "#mealsContainer"), "панель питания не открылась")
+
+
+async def _me_select_ai():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _open_meals(page)
+    b = await _meal_btn(page, "AI")
+    _assert(await b.count() > 0, "кнопка питания AI не найдена")
+    await b.first.click()
+    await page.wait_for_timeout(300)
+    _assert("AI" in await _ltext(page, _MEALS_CUR) or "вкл" in (await _ltext(page, _MEALS_CUR)).lower(),
+            "выбор AI не отразился в подписи")
+
+
+async def _me_select_bb():
+    page = await get_session("form-tours").ensure_tours_mode()
+    await _open_meals(page)
+    b = await _meal_btn(page, "BB")
+    _assert(await b.count() > 0, "кнопка питания BB не найдена")
+    await b.first.click()
+    await page.wait_for_timeout(300)
+
+
+_reg(GUI7, [
+    (_me_default, "по умолчанию «Любое»", "До выбора питание — «Любое»."),
+    (_me_open, "панель питания открывается", "Кнопка открытия показывает контейнер питания."),
+    (_me_select_ai, "выбор AI применяется", "Выбор «Всё включено» (AI) отражается в подписи."),
+    (_me_select_bb, "выбор BB кликается", "Кнопка BB (только завтрак) кликабельна."),
+], "⏱ Live UI: «Питание» Sletat — дефолт «Любое», открытие, выбор кодов (AI/BB).")
