@@ -150,15 +150,21 @@ class ProviderResult(BaseModel):
     duration_seconds: float  # от клика «Найти» до полного завершения поиска
     search_mode: SearchMode = "tours"
     offers: list[Offer] = Field(default_factory=list)              # режим «Туры»
-    hotel_offers: list[HotelOffer] = Field(default_factory=list)   # режим «Отели»
+    hotel_offers: list[HotelOffer] = Field(default_factory=list)   # отели: в режиме «Отели» — все; в «Турах» — первые N для показа
     operator_offers: list["OperatorOffer"] = Field(default_factory=list)  # оператор+отель+цена+скорость
+    operators_no_tours: list[str] = Field(default_factory=list)          # блинчик: «Туров нет»
+    operators_not_responding: list[str] = Field(default_factory=list)    # блинчик: «Оператор не отвечает»
     error: str | None = None
     screenshot_path: str | None = None
     search_url: str | None = None  # URL результата (если площадка его формирует)
 
     def priced_items(self) -> list[PricedItem]:
-        """Все предложения с ценой независимо от режима."""
-        return [*self.offers, *self.hotel_offers]
+        """Предложения с ценой ДЛЯ СРАВНЕНИЯ: в турах — операторы, в отелях — отели.
+        В режиме «Туры» hotel_offers могут быть заполнены как «первые N отелей» только
+        для показа, поэтому в сравнении тогда участвуют операторы (offers), не отели."""
+        if self.search_mode == "hotels":
+            return list(self.hotel_offers)
+        return list(self.offers)
 
     @property
     def cheapest(self) -> PricedItem | None:

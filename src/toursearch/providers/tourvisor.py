@@ -323,14 +323,16 @@ class TourvisorProvider:
                         error="URL-параметры не совпали: " + "; ".join(
                             f"{f}: ожидали {e!r}, получили {a!r}" for f, e, a in url_problems),
                     )
-                operator_offers = self._to_operator_offers(offers, [])
+                top_hotels = (await self._parse_hotels(page))[:10]  # первые 10 отелей выдачи — для показа
+                operator_offers = self._to_operator_offers(offers, top_hotels)
                 shot = await self._safe_screenshot(page)
                 log.info("Tourvisor: результаты получены — %d предложений за %.1f с",
                          len(offers), time.monotonic() - start)
                 return ProviderResult(
                     provider=self.name, success=bool(offers),
                     duration_seconds=time.monotonic() - start,
-                    search_mode="tours", offers=offers, operator_offers=operator_offers,
+                    search_mode="tours", offers=offers, hotel_offers=top_hotels,
+                    operator_offers=operator_offers,
                     search_url=search_url,
                     screenshot_path=shot,
                     error=None if offers else "Предложений не найдено по заданным параметрам.",

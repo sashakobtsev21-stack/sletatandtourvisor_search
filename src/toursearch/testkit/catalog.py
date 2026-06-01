@@ -127,6 +127,15 @@ def _with_failed():
 add(G, "упавшая площадка исключена из лучшего", lambda: _assert(_with_failed().cheapest.operator == "Coral"))
 add(G, "упавшая площадка не быстрейшая", lambda: _assert(_with_failed().fastest_provider != "broken"))
 add(G, "пустой отчёт: cheapest None", lambda: _assert(ComparisonReport(params=mk()).cheapest is None))
+add(G, "туры: отели для показа не влияют на лучшее (берём операторов)", lambda: _assert(
+    ProviderResult(provider="p", success=True, duration_seconds=1.0, search_mode="tours",
+                   offers=[Offer(provider="p", operator="A", price=Decimal("100000"))],
+                   hotel_offers=[HotelOffer(provider="p", hotel_name="H", price=Decimal("1"))]
+                   ).cheapest.operator == "A"))
+add(G, "отели: лучшее берётся из отелей", lambda: _assert(
+    ProviderResult(provider="p", success=True, duration_seconds=1.0, search_mode="hotels",
+                   hotel_offers=[HotelOffer(provider="p", hotel_name="H", price=Decimal("999"))]
+                   ).cheapest.hotel_name == "H"))
 
 
 def _report_hotels():

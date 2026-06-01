@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime
 from decimal import Decimal
@@ -39,7 +40,9 @@ CREATE TABLE IF NOT EXISTS provider_results (
     search_mode      TEXT NOT NULL DEFAULT 'tours',
     error            TEXT,
     screenshot_path  TEXT,
-    search_url       TEXT
+    search_url       TEXT,
+    operators_no_tours       TEXT,
+    operators_not_responding TEXT
 );
 CREATE TABLE IF NOT EXISTS offers (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,6 +110,10 @@ class Storage:
             self._conn.execute("ALTER TABLE provider_results ADD COLUMN search_mode TEXT DEFAULT 'tours'")
         if "search_url" not in cols:
             self._conn.execute("ALTER TABLE provider_results ADD COLUMN search_url TEXT")
+        if "operators_no_tours" not in cols:
+            self._conn.execute("ALTER TABLE provider_results ADD COLUMN operators_no_tours TEXT")
+        if "operators_not_responding" not in cols:
+            self._conn.execute("ALTER TABLE provider_results ADD COLUMN operators_not_responding TEXT")
         self._conn.commit()
 
     def close(self) -> None:
@@ -128,8 +135,9 @@ class Storage:
         for result in report.results:
             rcur = self._conn.execute(
                 """INSERT INTO provider_results
-                   (run_id, provider, success, duration_seconds, search_mode, error, screenshot_path, search_url)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (run_id, provider, success, duration_seconds, search_mode, error, screenshot_path,
+                    search_url, operators_no_tours, operators_not_responding)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     run_id,
                     result.provider,
@@ -139,6 +147,8 @@ class Storage:
                     result.error,
                     result.screenshot_path,
                     result.search_url,
+                    json.dumps(result.operators_no_tours, ensure_ascii=False),
+                    json.dumps(result.operators_not_responding, ensure_ascii=False),
                 ),
             )
             pr_id = int(rcur.lastrowid)
@@ -250,6 +260,14 @@ class Storage:
                 )
                 for o in oo_rows
             ]
+            def _jlist(key: str) -> list[str]:
+                if key not in pr.keys() or not pr[key]:
+                    return []
+                try:
+                    return json.loads(pr[key])
+                except Exception:
+                    return []
+
             results.append(
                 ProviderResult(
                     provider=pr["provider"],
@@ -259,6 +277,8 @@ class Storage:
                     offers=offers,
                     hotel_offers=hotel_offers,
                     operator_offers=operator_offers,
+                    operators_no_tours=_jlist("operators_no_tours"),
+                    operators_not_responding=_jlist("operators_not_responding"),
                     error=pr["error"],
                     screenshot_path=pr["screenshot_path"],
                     search_url=pr["search_url"] if "search_url" in pr.keys() else None,

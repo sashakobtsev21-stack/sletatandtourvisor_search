@@ -112,6 +112,25 @@ def test_operator_offers_roundtrip(tmp_path):
     storage.close()
 
 
+def test_operator_statuses_roundtrip(tmp_path):
+    # «Туров нет» / «Оператор не отвечает» из блинчика должны сохраняться и читаться
+    # (страница результатов берёт их из БД).
+    storage = Storage(tmp_path / "t.db")
+    report = _report()
+    report.results[1].operators_no_tours = ["Coral Travel", "Sunmar"]
+    report.results[1].operators_not_responding = ["BSI Group"]
+    run_id = storage.save_report(report)
+
+    restored = storage.get_report(run_id)
+    sl = [r for r in restored.results if r.provider == "sletat"][0]
+    assert sl.operators_no_tours == ["Coral Travel", "Sunmar"]
+    assert sl.operators_not_responding == ["BSI Group"]
+    # у площадки без статусов — пустые списки
+    tv = [r for r in restored.results if r.provider == "tourvisor"][0]
+    assert tv.operators_no_tours == [] and tv.operators_not_responding == []
+    storage.close()
+
+
 def test_failed_provider_persisted(tmp_path):
     storage = Storage(tmp_path / "t.db")
     report = _report()
