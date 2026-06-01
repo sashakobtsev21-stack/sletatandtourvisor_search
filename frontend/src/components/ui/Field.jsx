@@ -58,28 +58,44 @@ export function Input({ icon = false, className = "", ...props }) {
  * раньше, поэтому места вызова не меняются. Работает и контролируемо
  * (value+onChange), и неконтролируемо (defaultValue+name → скрытый input для
  * отправки формы). onChange получает событие вида { target: { value } }.
+ *
+ * searchable=true — для длинных списков (города/страны): опции сортируются по
+ * алфавиту, а вверху списка появляется поле ввода с живым фильтром (как на
+ * Sletat: печатаешь — список сразу сужается).
  */
 export function Select({
   icon = false, className = "", children,
-  value, defaultValue, name, onChange, ...rest
+  value, defaultValue, name, onChange, searchable = false, ...rest
 }) {
-  const options = Children.toArray(children)
+  const baseOptions = Children.toArray(children)
     .filter((c) => c && c.type === "option")
     .map((c) => {
       const v = c.props.value !== undefined ? c.props.value : c.props.children;
       return { value: String(v), label: String(c.props.children ?? v) };
     });
+  // В режиме поиска показываем по алфавиту (ru-локаль).
+  const options = searchable
+    ? [...baseOptions].sort((a, b) => a.label.localeCompare(b.label, "ru"))
+    : baseOptions;
 
   const isControlled = value !== undefined;
   const [internal, setInternal] = useState(
-    defaultValue !== undefined ? String(defaultValue) : options[0]?.value ?? ""
+    defaultValue !== undefined ? String(defaultValue) : baseOptions[0]?.value ?? ""
   );
   const current = isControlled ? String(value) : internal;
   const [open, setOpen] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
+  const [query, setQuery] = useState("");
   const [pos, setPos] = useState(null); // координаты выпадающего списка (портал)
-  const ref = useRef(null);   // обёртка с кнопкой-триггером
-  const popRef = useRef(null); // панель опций (в портале на body)
+  const ref = useRef(null);     // обёртка с кнопкой-триггером
+  const popRef = useRef(null);  // панель опций (в портале на body)
+  const searchRef = useRef(null);
+
+  // Живой фильтр по подстроке (регистронезависимо), только в searchable.
+  const q = query.trim().toLowerCase();
+  const filtered = searchable && q
+    ? options.filter((o) => o.label.toLowerCase().includes(q))
+    : options;
 
   // Позиционируем панель по триггеру. Портал на body нужен, потому что каждый
   // Field — motion.div со своим stacking context (transform/filter), внутри
@@ -111,18 +127,27 @@ export function Select({
     };
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // При открытии: сброс фильтра, подсветка текущего, фокус в поле поиска.
   useEffect(() => {
     if (open) {
+      setQuery("");
       const i = options.findIndex((o) => o.value === current);
       setActiveIdx(i < 0 ? 0 : i);
+      if (searchable) setTimeout(() => searchRef.current?.focus(), 30);
     }
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // При наборе текста активная строка — первая из отфильтрованных.
+  useEffect(() => {
+    if (open && searchable) setActiveIdx(0);
+  }, [q]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectedLabel = options.find((o) => o.value === current)?.label ?? current;
 
   const choose = (v) => {
     if (!isControlled) setInternal(v);
     setOpen(false);
+    setQuery("");
     onChange?.({ target: { value: v } });
   };
 
@@ -132,9 +157,9 @@ export function Select({
     }
     if (!open) return;
     if (e.key === "Escape") { setOpen(false); }
-    else if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx((i) => Math.min(i + 1, options.length - 1)); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); setActiveIdx((i) => Math.min(i + 1, filtered.length - 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setActiveIdx((i) => Math.max(i - 1, 0)); }
-    else if (e.key === "Enter") { e.preventDefault(); const o = options[activeIdx]; if (o) choose(o.value); }
+    else if (e.key === "Enter") { e.preventDefault(); const o = filtered[activeIdx]; if (o) choose(o.value); }
   };
 
   return (
@@ -163,40 +188,59 @@ export function Select({
 
       {open && pos &&
         createPortal(
-          <motion.ul
+          <motion.div
             ref={popRef}
-            role="listbox"
             initial={{ opacity: 0, y: -6, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             transition={{ duration: 0.14, ease: "easeOut" }}
             style={{ position: "absolute", top: pos.top, left: pos.left, width: pos.width }}
-            className="z-[60] max-h-60 overflow-y-auto rounded-xl border border-white/10 bg-[#0b1026] p-1 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.9)] ring-1 ring-black/40"
+            className="z-[60] overflow-hidden rounded-xl border border-white/10 bg-[#0b1026] p-1 shadow-[0_20px_50px_-12px_rgba(0,0,0,0.9)] ring-1 ring-black/40"
           >
-            {options.map((o, i) => {
-              const selected = o.value === current;
-              const active = i === activeIdx;
-              return (
-                <li key={o.value} role="option" aria-selected={selected}>
-                  <button
-                    type="button"
-                    onClick={() => choose(o.value)}
-                    onMouseEnter={() => setActiveIdx(i)}
-                    className={[
-                      "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition-colors",
-                      selected ? "bg-brand/25 text-white" : active ? "bg-white/10 text-ink" : "text-ink/90",
-                    ].join(" ")}
-                  >
-                    <span className="truncate">{o.label}</span>
-                    {selected && (
-                      <svg className="size-3.5 shrink-0 text-brand-soft" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
-                        <path d="M20 6 9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    )}
-                  </button>
-                </li>
-              );
-            })}
-          </motion.ul>,
+            {searchable && (
+              <div className="relative px-1 pb-1 pt-0.5">
+                <svg className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" strokeLinecap="round" />
+                </svg>
+                <input
+                  ref={searchRef}
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={onKeyDown}
+                  placeholder="Поиск…"
+                  className="w-full rounded-lg border border-white/10 bg-white/[0.04] py-2 pl-8 pr-3 text-sm text-ink outline-none placeholder:text-muted/60 focus:border-brand/60 focus:ring-2 focus:ring-brand/20"
+                />
+              </div>
+            )}
+            <ul role="listbox" className="max-h-60 overflow-y-auto">
+              {filtered.length === 0 && (
+                <li className="px-3 py-3 text-center text-sm text-muted">Ничего не найдено</li>
+              )}
+              {filtered.map((o, i) => {
+                const selected = o.value === current;
+                const active = i === activeIdx;
+                return (
+                  <li key={o.value} role="option" aria-selected={selected}>
+                    <button
+                      type="button"
+                      onClick={() => choose(o.value)}
+                      onMouseEnter={() => setActiveIdx(i)}
+                      className={[
+                        "flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm transition-colors",
+                        selected ? "bg-brand/25 text-white" : active ? "bg-white/10 text-ink" : "text-ink/90",
+                      ].join(" ")}
+                    >
+                      <span className="truncate">{o.label}</span>
+                      {selected && (
+                        <svg className="size-3.5 shrink-0 text-brand-soft" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                          <path d="M20 6 9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </motion.div>,
           document.body
         )}
     </div>

@@ -178,14 +178,14 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
       <div className="grid gap-4 sm:grid-cols-2">
         {!isHotels && (
           <Field label="Откуда?" icon={Plane} htmlFor="departure_city">
-            <Select id="departure_city" name="departure_city" icon defaultValue={initial?.departure_city ?? "Москва"}>
+            <Select id="departure_city" name="departure_city" icon searchable defaultValue={initial?.departure_city ?? "Москва"}>
               {DEPARTURE_CITIES.map((c) => <option key={c}>{c}</option>)}
             </Select>
           </Field>
         )}
 
         <Field label="Куда?" icon={Globe2} htmlFor="destination_country">
-          <Select id="destination_country" name="destination_country" icon defaultValue={initial?.destination_country ?? "Турция"}>
+          <Select id="destination_country" name="destination_country" icon searchable defaultValue={initial?.destination_country ?? "Турция"}>
             {COUNTRIES.map((c) => <option key={c}>{c}</option>)}
           </Select>
         </Field>
