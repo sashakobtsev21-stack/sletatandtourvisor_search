@@ -67,6 +67,18 @@ def _parse_price(text: str) -> Decimal | None:
     return Decimal(digits) if digits else None
 
 
+def _parse_hotel_price(text: str) -> Decimal | None:
+    """Цена карточки отеля Sletat. Текст вида «от 9 097 1 тур» / «от 13 962 6 туров»:
+    цена и счётчик туров стоят в DOM рядом и склеиваются («9 0971»), из-за чего обычное
+    «убрать всё кроме цифр» давало 90971 вместо 9097. Берём ВЕДУЩЕЕ число с пробелами-
+    разделителями тысяч (группы ровно по 3 цифры), хвост «N тур(ов)» отбрасываем."""
+    m = re.search(r"\d{1,3}(?:\s\d{3})+|\d+", text or "")
+    if not m:
+        return None
+    digits = re.sub(r"\D", "", m.group(0))
+    return Decimal(digits) if digits else None
+
+
 def build_operator_offers(provider_name: str, rows: list[dict]) -> list[Offer]:
     """Из строк панели операторов [{name, price}] → Offer (дедуп, мин. цена)."""
     best: dict[str, tuple[Decimal, str]] = {}
@@ -89,7 +101,7 @@ def build_hotel_offers(provider_name: str, rows: list[dict]) -> list[HotelOffer]
     out: list[HotelOffer] = []
     for row in rows:
         name = (row.get("name") or "").strip()
-        price = _parse_price(row.get("price") or "")
+        price = _parse_hotel_price(row.get("price") or "")
         if not name or price is None:
             continue
         rating = None
@@ -208,6 +220,8 @@ class SletatProvider:
                 # перечень туроператоров с ценами.
                 await self._open_operator_panel(page)
                 shot = await self._safe_screenshot(page)
+                log.info("Sletat: результаты получены — %d предложений за %.1f с",
+                         len(offers) + len(hotel_offers), time.monotonic() - start)
                 return ProviderResult(
                     provider=self.name,
                     success=found,

@@ -24,6 +24,7 @@ from toursearch.models import (
 from toursearch.providers._formcheck import exact, norm, set_equal, text_contains
 from toursearch.providers.sletat import _MEAL_BTN
 from toursearch.providers.sletat import _OPERATOR_MAP as SL_OPS
+from toursearch.providers.sletat import _parse_hotel_price as sl_hprice
 from toursearch.providers.sletat import build_hotel_offers as sl_hotels
 from toursearch.providers.sletat import build_operator_offers as sl_ops
 from toursearch.providers.tourvisor import _OPERATOR_MAP as TV_OPS
@@ -188,6 +189,21 @@ for raw, val in [("112 741", "112741"), ("112 741 ₽", "112741"), ("от 4 480"
     add(G, f"'{raw}' -> {val}", (lambda r=raw, v=val: _assert(_parse_price(r) == Decimal(v))))
 for raw in ["—", "", "нет", "руб"]:
     add(G, f"'{raw}' -> None", (lambda r=raw: _assert(_parse_price(r) is None)))
+
+# --- цена карточки отеля Sletat: цена склеена со счётчиком туров «от 9 097 1 тур» ---
+G = "Парсинг: цена отеля Sletat"
+for raw, val in [
+    ("от 9 0971 тур", "9097"),
+    ("от 12 1501 тур", "12150"),
+    ("от 13 9626 туров", "13962"),
+    ("от 14 3994 тура", "14399"),
+    ("от 14 60646 туров", "14606"),
+    ("от 4 480", "4480"),
+]:
+    add(G, f"'{raw}' -> {val}", (lambda r=raw, v=val: _assert(sl_hprice(r) == Decimal(v))))
+add(G, "build_hotel_offers: цена без хвоста туров", lambda: _assert(
+    sl_hotels("s", [{"name": "Nostalji", "stars": 0, "rating": "8.2", "destination": "",
+                     "price": "от 9 0971 тур", "operators": ""}])[0].price == Decimal("9097")))
 
 
 # ============================ 6. URL Sletat ============================
@@ -482,6 +498,7 @@ _GROUP_DESC = {
     "Парсинг: отели (Tourvisor)": "Проверяют разбор карточки отеля Tourvisor: имя и звёзды из заголовка, рейтинг, цена; карточки без цены пропускаются.",
     "Парсинг: отели (Sletat)": "Проверяют разбор карточки отеля Sletat: имя, звёзды, рейтинг, цена, число операторов.",
     "Парсинг: цена": "Проверяют извлечение числовой цены из текста («112 741 ₽» → 112741) и что мусор («—», пусто) даёт «нет цены».",
+    "Парсинг: цена отеля Sletat": "Регрессия: в карточке отеля Sletat цена склеена со счётчиком туров («от 9 097 1 тур»). Проверяют, что парсится 9097, а не 90971.",
     "URL Sletat: разбор": "Проверяют разбор URL результата Sletat на части (город, страна, ночи, взрослые, даты).",
     "URL Sletat: сверка совпадает": "Берут корректный URL Sletat и убеждаются, что сверка с теми же параметрами НЕ находит расхождений.",
     "URL Sletat: детект расхождений": "Подменяют одно поле и проверяют, что сверка URL ЛОВИТ расхождение (именно так был найден баг с ночами).",

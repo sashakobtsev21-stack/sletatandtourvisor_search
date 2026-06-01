@@ -11,11 +11,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from pydantic import BaseModel
 from playwright.async_api import async_playwright
 
 from toursearch.providers import get_provider, list_providers, load_browser_providers
+
+log = logging.getLogger("toursearch.healthcheck")
 
 
 class ProviderHealth(BaseModel):
@@ -47,24 +50,36 @@ async def check_provider(name: str, headless: bool = True, timeout_ms: int = 15_
             context = await browser.new_context(no_viewport=True, permissions=[])
             page = await context.new_page()
             page.set_default_timeout(timeout_ms)
+            log.info("Health-check %s: открываю форму %s…", name, url)
             await page.goto(url, wait_until="domcontentloaded")
             await page.wait_for_timeout(3500)
+            if popups:
+                log.info("Health-check %s: закрываю всплывающие окна (реклама/куки)…", name)
             for sel in popups:
                 try:
                     await page.click(sel, timeout=2500)
                     await page.wait_for_timeout(300)
                 except Exception:
                     pass
+            log.info("Health-check %s: страница загружена, проверяю %d ключевых полей формы…", name, len(anchors))
             missing = []
             for label, sel in anchors.items():
                 try:
                     present = await page.locator(sel).count() > 0
                 except Exception:
                     present = False
-                if not present:
+                if present:
+                    log.info("Health-check %s: поле «%s» — на месте", name, label)
+                else:
+                    log.warning("Health-check %s: поле «%s» — НЕ найдено (%s)", name, label, sel)
                     missing.append(f"{label} ({sel})")
+            if missing:
+                log.warning("Health-check %s: ❌ отсутствуют %d из %d полей", name, len(missing), len(anchors))
+            else:
+                log.info("Health-check %s: ✅ все %d полей на месте", name, len(anchors))
             return ProviderHealth(provider=name, ok=not missing, missing=missing)
         except Exception as exc:  # noqa: BLE001
+            log.warning("Health-check %s: ошибка — %s: %s", name, type(exc).__name__, exc)
             return ProviderHealth(provider=name, ok=False, error=f"{type(exc).__name__}: {exc}")
         finally:
             await browser.close()
