@@ -447,19 +447,39 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
     pending: dict[str, list[str]] = {}
 
     def _category(group: str) -> str:
-        """Категория группы тестов: health-check / scenario / live / fast (быстрые).
-        «Сценарии» (Live: Сценарий — …) — отдельная категория от «Live» (UI-проверки)."""
+        """Категория группы тестов — по СМЫСЛУ.
+
+        Не-live: fast (быстрая логика) и healthcheck (целостность форм) — на фронте
+        объединены в один раздел «Health-check». Live делятся по назначению:
+        smoke / positive (сверка фильтров) / hotels (режим «Отели») /
+        coverage (направления·составы) / negative (границы) / e2e (персоны·срез) /
+        ui (элементы формы и выдачи)."""
         g = group.lower()
         if g.startswith("health"):
             return "healthcheck"
-        if g.startswith("live: сценарий"):
-            return "scenario"
-        if g.startswith("live"):
-            return "live"
-        return "fast"
+        if not g.startswith("live"):
+            return "fast"
+        if "смоук" in g:
+            return "smoke"
+        if "границ" in g or "негатив" in g:
+            return "negative"
+        if "сценарий" in g:  # «Live: Сценарий — …»
+            if any(k in g for k in ("направлен", "города", "состав")):
+                return "coverage"
+            if "отели" in g:
+                return "hotels"
+            if "персон" in g:
+                return "e2e"
+            return "positive"  # звёзды/рейтинг/цена/курорт/оператор/питание/ночи/рейсы/валюта/pairwise
+        if "срез сценариев" in g:
+            return "e2e"
+        return "ui"  # прочие «Live: …» — проверки элементов формы/выдачи
 
-    # Порядок прогона/показа: быстрые → health-check → live (UI) → сценарии (тяжёлые).
-    _CAT_ORDER = {"fast": 0, "healthcheck": 1, "live": 2, "scenario": 3}
+    # Порядок прогона/показа (быстрые и health — первыми; live — по смыслу).
+    _CAT_ORDER = {
+        "fast": 0, "healthcheck": 1, "smoke": 2, "ui": 3,
+        "positive": 4, "hotels": 5, "coverage": 6, "negative": 7, "e2e": 8,
+    }
 
     def _ordered_groups():
         grouped = REGISTRY.grouped()

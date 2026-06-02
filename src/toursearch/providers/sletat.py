@@ -147,10 +147,18 @@ class SletatProvider:
     HEALTH_ANCHORS = {
         "город вылета": "input.excludeClickOutside",
         "страна": "#ui-select-country-to",
+        "курорт": "#ui-select-resort",
         "даты": "div.containerTitle",
         "ночи": "#ui-select-nightsMin",
         "туристы": "#touristSelector",
+        "категория (звёзды)": "#hotelCategoryOpenButton",
+        "питание": "#mealsOpenButton",
+        "рейтинг отеля": ".slsf-rating-container",
+        "цена": "input.uis-text_price-input",
+        "валюта": "#ui-select-currency_selector",
         "операторы": ".uis-text_tour-operator",
+        "конкретный отель": "#ui-select-hotels",
+        "тип отеля": "#hotelServiceContainer",
         "кнопка поиска": "[data-testid='b2b.search-form.search-btn']",
     }
 

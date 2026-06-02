@@ -2479,3 +2479,72 @@ _reg(SC16, [
     for lbl, over, sib, req in _PERSONAS
 ], "⏱ Сценарий: реальные пользовательские «персоны» — типичные бронирования (семья/пара/группа/бюджет, "
    "разные направления и составы) с полной сверкой выдачи по всем заданным фильтрам.")
+
+
+# ============ 22. Live: СМОУК — быстрая проверка «жив + ищет» ============
+SMOKE = "Live: Смоук"
+
+
+async def _smoke_form_alive():
+    page = await get_session("form-tours").ensure_tours_mode()
+    missing = [label for label, sel in _FORM_ANCHORS.items() if not await visible(page, sel)]
+    _assert(not missing, f"не видны блоки формы: {missing}")
+
+
+async def _smoke_modes():
+    s = get_session("form-tours")
+    await s.ensure_tours_mode()
+    page = await s.switch_to_hotels()
+    _assert(not await visible(page, _CITY), "Туры→Отели: город вылета должен скрыться")
+    page = await s.ensure_tours_mode()
+    _assert(await visible(page, _CITY), "Отели→Туры: город вылета должен вернуться")
+
+
+async def _smoke_search_works():
+    o = await _sk.run(_sk.base_params())
+    _sk.have_results(o)
+    _sk.url_matches(o)
+
+
+_reg(SMOKE, [
+    (_smoke_form_alive, "форма Sletat открывается — все блоки на месте",
+     "Открывает форму и проверяет, что видны ключевые блоки (Откуда/Куда/Даты/Ночи/Туристы/кнопка)."),
+    (_smoke_modes, "переключение Туры↔Отели работает",
+     "Туры→Отели прячет город вылета, Отели→Туры возвращает — базовая интерактивность жива."),
+    (_smoke_search_works, "базовый поиск даёт результаты и верный URL",
+     "Реальный поиск Москва→Турция: есть выдача и URL кодирует параметры. Ключевой смоук «поиск вообще работает»."),
+], "⏱ Смоук: быстрая проверка, что сайт жив, форма цела и базовый поиск возвращает результаты "
+   "(минимальный набор «всё ли в принципе работает»).")
+
+
+# ============ 23. Быстрые: доп. целостность логики (расширение) ============
+G = "Быстрые: доп. целостность логики"
+# Цена карточки отеля Sletat — больше склеенных со счётчиком туров вариантов.
+for _raw, _val in [("от 25 0003 тура", "25000"), ("от 7 9901 тур", "7990"),
+                   ("от 103 50012 туров", "103500"), ("1 250 ₽", "1250")]:
+    add(G, f"цена отеля '{_raw}' → {_val}", (lambda r=_raw, v=_val: _assert(sl_hprice(r) == Decimal(v))))
+# Мусор в цене → None (фильтр просто не применится, не падаем).
+for _raw in ["", "—", "abc", "руб"]:
+    add(G, f"цена-мусор '{_raw}' → None", (lambda r=_raw: _assert(_parse_price(r) is None)))
+# Модели: границы значений.
+add(G, "ночи 1..14 валидны", lambda: _assert(mk(nights_min=1, nights_max=14).nights_max == 14))
+add(G, "взрослых 8 валидно", lambda: _assert(mk(adults=8).adults == 8))
+add(G, "ребёнок 0 лет → 3 туриста", lambda: _assert(mk(children_ages=[0]).total_tourists == 3))
+add(G, "ребёнок 18 лет отклонён", lambda: _raises(lambda: mk(children_ages=[18])))
+add(G, "питание UAI валидно", lambda: _assert(mk(meals=["UAI"]).meals == ["UAI"]))
+add(G, "звёзды [2,3,4,5] валидны", lambda: _assert(mk(hotel_stars=[2, 3, 4, 5]).hotel_stars == [2, 3, 4, 5]))
+# Парсинг отеля Tourvisor: имя/звёзды/рейтинг.
+add(G, "split 'Rixos Premium 5*'", lambda: _assert(_split_name_stars("Rixos Premium 5*") == ("Rixos Premium", 5)))
+add(G, "рейтинг отеля '9,2' → 9.2", lambda: _assert(
+    tv_hotels("t", [{"title": "X 5*", "subtitle": "", "rating": "9,2", "price": "100 000"}])[0].rating == 9.2))
+# Фильтр операторов Tourvisor: алиас и регион.
+add(G, "фильтр: funsun → FUN&SUN", lambda: _assert(
+    [o.operator for o in tv_filter(_tv_ofs("FUN&SUN (TUI)", "Anex"), ["funsun"])] == ["FUN&SUN (TUI)"]))
+add(G, "фильтр: coral не цепляет Coral (BY)", lambda: _assert(
+    [o.operator for o in tv_filter(_tv_ofs("Coral", "Coral Travel (BY)"), ["coral"])] == ["Coral"]))
+# URL Sletat: детект доп. расхождений.
+add(G, "URL детект adults 2→6", lambda: _detect(mk(adults=2), mk(adults=6), "adults"))
+add(G, "URL детект currency RUB→EUR", lambda: _detect(mk(currency="RUB"), mk(currency="EUR"), "currency"))
+REGISTRY.describe_group(
+    G, "Быстрые детерминированные проверки (без браузера) — расширение целостности логики: "
+       "парсинг цен/рейтингов, границы моделей, фильтр операторов, детект расхождений URL.")
