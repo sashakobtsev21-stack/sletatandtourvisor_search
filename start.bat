@@ -16,6 +16,25 @@ if not exist ".venv\Scripts\toursearch.exe" (
   exit /b 1
 )
 
+rem --- обновление интерфейса до актуальной версии (если установлен Node) ---
+rem   сервер отдаёт уже собранный frontend\dist; пересобираем, чтобы показать
+rem   последние изменения (напр. площадку Travelata). Нет Node — не страшно,
+rem   откроется ранее собранная версия.
+where npm >nul 2>nul
+if %errorlevel%==0 (
+  if exist "frontend\package.json" (
+    echo Обновляю интерфейс ^(npm run build^), это пара секунд...
+    pushd frontend
+    call npm run build
+    popd
+    echo Интерфейс обновлён.
+    echo.
+  )
+) else (
+  echo [i] Node/npm не найден - открою ранее собранную версию интерфейса.
+  echo.
+)
+
 echo Запускаю сервер в отдельном окне...
 start "Tour Search (СЕРВЕР - не закрывать)" ".venv\Scripts\toursearch.exe" web
 
