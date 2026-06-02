@@ -21,7 +21,7 @@ from toursearch import refdata
 from toursearch.healthcheck import gate_passed, run_health_check
 from toursearch.models import SearchParams
 from toursearch.orchestrator import run_search
-from toursearch.providers import list_providers, load_browser_providers
+from toursearch.providers import is_experimental, list_providers, load_browser_providers
 from toursearch.storage import Storage
 from toursearch.testkit import REGISTRY, run_selected
 
@@ -426,6 +426,9 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
             "countries": refdata.countries(),
             "operators": refdata.operators(),
             "providers": _providers(),
+            # экспериментальные (opt-in) площадки: видны для выбора, но не отмечены
+            # по умолчанию и не входят в гейт без явного выбора.
+            "experimental_providers": [p for p in _providers() if is_experimental(p)],
             "max_date_span_days": MAX_DATE_SPAN_DAYS,
         }
 
@@ -493,7 +496,7 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
 
         load_browser_providers()
         out: dict[str, list[dict]] = {}
-        for name in ("sletat", "tourvisor"):
+        for name in list_providers():
             try:
                 anchors = getattr(get_provider(name), "HEALTH_ANCHORS", {}) or {}
                 out[name] = [{"label": k, "selector": v} for k, v in anchors.items()]

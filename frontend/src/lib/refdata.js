@@ -10,6 +10,7 @@ const FALLBACK = {
   countries: COUNTRIES,
   operators: OPERATORS,
   providers: PROVIDERS,
+  experimentalProviders: [],
 };
 
 export function useRefData() {
@@ -26,6 +27,7 @@ export function useRefData() {
           countries: j.countries?.length ? j.countries : COUNTRIES,
           operators: j.operators?.length ? j.operators : OPERATORS,
           providers: j.providers?.length ? j.providers : PROVIDERS,
+          experimentalProviders: j.experimental_providers ?? [],
         });
       })
       .catch(() => {
