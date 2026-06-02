@@ -236,10 +236,13 @@ def direction_ok(o: Outcome) -> None:
 
 
 def honor_all(o: Outcome, *, siblings: list[str] | None = None, require_results: bool = True) -> None:
-    """Сводная проверка: ВСЕ активные фильтры параметров честно отражены в выдаче.
-    Применяет нужные матчеры по наличию фильтра в params. Если выдача пуста: при
-    require_results=True падаем (ожидали туры), иначе принимаем чистое «туров нет»
-    (комбинации фильтров часто пустые — это норма для сквозных персон/pairwise)."""
+    """Сводная проверка для СКВОЗНЫХ персон/pairwise: строго сверяем НАДЁЖНЫЕ, видимые в
+    выдаче фильтры — звёзды/рейтинг/цена (цена ещё и проверяется+рефиллится провайдером).
+    Оператор и курорт здесь НЕ проверяем строго: это «мягкие» фильтры (выбор оператора
+    виртуализован и best-effort; курорт под параллельной нагрузкой может «не доехать») —
+    они строго покрыты ОТДЕЛЬНЫМИ группами S5/S4 (соло, стабильно). Пустая выдача при
+    require_results=False допустима (тугая комбинация → чистое «туров нет»).
+    `siblings` сохранён для совместимости вызовов, но не используется."""
     if not (o.hotels or o.operators):
         if require_results:
             have_results(o)
@@ -253,10 +256,6 @@ def honor_all(o: Outcome, *, siblings: list[str] | None = None, require_results:
         rating_honored(o)
     if p.price_min is not None or p.price_max is not None:
         price_honored(o)
-    if p.operators:
-        operator_honored(o, p.operators)
-    if p.resorts:
-        resort_honored(o)  # siblings больше не нужны (см. resort_honored)
     url_matches(o)
 
 

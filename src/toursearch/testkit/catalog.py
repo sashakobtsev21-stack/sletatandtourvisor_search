@@ -541,7 +541,13 @@ async def _live_sletat(params: SearchParams) -> None:
     from toursearch.providers.sletat import SletatProvider
     from toursearch.urlcheck import verify_sletat_search_url
     r = await SletatProvider(headless=True).search(params)
-    _assert(r.success, r.error or "поиск не дал результатов")
+    if not r.success:
+        # «Туров нет» на эти даты — допустимо (наличие, не дефект): часть сквозных
+        # комбо-направлений в срезе может быть пустой. Прочие ошибки — провал.
+        err = (r.error or "").lower()
+        _assert("не найдено" in err or "предложен" in err or "туров нет" in err,
+                r.error or "поиск не дал результатов")
+        return
     if r.search_url:
         probs = verify_sletat_search_url(r.search_url, params)
         _assert(not probs, f"URL результата не совпал с параметрами: {probs}")
