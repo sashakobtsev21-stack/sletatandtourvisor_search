@@ -2,13 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   FlaskConical, Play, Loader2, CheckCircle2, XCircle, ChevronDown, Info, Clock,
-  ShieldCheck, Zap, Globe2,
+  ShieldCheck, Zap, Globe2, Target,
 } from "lucide-react";
 import GlassCard from "../components/ui/GlassCard.jsx";
 import { fadeUp } from "../lib/animations.js";
 
-// Три верхнеуровневых списка вкладки (изначально свёрнуты). Порядок показа:
-// health-check → быстрые → live (по просьбе; быстрые всё равно бегут первыми).
+// Верхнеуровневые списки вкладки (изначально свёрнуты). Порядок показа:
+// health-check → быстрые → Live (UI) → Сценарии. Быстрые всё равно бегут первыми.
 const CATEGORIES = [
   {
     key: "healthcheck", title: "Тесты health-check", icon: ShieldCheck,
@@ -19,8 +19,12 @@ const CATEGORIES = [
     hint: "Без браузера, мгновенные: проверяют, что наша логика обработки данных не сломана.",
   },
   {
-    key: "live", title: "Live-тесты Sletat", icon: Globe2,
-    hint: "⏱ Реальные поиски на Sletat.ru по параметрам с проверкой результата (медленные).",
+    key: "live", title: "Live UI-тесты Sletat", icon: Globe2,
+    hint: "⏱ Проверки элементов формы и выдачи на реальном Sletat.ru (общая сессия — относительно быстро).",
+  },
+  {
+    key: "scenario", title: "Сценарии: поиск → сверка выдачи", icon: Target,
+    hint: "⏱ Реальные поиски по параметрам с проверкой, что ВЫДАЧА соответствует фильтрам (звёзды/цена/оператор/курорт…). Идут параллельно; каждый поиск ~60–90 с, полный набор — долгий.",
   },
 ];
 
@@ -121,16 +125,23 @@ export default function TestsPage() {
           if (e.type === "running") {
             setCurrent(`[${e.group}] ${e.name}`);
             setStatuses((s) => ({ ...s, [e.id]: { state: "run" } }));
-            pushLog(`▷ [${e.group}] ${e.name}`, "run");
+            const hint = e.group?.startsWith("Live: Сценарий")
+              ? " — ⏱ реальный поиск (до ~90 с)…"
+              : e.live ? " — ⏱ live…" : "";
+            pushLog(`▷ [${e.group}] ${e.name}${hint}`, "run");
+          } else if (e.type === "retry") {
+            pushLog(`  ↻ повтор (попытка ${e.attempt}) после инфра-ошибки: ${e.name}`, "run");
           } else if (e.type === "result") {
             done += 1;
+            const secs = e.seconds != null ? ` (${e.seconds} c)` : "";
             if (e.ok) {
               passed += 1;
-              setStatuses((s) => ({ ...s, [e.id]: { state: "pass" } }));
+              setStatuses((s) => ({ ...s, [e.id]: { state: "pass", seconds: e.seconds } }));
+              pushLog(`  ✓ ${e.name}${secs}`, "pass");
             } else {
               failed += 1;
-              setStatuses((s) => ({ ...s, [e.id]: { state: "fail", error: e.error } }));
-              pushLog(`  ✗ ${e.error || ""}`, "fail");
+              setStatuses((s) => ({ ...s, [e.id]: { state: "fail", error: e.error, seconds: e.seconds } }));
+              pushLog(`  ✗ ${e.name}${secs} — ${e.error || ""}`, "fail");
             }
             setStats({ passed, failed, total, done, duration: null });
           } else if (e.type === "end") {
@@ -140,7 +151,8 @@ export default function TestsPage() {
             setCurrent("— готово —");
             setStats({ passed: e.passed, failed: e.failed, total: e.total, done: e.total, duration: e.duration });
             setReport(e);
-            pushLog(`— завершено за ${e.duration} c —`);
+            pushLog(`— завершено: прошло ${e.passed} / упало ${e.failed} из ${e.total} за ${e.duration} c —`,
+              e.failed ? "fail" : "pass");
           }
         };
         es.onerror = () => {
@@ -279,6 +291,7 @@ export default function TestsPage() {
                                 <input type="checkbox" checked={selected.has(c.id)} onChange={() => toggle(c.id)} className="size-3.5 accent-brand" />
                                 <StatusIcon st={st} />
                                 <span className={c.live ? "text-amber-300" : "text-ink/90"}>{c.name}{c.live && " ⏱"}</span>
+                                {st?.seconds != null && <span className="text-[11px] tabular-nums text-muted">{st.seconds} c</span>}
                                 {c.description && (
                                   <button type="button" onClick={() => toggleInfo(c.id)} className="grid size-4 place-items-center rounded-full border border-white/15 text-[10px] font-bold text-brand-soft hover:bg-white/5" title="Что проверяет тест">
                                     <Info className="size-2.5" />
@@ -303,27 +316,81 @@ export default function TestsPage() {
       </div>
 
       {/* Отчёт */}
-      {report && (
-        <GlassCard variants={fadeUp} initial="hidden" animate="show" className="p-5">
-          <h3 className="mb-2 text-sm font-bold text-white">Отчёт</h3>
-          <p className="text-sm text-ink">
-            Итог: прошло <b className="text-emerald-300">{report.passed}</b> / упало <b className="text-rose-300">{report.failed}</b> из {report.total} за {report.duration} c
-          </p>
-          {report.failures?.length ? (
-            <div className="mt-3 space-y-1.5">
-              {report.failures.map((f, i) => (
-                <div key={i} className="rounded-lg border border-rose-400/20 bg-rose-500/10 p-2.5 text-xs">
-                  <div className="font-semibold text-rose-200">✗ [{f.group}] {f.name}</div>
-                  <div className="mt-0.5 font-mono text-rose-300/80">{f.error}</div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="mt-2 text-sm text-emerald-300">Все выбранные тесты прошли ✅</p>
-          )}
-        </GlassCard>
-      )}
+      {report && <ReportCard report={report} statuses={statuses} catalog={catalog} />}
     </div>
+  );
+}
+
+/** Итоговый отчёт: сводка + упавшие + полный разбор по группам (что прошло / что упало). */
+function ReportCard({ report, statuses, catalog }) {
+  const groups = (catalog?.groups ?? [])
+    .map((g) => {
+      const ran = g.cases.filter((c) => statuses[c.id]);
+      return {
+        group: g.group,
+        ran,
+        pass: ran.filter((c) => statuses[c.id]?.state === "pass").length,
+        fail: ran.filter((c) => statuses[c.id]?.state === "fail").length,
+      };
+    })
+    .filter((x) => x.ran.length);
+
+  return (
+    <GlassCard variants={fadeUp} initial="hidden" animate="show" className="p-5">
+      <h3 className="mb-2 text-sm font-bold text-white">Отчёт</h3>
+      <p className="text-sm text-ink">
+        Итог: прошло <b className="text-emerald-300">{report.passed}</b> / упало{" "}
+        <b className="text-rose-300">{report.failed}</b> из {report.total} за {report.duration} c
+      </p>
+
+      {report.failures?.length > 0 && (
+        <div className="mt-3 space-y-1.5">
+          <div className="text-xs font-semibold text-rose-200">Упавшие ({report.failures.length}):</div>
+          {report.failures.map((f, i) => (
+            <div key={i} className="rounded-lg border border-rose-400/20 bg-rose-500/10 p-2.5 text-xs">
+              <div className="font-semibold text-rose-200">✗ [{f.group}] {f.name}</div>
+              <div className="mt-0.5 font-mono text-rose-300/80">{f.error}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {report.failed === 0 && <p className="mt-2 text-sm text-emerald-300">Все выбранные тесты прошли ✅</p>}
+
+      {/* Полный разбор по группам — что прошло и что упало */}
+      <details open className="mt-4">
+        <summary className="cursor-pointer text-xs font-semibold text-muted hover:text-ink">
+          Полный отчёт по группам ({groups.length})
+        </summary>
+        <div className="mt-2 space-y-1.5">
+          {groups.map((x) => (
+            <details key={x.group} open={x.fail > 0} className="rounded-lg border border-white/5 bg-white/[0.02] px-3 py-2">
+              <summary className="flex cursor-pointer list-none items-center gap-2 text-xs">
+                <span className="font-semibold text-ink">{x.group}</span>
+                <span className="ml-auto tabular-nums">
+                  <b className="text-emerald-300">✓{x.pass}</b>{" "}
+                  {x.fail > 0 ? <b className="text-rose-300">✗{x.fail}</b> : <span className="text-muted">✗0</span>}
+                  <span className="text-muted"> / {x.ran.length}</span>
+                </span>
+              </summary>
+              <div className="mt-1.5 space-y-0.5">
+                {x.ran.map((c) => {
+                  const st = statuses[c.id];
+                  const ok = st?.state === "pass";
+                  return (
+                    <div key={c.id} className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                      <span className={ok ? "text-emerald-300" : "text-rose-300"}>{ok ? "✓" : "✗"}</span>
+                      <span className="text-ink/85">{c.name}</span>
+                      {st?.seconds != null && <span className="tabular-nums text-muted">{st.seconds} c</span>}
+                      {!ok && st?.error && <span className="basis-full pl-4 font-mono text-rose-300/70">{st.error}</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            </details>
+          ))}
+        </div>
+      </details>
+    </GlassCard>
   );
 }
 

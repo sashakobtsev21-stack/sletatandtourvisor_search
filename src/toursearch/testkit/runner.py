@@ -60,16 +60,22 @@ async def run_selected(ids: list[str], emit: Emit, concurrency: int | None = Non
     async def _exec(case: TestCase) -> dict:
         """Выполнить один кейс: emit running → (ретрай для live-инфра-ошибок) → emit result."""
         await _emit(emit, {"type": "running", "index": index_of[case.id], "id": case.id,
-                           "group": case.group, "name": case.name})
+                           "group": case.group, "name": case.name, "live": case.live})
+        t_case = time.monotonic()
         attempts = 2 if case.live else 1
         last_exc: Exception | None = None
         for attempt in range(attempts):
             try:
+                if attempt:  # пошёл ретрай инфра-ошибки — сообщим в лог
+                    await _emit(emit, {"type": "retry", "id": case.id, "group": case.group,
+                                       "name": case.name, "attempt": attempt + 1})
                 result = case.func()
                 if inspect.isawaitable(result):
                     await result
-                await _emit(emit, {"type": "result", "id": case.id, "ok": True})
-                return {"ok": True, "id": case.id, "group": case.group, "name": case.name}
+                secs = round(time.monotonic() - t_case, 1)
+                await _emit(emit, {"type": "result", "id": case.id, "ok": True, "seconds": secs,
+                                   "group": case.group, "name": case.name})
+                return {"ok": True, "id": case.id, "group": case.group, "name": case.name, "seconds": secs}
             except AssertionError as exc:  # реальный провал проверки — НЕ ретраим
                 last_exc = exc
                 break
@@ -78,9 +84,11 @@ async def run_selected(ids: list[str], emit: Emit, concurrency: int | None = Non
                 if attempt + 1 < attempts:
                     continue
                 break
+        secs = round(time.monotonic() - t_case, 1)
         err = f"{type(last_exc).__name__}: {last_exc}"
-        await _emit(emit, {"type": "result", "id": case.id, "ok": False, "error": err})
-        return {"ok": False, "id": case.id, "group": case.group, "name": case.name, "error": err}
+        await _emit(emit, {"type": "result", "id": case.id, "ok": False, "error": err, "seconds": secs,
+                           "group": case.group, "name": case.name})
+        return {"ok": False, "id": case.id, "group": case.group, "name": case.name, "error": err, "seconds": secs}
 
     await _emit(emit, {"type": "begin", "total": total})
     t0 = time.monotonic()
