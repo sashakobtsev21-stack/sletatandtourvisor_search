@@ -5,7 +5,7 @@ import pytest
 pytest.importorskip("playwright")
 
 from toursearch.testkit import REGISTRY, run_selected
-from toursearch.urlcheck import verify_sletat_search_url, verify_tourvisor_search_url
+from toursearch.urlcheck import verify_sletat_search_url
 from toursearch.models import SearchParams
 from datetime import date
 

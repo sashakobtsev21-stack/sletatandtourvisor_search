@@ -956,7 +956,7 @@ async def _ni_select_min():
     page = await get_session("form-tours").ensure_tours_mode()
     await page.click("#ui-select-nightsMin")
     await page.wait_for_timeout(500)
-    li = page.locator(f"xpath=//div[contains(@class,'uis-select__options_nights') and contains(@class,'nights-left')]//li[normalize-space(text())='5']")
+    li = page.locator("xpath=//div[contains(@class,'uis-select__options_nights') and contains(@class,'nights-left')]//li[normalize-space(text())='5']")
     if await li.count() == 0:
         return  # значение могло не отрендериться (виртуализация) — мягкий пропуск
     await li.first.click()
@@ -2222,7 +2222,7 @@ _reg(SC12, [
     (_mk_comp_case(a, k),
      f"{a} взр" + (f" + дети {k}" if k else "") + " → URL и выдача",
      f"Поиск Москва→Турция, взрослых: {a}" + (f", дети: {k}" if k else "") + ". URL результата "
-     f"кодирует ровно этот состав (adults + число детей), выдача непуста.")
+     "кодирует ровно этот состав (adults + число детей), выдача непуста.")
     for a, k in _COMPS
 ], "⏱ Сценарий: разный состав тура (взрослые 1–8, наборы детских возрастов) → URL кодирует "
    "ровно заданный состав, выдача есть.")

@@ -17,7 +17,6 @@ import re
 import time
 from datetime import date, datetime
 from decimal import Decimal
-from pathlib import Path
 
 log = logging.getLogger("toursearch.providers.sletat")
 

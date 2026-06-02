@@ -12,18 +12,16 @@ import re
 import time
 from datetime import datetime
 from decimal import Decimal
-from pathlib import Path
 
 log = logging.getLogger("toursearch.providers.tourvisor")
 
-from playwright.async_api import Locator, Page, TimeoutError as PWTimeout, async_playwright
+from playwright.async_api import Page, TimeoutError as PWTimeout, async_playwright
 
 from toursearch.models import HotelOffer, Offer, OperatorOffer, ProviderResult, SearchParams
 from toursearch.providers._formcheck import (
     UNKNOWN,
     FormVerificationError,
     exact,
-    norm,
     text_contains,
 )
 from toursearch.providers.base import (
