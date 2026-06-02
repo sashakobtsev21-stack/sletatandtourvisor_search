@@ -40,15 +40,17 @@ export default function TestsPage() {
   const [current, setCurrent] = useState("—");
   const [logs, setLogs] = useState([]);
   const [report, setReport] = useState(null);
+  const [elapsed, setElapsed] = useState(0); // секундомер прогона (сек)
   const logRef = useRef(null);
   const esRef = useRef(null);
+  const timerRef = useRef(null);
 
   useEffect(() => {
     fetch("/api/tests/catalog")
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(setCatalog)
       .catch((e) => setError(String(e)));
-    return () => esRef.current?.close();
+    return () => { esRef.current?.close(); clearInterval(timerRef.current); };
   }, []);
 
   useEffect(() => {
@@ -108,6 +110,12 @@ export default function TestsPage() {
     setReport(null);
     setRunning(true);
 
+    // Секундомер прогона: тикает, пока идут тесты; замирает в конце на серверном duration.
+    setElapsed(0);
+    const startedAt = performance.now();
+    clearInterval(timerRef.current);
+    timerRef.current = setInterval(() => setElapsed((performance.now() - startedAt) / 1000), 100);
+
     let passed = 0, failed = 0, done = 0;
     const total = ids.length;
 
@@ -147,6 +155,8 @@ export default function TestsPage() {
           } else if (e.type === "end") {
             es.close();
             esRef.current = null;
+            clearInterval(timerRef.current);
+            setElapsed(e.duration ?? 0);
             setRunning(false);
             setCurrent("— готово —");
             setStats({ passed: e.passed, failed: e.failed, total: e.total, done: e.total, duration: e.duration });
@@ -158,11 +168,13 @@ export default function TestsPage() {
         es.onerror = () => {
           es.close();
           esRef.current = null;
+          clearInterval(timerRef.current);
           setRunning(false);
           pushLog("[поток прерван]", "fail");
         };
       })
       .catch((err) => {
+        clearInterval(timerRef.current);
         setRunning(false);
         pushLog(`Ошибка запуска: ${err}`, "fail");
       });
@@ -202,9 +214,10 @@ export default function TestsPage() {
           </div>
         </div>
 
-        {/* Прогресс */}
+        {/* Прогресс + секундомер */}
         <div className="mt-4 flex items-center gap-4">
           <span className="min-w-[3.5rem] text-2xl font-extrabold tabular-nums text-white">{pct}%</span>
+          <Stopwatch elapsed={elapsed} running={running} />
           <div className="relative h-2.5 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
             <motion.span
               className={`absolute inset-y-0 left-0 rounded-full ${stats.failed ? "bg-gradient-to-r from-emerald-400 to-rose-400" : "bg-gradient-to-r from-brand to-ocean"}`}
@@ -214,7 +227,6 @@ export default function TestsPage() {
           </div>
           <span className="whitespace-nowrap text-sm text-muted">
             прошло <b className="text-emerald-300">{stats.passed}</b> · упало <b className="text-rose-300">{stats.failed}</b> · из <b className="text-ink">{stats.total}</b>
-            {stats.duration != null && <span className="ml-2 text-muted">{stats.duration} c</span>}
           </span>
         </div>
         <p className="mt-2 text-xs text-muted">Сейчас: <span className="text-ink">{current}</span></p>
@@ -432,6 +444,33 @@ function AnchorsInfo({ anchors }) {
 }
 
 const LOG_COLORS = { run: "text-sky-300", fail: "text-rose-300", pass: "text-emerald-300" };
+
+/** Формат секундомера: до минуты — «0:SS.д», от минуты — «M:SS». */
+function fmtClock(s) {
+  const total = Math.max(0, Math.floor(s));
+  const mm = Math.floor(total / 60);
+  const ss = String(total % 60).padStart(2, "0");
+  if (mm > 0) return `${mm}:${ss}`;
+  const tenth = Math.max(0, Math.floor((s - total) * 10));
+  return `0:${ss}.${tenth}`;
+}
+
+/** Стилизованный секундомер прогона: пульсирует, пока тесты идут; замирает в конце. */
+function Stopwatch({ elapsed, running }) {
+  return (
+    <div
+      title="Время прогона"
+      className={`flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 font-mono text-sm font-bold tabular-nums transition-colors ${
+        running
+          ? "border-brand/40 bg-brand/15 text-brand-soft shadow-glow"
+          : "border-white/10 bg-white/[0.05] text-muted"
+      }`}
+    >
+      <Clock className={`size-4 ${running ? "animate-pulse text-brand-soft" : "text-muted"}`} />
+      {fmtClock(elapsed)}
+    </div>
+  );
+}
 
 function StatusIcon({ st }) {
   if (!st) return <span className="w-4 text-center text-muted">·</span>;

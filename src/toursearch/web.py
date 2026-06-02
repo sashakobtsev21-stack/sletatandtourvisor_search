@@ -155,7 +155,7 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
-    app = FastAPI(title="ТурСравнение")
+    app = FastAPI(title="Tour Search")
     Path("screenshots").mkdir(exist_ok=True)
     app.mount("/screenshots", StaticFiles(directory="screenshots"), name="screenshots")
     # Собранный React-дашборд (frontend/dist) раздаём под /app, если он существует.
