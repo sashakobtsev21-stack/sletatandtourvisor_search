@@ -872,23 +872,28 @@ class SletatProvider:
         return out
 
     async def _open_operator_panel(self, page: Page) -> None:
-        """Выдвинуть слева панель операторов (blinchik) — для скриншота выдачи.
+        """Гарантированно РАЗВЕРНУТЬ панель операторов (blinchik) для скриншота выдачи.
 
-        Панель `.blinchik` по умолчанию `blinchik_closed` (спрятана за левым краем,
-        x<0). Жмём штатную кнопку показа, а как подстраховку снимаем класс
-        `blinchik_closed`, чтобы панель выехала и попала в скриншот.
+        Открытость контролирует React: класс `blinchik_closed` (панель уезжает за левый
+        край, x<0) возвращается при реконсиляции, поэтому снятие класса само по себе
+        не держится. Помимо снятия класса ФОРСИРУЕМ позицию инлайн-стилем с !important —
+        его React по className не трогает, и панель остаётся на экране до скриншота.
+        (Кнопок внутри `.blinchik` нет — кликать нечего; управляем классами/стилем.)
         """
         try:
             await page.evaluate(
                 """() => {
                     const b = document.querySelector('.blinchik');
                     if (!b) return;
-                    const btn = b.querySelector('.blinchik__hide-button');
-                    if (btn) btn.click();
                     b.classList.remove('blinchik_closed');
+                    b.classList.add('blinchik_maximized', 'blinchik_visible');
+                    b.style.setProperty('transform', 'none', 'important');
+                    b.style.setProperty('left', '0', 'important');
+                    b.style.setProperty('right', 'auto', 'important');
+                    b.style.setProperty('margin-left', '0', 'important');
                 }"""
             )
-            await page.wait_for_timeout(800)
+            await page.wait_for_timeout(500)
         except Exception:
             pass
 
