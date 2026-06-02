@@ -325,14 +325,31 @@ class SletatProvider:
         await page.wait_for_timeout(500)
 
     async def _select_country(self, page: Page, country: str) -> None:
-        await page.click("#ui-select-country-to")
-        await page.wait_for_timeout(500)
-        await page.keyboard.type(country, delay=40)
-        await page.wait_for_timeout(800)
-        await page.click(
-            f"xpath=//span[contains(@class,'slsf-country-to__select-text') and contains(text(),'{country}')][1]"
+        # Ввод текста + дожидаемся появления опции (а не «слепой» клик через 800мс —
+        # под нагрузкой дропдаун не успевал отфильтроваться → 20с таймаут). Две попытки;
+        # если опции нет и со второй — страна не предлагается на Sletat (нет в списке).
+        opt = (f"xpath=//span[contains(@class,'slsf-country-to__select-text')"
+               f" and contains(text(),'{country}')][1]")
+        for _attempt in range(2):
+            await page.click("#ui-select-country-to")
+            await page.wait_for_timeout(400)
+            await page.keyboard.type(country, delay=40)
+            await page.wait_for_timeout(600)
+            try:
+                await page.wait_for_selector(opt, state="visible", timeout=6000)
+                await page.click(opt)
+                await page.wait_for_timeout(800)
+                return
+            except PWTimeout:
+                try:  # очистить поле и повторить ввод
+                    await page.keyboard.press("Control+A")
+                    await page.keyboard.press("Delete")
+                except Exception:
+                    pass
+                await page.wait_for_timeout(200)
+        raise FormVerificationError(
+            [("country", country, "не найдена в списке Sletat (направление не предлагается)")]
         )
-        await page.wait_for_timeout(800)
 
     async def _select_dates(self, page: Page, date_from: date, date_to: date) -> None:
         # Sletat ограничивает окно вылета ±13 дней от первой даты — дальше дни disabled.
@@ -737,6 +754,27 @@ class SletatProvider:
             meals_txt = await self._safe_text(page, "#mealsContainer .hotel-category-current-select")
             check("meals", params.meals[0], meals_txt, text_contains(params.meals[0], meals_txt) if meals_txt is not UNKNOWN else True)
 
+        # Цена: под параллельной нагрузкой ввод в поля «от»/«до» может «не доехать»
+        # (гонка) — тогда поиск шёл бы БЕЗ ценового фильтра и вернул туры дороже лимита.
+        # Сверяем по значению полей (цифры), при расхождении _refill_field переустановит.
+        if params.price_min is not None or params.price_max is not None:
+            try:
+                inps = page.locator("input.uis-text_price-input")
+                cnt = await inps.count()
+                pmin_v = await inps.nth(0).input_value() if cnt >= 1 else ""
+                pmax_v = await inps.nth(1).input_value() if cnt >= 2 else ""
+            except Exception:
+                pmin_v = pmax_v = UNKNOWN
+            if pmin_v is not UNKNOWN:
+                dmin = re.sub(r"\D", "", pmin_v or "")
+                dmax = re.sub(r"\D", "", pmax_v or "")
+                ok = True
+                if params.price_min is not None:
+                    ok = ok and dmin == str(int(params.price_min))
+                if params.price_max is not None:
+                    ok = ok and dmax == str(int(params.price_max))
+                check("price", f"{params.price_min}/{params.price_max}", f"{pmin_v}/{pmax_v}", ok)
+
         return problems
 
     async def _refill_field(self, page: Page, params: SearchParams, field: str) -> None:
@@ -754,6 +792,8 @@ class SletatProvider:
             await self._select_stars(page, params.hotel_stars)
         elif field == "meals":
             await self._select_meals(page, params.meals)
+        elif field == "price":
+            await self._select_price(page, params.price_min, params.price_max)
 
     # --- ожидание / сортировка / парсинг ---
 
