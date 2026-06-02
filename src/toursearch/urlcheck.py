@@ -140,3 +140,50 @@ def verify_tourvisor_search_url(url: str, params: SearchParams) -> list[Problem]
         eq("direct_only", "1" if params.direct_only else "0", q["s_directflight"])
 
     return problems
+
+
+# --------------------------- Travelata ---------------------------
+# После клика «Искать» SPA пишет параметры во ФРАГМЕНТ URL (хэш), напр.:
+#   https://travelata.ru/search#?fromCity=2&toCountry=29&dateFrom=27.06.2026
+#     &dateTo=27.06.2026&nightFrom=7&nightTo=9&adults=2&kids=1&ages[]=5
+#     &hotelClass=4&meal=1&priceFrom=6000&priceTo=21000000&sort=priceUp
+# Сверяем словарь-независимые поля (ночи/взрослые/дети/возрасты/дата заезда). Страна и
+# город закодированы id (fromCity/toCountry) — их сверяем в провайдере по живому
+# справочнику; здесь не трогаем. dateTo НЕ сверяем: Travelata ищет по дате заезда
+# (dateFrom) + диапазону ночей, dateTo в хэше равен dateFrom (а не концу окна).
+
+
+def parse_travelata_url(url: str) -> dict:
+    u = urlparse(url)
+    frag = u.fragment
+    if frag.startswith("?"):
+        frag = frag[1:]
+    raw = parse_qs(frag)
+    # ages[] — список (повторяющийся ключ); остальные — скаляры.
+    query = {k: (v if k.endswith("[]") else v[0]) for k, v in raw.items()}
+    return {"query": query, "fragment": u.fragment}
+
+
+def verify_travelata_search_url(url: str, params: SearchParams) -> list[Problem]:
+    """Сверить параметры поиска Travelata по хэшу URL. Возвращает расхождения."""
+    q = parse_travelata_url(url).get("query", {})
+    problems: list[Problem] = []
+
+    def eq(field, expected, actual) -> None:
+        if str(expected) != str(actual):
+            problems.append((field, expected, actual))
+
+    if "nightFrom" in q:
+        eq("nights_min", params.nights_min, int(q["nightFrom"]))
+    if "nightTo" in q:
+        eq("nights_max", params.nights_max, int(q["nightTo"]))
+    if "adults" in q:
+        eq("adults", params.adults, int(q["adults"]))
+    if "kids" in q:
+        eq("children_count", len(params.children_ages), int(q["kids"]))
+    if "ages[]" in q:
+        eq("children_ages", sorted(params.children_ages), sorted(int(a) for a in q["ages[]"]))
+    if "dateFrom" in q:
+        eq("date_from", params.date_from.strftime("%d.%m.%Y"), q["dateFrom"])
+
+    return problems

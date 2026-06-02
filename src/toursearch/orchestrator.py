@@ -6,7 +6,7 @@ import asyncio
 import logging
 
 from toursearch.models import ComparisonReport, ProviderResult, SearchParams
-from toursearch.providers import get_provider, list_providers, load_browser_providers
+from toursearch.providers import default_providers, get_provider, load_browser_providers
 
 log = logging.getLogger("toursearch.orchestrator")
 
@@ -24,7 +24,8 @@ async def run_search(
     падение одной площадки не валило весь прогон.
     """
     load_browser_providers()
-    names = providers or list_providers()
+    # providers=None → набор по умолчанию (без экспериментальных/opt-in площадок).
+    names = providers or default_providers()
     if not names:
         raise RuntimeError("Нет зарегистрированных провайдеров")
 

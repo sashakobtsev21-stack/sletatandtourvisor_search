@@ -103,16 +103,26 @@ class SearchProvider(Protocol):
 
 
 _REGISTRY: dict[str, type[SearchProvider]] = {}
+# Экспериментальные площадки (opt-in): зарегистрированы и доступны для явного выбора,
+# но НЕ входят в набор по умолчанию (поиск/health-гейт), пока не стабилизируются —
+# чтобы их флак не блокировал прогоны зрелых площадок.
+_EXPERIMENTAL: set[str] = set()
 
 
-def register_provider(name: str):
-    """Декоратор регистрации класса-провайдера под заданным именем."""
+def register_provider(name: str, *, experimental: bool = False):
+    """Декоратор регистрации класса-провайдера под заданным именем.
+
+    `experimental=True` — площадка opt-in: видна в списке (`list_providers`) и
+    запускается при явном выборе, но не входит в `default_providers()`.
+    """
 
     def wrapper(cls: type[SearchProvider]) -> type[SearchProvider]:
         key = name.lower()
         if key in _REGISTRY:
             raise ValueError(f"Провайдер '{name}' уже зарегистрирован")
         _REGISTRY[key] = cls
+        if experimental or getattr(cls, "experimental", False):
+            _EXPERIMENTAL.add(key)
         return cls
 
     return wrapper
@@ -126,4 +136,18 @@ def get_provider(name: str) -> type[SearchProvider]:
 
 
 def list_providers() -> list[str]:
+    """Все зарегистрированные площадки (вкл. экспериментальные) — для UI/выбора."""
     return sorted(_REGISTRY)
+
+
+def default_providers() -> list[str]:
+    """Площадки по умолчанию: все зрелые (без экспериментальных/opt-in).
+
+    Используется там, где `providers` не задан явно (оркестратор, health-check),
+    чтобы экспериментальная площадка не запускалась и не гейтила прогон без спроса.
+    """
+    return [n for n in sorted(_REGISTRY) if n not in _EXPERIMENTAL]
+
+
+def is_experimental(name: str) -> bool:
+    return name.lower() in _EXPERIMENTAL

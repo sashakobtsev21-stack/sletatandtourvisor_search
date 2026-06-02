@@ -161,10 +161,13 @@ class ProviderResult(BaseModel):
     def priced_items(self) -> list[PricedItem]:
         """Предложения с ценой ДЛЯ СРАВНЕНИЯ: в турах — операторы, в отелях — отели.
         В режиме «Туры» hotel_offers могут быть заполнены как «первые N отелей» только
-        для показа, поэтому в сравнении тогда участвуют операторы (offers), не отели."""
+        для показа, поэтому в сравнении тогда участвуют операторы (offers), не отели.
+        Фолбэк: если в турах операторских офферов нет (площадка не раскрывает разрез по
+        ТО — напр. Travelata показывает только мин. цену тура по отелю), сравниваем по
+        hotel_offers. Зрелые площадки (Sletat/Tourvisor) офферы дают → их это не меняет."""
         if self.search_mode == "hotels":
             return list(self.hotel_offers)
-        return list(self.offers)
+        return list(self.offers) or list(self.hotel_offers)
 
     @property
     def cheapest(self) -> PricedItem | None:

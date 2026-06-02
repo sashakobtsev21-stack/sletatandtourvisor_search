@@ -16,7 +16,7 @@ import logging
 from pydantic import BaseModel
 from playwright.async_api import async_playwright
 
-from toursearch.providers import get_provider, list_providers, load_browser_providers
+from toursearch.providers import default_providers, get_provider, load_browser_providers
 
 log = logging.getLogger("toursearch.healthcheck")
 
@@ -95,7 +95,8 @@ async def run_health_check(
     поиском. Падение одной проверки не валит остальные (превращается в ok=False).
     """
     load_browser_providers()
-    names = providers or list_providers()
+    # providers=None → набор по умолчанию (экспериментальные площадки не гейтим).
+    names = providers or default_providers()
     raw = await asyncio.gather(
         *(check_provider(name, headless=headless) for name in names),
         return_exceptions=True,

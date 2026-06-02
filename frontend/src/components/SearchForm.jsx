@@ -39,7 +39,8 @@ const defaultTo = addDays(minDate, 7);
  */
 export default function SearchForm({ onSubmit, isSearching = false, initial = null }) {
   // Справочники с бэкенда (/api/refdata); до ответа — фолбэк-константы.
-  const { departureCities, countries, operators: operatorOptions, providers: providerOptions } = useRefData();
+  const { departureCities, countries, operators: operatorOptions, providers: providerOptions,
+          experimentalProviders = [] } = useRefData();
   const [mode, setMode] = useState(initial?.search_mode ?? "tours"); // tours | hotels
   const [childrenCount, setChildrenCount] = useState(initial?.children_ages?.length ?? 0);
   const [childAges, setChildAges] = useState(initial?.children_ages ?? []);
@@ -326,6 +327,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
         <div className="flex flex-wrap gap-2">
           {providerOptions.map((p) => {
             const active = providers.includes(p);
+            const experimental = experimentalProviders.includes(p);
             return (
               <motion.button
                 key={p}
@@ -333,6 +335,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
                 onClick={() => toggleProvider(p)}
                 whileHover={{ scale: 1.04 }}
                 whileTap={{ scale: 0.96 }}
+                title={experimental ? "Экспериментальная площадка (по умолчанию выключена)" : undefined}
                 className={[
                   "flex items-center gap-2 rounded-xl border px-3.5 py-2 text-sm font-semibold capitalize transition-colors",
                   active
@@ -344,6 +347,11 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
                   className={`size-2 rounded-full ${active ? "bg-ocean shadow-[0_0_10px_2px_rgba(56,224,216,0.6)]" : "bg-muted/40"}`}
                 />
                 {p}
+                {experimental && (
+                  <span className="rounded-md bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-bold uppercase not-italic tracking-wider text-amber-300">
+                    β
+                  </span>
+                )}
               </motion.button>
             );
           })}
