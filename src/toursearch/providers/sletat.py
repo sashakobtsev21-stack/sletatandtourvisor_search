@@ -909,7 +909,16 @@ class SletatProvider:
             """() => {
                 const out = [];
                 document.querySelectorAll('.search-result__list-item').forEach(it => {
-                    const name = (it.querySelector('.search-result__full-hotel-name-subscription, .search-result-text')?.textContent || '').trim();
+                    // Имя отеля берём из JSON-LD карточки (каноничное), затем из .search-result-text
+                    // (title/текст). НЕ из *-name-subscription — это слот бейджа («N оценок» /
+                    // «Этот отель искали»), который маскировал реальное имя.
+                    let name = '';
+                    const ld = it.querySelector('script[type="application/ld+json"]');
+                    if (ld) { try { name = (JSON.parse(ld.textContent).name || '').trim(); } catch (e) {} }
+                    if (!name) {
+                        const el = it.querySelector('.search-result-text_hotel, .search-result-text');
+                        name = (el ? (el.getAttribute('title') || el.textContent || '') : '').trim();
+                    }
                     const cat = it.querySelector('.search-result-category');
                     let stars = 0;
                     if (cat) { const m = (cat.className || '').match(/_stars-(\\d)/); if (m) stars = +m[1]; }

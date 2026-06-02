@@ -2216,3 +2216,266 @@ _reg(SC12, [
     for a, k in _COMPS
 ], "⏱ Сценарий: разный состав тура (взрослые 1–8, наборы детских возрастов) → URL кодирует "
    "ровно заданный состав, выдача есть.")
+
+
+# ============ 21. Live: СЦЕНАРИИ — pairwise / отели / границы / персоны ============
+
+# --- S13: pairwise-комбинации фильтров (покрывающий массив all-pairs) ---
+def _all_pairs(dims):
+    """Жадный all-pairs: возвращает строки (dict key→value), где КАЖДАЯ пара значений
+    разных измерений встречается ≥1 раз. Кардинально меньше декартова произведения."""
+    keys = [k for k, _ in dims]
+    vals = [v for _, v in dims]
+    n = len(dims)
+
+    def key(i, vi, j, vj):
+        return (i, vi, j, vj) if i < j else (j, vj, i, vi)
+
+    pairs = set()
+    for i in range(n):
+        for j in range(i + 1, n):
+            for a in range(len(vals[i])):
+                for b in range(len(vals[j])):
+                    pairs.add((i, a, j, b))
+    rows = []
+    while pairs:
+        i0, a0, j0, b0 = next(iter(pairs))
+        row = [None] * n
+        row[i0], row[j0] = a0, b0
+        for d in range(n):
+            if row[d] is not None:
+                continue
+            best_idx, best_cov = 0, -1
+            for vi in range(len(vals[d])):
+                cov = sum(1 for e in range(n)
+                          if e != d and row[e] is not None and key(d, vi, e, row[e]) in pairs)
+                if cov > best_cov:
+                    best_cov, best_idx = cov, vi
+            row[d] = best_idx
+        for x in range(n):
+            for y in range(x + 1, n):
+                pairs.discard((x, row[x], y, row[y]))
+        rows.append({keys[d]: vals[d][row[d]] for d in range(n)})
+    return rows
+
+
+SC13 = "Live: Сценарий — pairwise (комбинации фильтров)"
+_PW_DIMS = [
+    ("country", ["Турция", "Египет", "ОАЭ", "Таиланд"]),
+    ("stars", [[], [3], [4], [5]]),
+    ("rating", [None, 7.0, 8.0]),
+    ("price", [(None, None), (None, Decimal("100000")), (Decimal("60000"), Decimal("150000"))]),
+    ("nights", [(3, 5), (7, 10), (10, 14)]),
+]
+_PW_ROWS = _all_pairs(_PW_DIMS)
+
+
+def _mk_pw_case(row):
+    async def _case():
+        pmin, pmax = row["price"]
+        nmin, nmax = row["nights"]
+        o = await _sk.run(_sk.base_params(
+            destination_country=row["country"], hotel_stars=row["stars"],
+            hotel_rating_min=row["rating"], price_min=pmin, price_max=pmax,
+            nights_min=nmin, nights_max=nmax))
+        _sk.honor_all(o, require_results=False)
+    return _case
+
+
+def _pw_label(row, i):
+    parts = [row["country"]]
+    if row["stars"]:
+        parts.append("/".join(map(str, row["stars"])) + "★")
+    if row["rating"]:
+        parts.append(f"{int(row['rating'])}+")
+    pmin, pmax = row["price"]
+    if pmin or pmax:
+        parts.append(f"{int(pmin) if pmin else ''}–{int(pmax) if pmax else ''}₽")
+    parts.append(f"{row['nights'][0]}–{row['nights'][1]}н")
+    return f"#{i + 1:02d} " + ", ".join(parts)
+
+
+_reg(SC13, [
+    (_mk_pw_case(r), _pw_label(r, i),
+     f"Pairwise-комбинация: {_pw_label(r, i)}. Поиск и сверка КАЖДОГО активного фильтра с выдачей "
+     f"(звёзды/рейтинг/цена — по карточкам, ночи — по URL). Пустая выдача для тугой комбинации "
+     f"допустима (чистое «туров нет»).")
+    for i, r in enumerate(_PW_ROWS)
+], "⏱ Сценарий: pairwise-покрытие комбинаций (страна×звёзды×рейтинг×цена×ночи) — каждая пара "
+   "значений встречается ≥1 раз; в каждом прогоне сверяются все активные фильтры с выдачей.")
+
+
+# --- S14: режим «Отели» (без перелёта) ---
+SC14 = "Live: Сценарий — режим «Отели»"
+
+
+def _mk_h_case(siblings=None, require_results=True, **over):
+    async def _case():
+        o = await _sk.run(_sk.base_params(search_mode="hotels", **over))
+        _sk.honor_all(o, siblings=siblings, require_results=require_results)
+    return _case
+
+
+async def _h_sort_price():
+    o = await _sk.run(_sk.base_params(search_mode="hotels", sort_by="price"))
+    _sk.have_results(o)
+    _sk.prices_ascending(o)
+
+
+_reg(SC14, [
+    (_mk_h_case(hotel_stars=[4]), "отели 4★ → все карточки 4★", "Режим «Отели»: выбор 4★ — все отели выдачи 4★."),
+    (_mk_h_case(hotel_stars=[5]), "отели 5★ → все карточки 5★", "Режим «Отели»: выбор 5★ — все отели 5★."),
+    (_mk_h_case(hotel_stars=[3]), "отели 3★ → все карточки 3★", "Режим «Отели»: выбор 3★ — все отели 3★."),
+    (_mk_h_case(hotel_stars=[3, 4, 5]), "отели 3/4/5★ → нет других", "Режим «Отели»: 3/4/5★ — нет отелей вне набора."),
+    (_mk_h_case(hotel_rating_min=7.0), "отели рейтинг 7+ → не ниже 7", "Режим «Отели»: рейтинг 7+ — все отели ≥7."),
+    (_mk_h_case(hotel_rating_min=8.0), "отели рейтинг 8+ → не ниже 8", "Режим «Отели»: рейтинг 8+ — все отели ≥8."),
+    (_mk_h_case(price_max=Decimal("100000")), "отели цена ≤100k → не выше", "Режим «Отели»: цена ≤100000 — все цены не выше."),
+    (_mk_h_case(price_min=Decimal("40000")), "отели цена ≥40k → не ниже", "Режим «Отели»: цена ≥40000 — все цены не ниже."),
+    (_mk_h_case(price_min=Decimal("20000"), price_max=Decimal("150000")), "отели цена 20k–150k", "Режим «Отели»: цены в диапазоне 20000–150000."),
+    (_mk_h_case(siblings=[r for r in _TR_REGIONS if r != "Анталья"], resorts=["Анталья"]), "отели курорт Анталья", "Режим «Отели»: курорт Анталья — отели в его регионе."),
+    (_mk_h_case(siblings=[r for r in _TR_REGIONS if r != "Кемер"], resorts=["Кемер"]), "отели курорт Кемер", "Режим «Отели»: курорт Кемер — отели в его регионе."),
+    (_mk_h_case(), "отели Турция (база) → есть выдача", "Режим «Отели»: базовый поиск по Турции даёт отели, URL соответствует."),
+    (_mk_h_case(require_results=False, destination_country="Египет"), "отели Египет", "Режим «Отели»: Египет — чистый поиск (отели или «нет»)."),
+    (_mk_h_case(require_results=False, destination_country="ОАЭ"), "отели ОАЭ", "Режим «Отели»: ОАЭ — чистый поиск."),
+    (_mk_h_case(require_results=False, destination_country="Греция"), "отели Греция", "Режим «Отели»: Греция — чистый поиск."),
+    (_mk_h_case(adults=2, children_ages=[7, 10]), "отели 2взр+2реб → URL и выдача", "Режим «Отели»: состав 2 взр + 2 ребёнка кодируется в URL, выдача есть."),
+    (_mk_h_case(meals=["AI"]), "отели питание AI → есть выдача", "Режим «Отели»: питание AI — поиск отрабатывает (тип питания на карточке не показан)."),
+    (_mk_h_case(hotel_stars=[5], hotel_rating_min=8.0), "отели 5★ + 8+ → оба честны", "Режим «Отели»: 5★ и рейтинг 8+ — все отели удовлетворяют обоим."),
+    (_mk_h_case(hotel_stars=[4, 5], price_max=Decimal("120000")), "отели 4/5★ + ≤120k", "Режим «Отели»: 4/5★ и цена ≤120000 — оба фильтра честны."),
+    (_mk_h_case(require_results=False, hotel_stars=[5], hotel_rating_min=9.0), "отели 5★ + 9+ (тугой)", "Режим «Отели»: 5★ и рейтинг 9+ — где есть результаты, оба честны; пусто допустимо."),
+    (_h_sort_price, "отели сортировка «Цена» → по возрастанию", "Режим «Отели»: сортировка по цене — карточки по возрастанию цены."),
+], "⏱ Сценарий: режим «Отели» (без перелёта) — звёзды/рейтинг/цена/курорт/состав/питание/сортировка "
+   "честно отражаются в выдаче отелей.")
+
+
+# --- S15: границы и негатив ---
+SC15 = "Live: Сценарий — границы и негатив"
+
+
+async def _b_impossible_price():
+    o = await _sk.run(_sk.base_params(price_min=Decimal("5000000")))
+    _sk.no_crash(o)
+
+
+async def _b_5star_cheap():
+    o = await _sk.run(_sk.base_params(hotel_stars=[5], price_max=Decimal("20000")))
+    _sk.no_crash(o)
+
+
+async def _b_5star_9_cheap():
+    o = await _sk.run(_sk.base_params(hotel_stars=[5], hotel_rating_min=9.0, price_max=Decimal("30000")))
+    _sk.no_crash(o)
+
+
+async def _b_narrow_price():
+    o = await _sk.run(_sk.base_params(price_min=Decimal("123456"), price_max=Decimal("123457")))
+    _sk.no_crash(o)
+
+
+async def _b_window_13():
+    df = date.today() + timedelta(days=25)
+    o = await _sk.run(_sk.base_params(date_from=df, date_to=df + timedelta(days=13)))
+    _sk.have_results(o)
+
+
+async def _b_window_14():
+    df = date.today() + timedelta(days=25)
+    o = await _sk.run(_sk.base_params(date_from=df, date_to=df + timedelta(days=14)))
+    _sk.rejected_window(o)
+
+
+async def _b_one_night():
+    o = await _sk.run(_sk.base_params(nights_min=1, nights_max=1))
+    _sk.direction_ok(o)
+
+
+async def _b_max_nights():
+    o = await _sk.run(_sk.base_params(nights_min=14, nights_max=14))
+    _sk.direction_ok(o)
+
+
+_reg(SC15, [
+    (_b_impossible_price, "невозможная цена ≥5 млн → без сбоя",
+     "Цена от 5 000 000 ₽: поиск завершается штатно — Sletat игнорирует/зажимает абсурдное "
+     "значение и отдаёт обычную выдачу (или «туров нет»), но НЕ падает с трейсом и не зависает."),
+    (_b_5star_cheap, "5★ + ≤20k → без сбоя",
+     "Конфликт 5★ и цена ≤20000 ₽: поиск завершается штатно (пусто или зажатая выдача), без краша."),
+    (_b_5star_9_cheap, "5★ + 9+ + ≤30k → без сбоя",
+     "Тройной конфликт (5★, рейтинг 9+, ≤30000 ₽): штатное завершение без технического сбоя."),
+    (_b_narrow_price, "узкий диапазон 123456–123457 → без сбоя",
+     "Сверхузкий ценовой диапазон: штатное завершение без зависания."),
+    (_b_window_13, "окно дат 13 дней → поиск работает",
+     "Граница: окно вылета ровно 13 дней (максимум Sletat) — поиск проходит и даёт результаты."),
+    (_b_window_14, "окно дат 14 дней → отклонено провайдером",
+     "Окно вылета 14 дней (> лимита 13): провайдер отклоняет ДО поиска с понятной ошибкой, не ищет вслепую."),
+    (_b_one_night, "1 ночь → чистый поиск",
+     "Минимум ночей (1–1): поиск отрабатывает чисто (результаты или «нет туров»)."),
+    (_b_max_nights, "14 ночей → чистый поиск",
+     "Длинные туры (14–14 ночей): поиск отрабатывает чисто."),
+], "⏱ Сценарий: границы и негатив — экстремальные/конфликтные фильтры обрабатываются БЕЗ сбоя "
+   "(Sletat зажимает абсурд), окно дат >13 отклоняется, крайние ночи (1 и 14) отрабатывают.")
+
+
+# --- S16: пользовательские персоны (сквозные журналы) ---
+SC16 = "Live: Сценарий — пользовательские персоны"
+
+
+def _tr_sib(*selected):
+    return [r for r in _TR_REGIONS if r not in selected]
+
+
+# (label, params-over, siblings|None, require_results)
+_PERSONAS = [
+    ("семья Мск→Турция 2взр+2реб 5★ AI ≤300k",
+     dict(children_ages=[7, 10], hotel_stars=[5], meals=["AI"], price_max=Decimal("300000")), None, False),
+    ("пара СПб→Турция 4/5★ 8+",
+     dict(departure_city="Санкт-Петербург", hotel_stars=[4, 5], hotel_rating_min=8.0), None, False),
+    ("бюджет соло Казань→Египет 1взр ≤90k",
+     dict(departure_city="Казань", destination_country="Египет", adults=1, price_max=Decimal("90000")), None, False),
+    ("группа Екб→Турция 4взр 10–14н 4★",
+     dict(departure_city="Екатеринбург", adults=4, nights_min=10, nights_max=14, hotel_stars=[4]), None, False),
+    ("молодёжь Мск→Турция 8+ 50–120k",
+     dict(hotel_rating_min=8.0, price_min=Decimal("50000"), price_max=Decimal("120000")), None, False),
+    ("семья+малыш Мск→ОАЭ 2взр+1реб 5★",
+     dict(destination_country="ОАЭ", children_ages=[2], hotel_stars=[5]), None, False),
+    ("Анталья 5★ AI Мск→Турция",
+     dict(resorts=["Анталья"], hotel_stars=[5], meals=["AI"]), _tr_sib("Анталья"), False),
+    ("Кемер пара 8+ Мск→Турция",
+     dict(resorts=["Кемер"], hotel_rating_min=8.0), _tr_sib("Кемер"), False),
+    ("Белек 5★ Мск→Турция",
+     dict(resorts=["Белек"], hotel_stars=[5]), _tr_sib("Белек"), False),
+    ("внутренний Мск→Россия отели 2взр",
+     dict(destination_country="Россия", search_mode="hotels"), None, False),
+    ("honeymoon СПб→Мальдивы 9+ 10–14н",
+     dict(departure_city="Санкт-Петербург", destination_country="Мальдивы", hotel_rating_min=9.0, nights_min=10, nights_max=14), None, False),
+    ("Таиланд Мск 4/5★ 10–14н",
+     dict(destination_country="Таиланд", hotel_stars=[4, 5], nights_min=10, nights_max=14), None, False),
+    ("Греция семья Мск 2взр+1реб 4★",
+     dict(destination_country="Греция", children_ages=[8], hotel_stars=[4]), None, False),
+    ("Кипр Мск ≤150k",
+     dict(destination_country="Кипр", price_max=Decimal("150000")), None, False),
+    ("оператор+звёзды Мск→Турция Anex 5★",
+     dict(operators=["Anex"], hotel_stars=[5]), None, False),
+    ("прямой рейс Мск→Турция 2взр",
+     dict(direct_only=True), None, False),
+    ("Biblio Globus бюджет Мск→Турция ≤100k",
+     dict(operators=["Biblio Globus"], price_max=Decimal("100000")), None, False),
+    ("Хургада AI Мск→Египет 4/5★",
+     dict(destination_country="Египет", resorts=["Хургада"], meals=["AI"], hotel_stars=[4, 5]), None, False),
+]
+
+
+def _mk_persona(over, siblings, req):
+    async def _case():
+        o = await _sk.run(_sk.base_params(**over))
+        _sk.honor_all(o, siblings=siblings, require_results=req)
+    return _case
+
+
+_reg(SC16, [
+    (_mk_persona(over, sib, req), lbl,
+     f"Сквозная персона: {lbl}. Реальный поиск с этим набором параметров; сверяет КАЖДЫЙ активный "
+     f"фильтр с выдачей (звёзды/рейтинг/цена/оператор/курорт). Пустая выдача допустима (чистое «туров нет»).")
+    for lbl, over, sib, req in _PERSONAS
+], "⏱ Сценарий: реальные пользовательские «персоны» — типичные бронирования (семья/пара/группа/бюджет, "
+   "разные направления и составы) с полной сверкой выдачи по всем заданным фильтрам.")

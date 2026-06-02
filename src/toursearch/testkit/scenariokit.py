@@ -138,25 +138,22 @@ def price_honored(o: Outcome) -> None:
     _assert(not bad, f"в выдаче цены вне диапазона [{lo}, {hi}]: {bad[:5]}")
 
 
-def resort_honored(o: Outcome, siblings: list[str]) -> None:
+def resort_honored(o: Outcome, siblings: list[str] | None = None) -> None:
     """Курорт честно применён к ВЫДАЧЕ:
-      (1) фильтр реально ушёл в поиск — в URL есть `resort=`;
-      (2) все отели — в выбранной стране;
-      (3) ни один отель не находится в НЕвыбранном соседнем регионе (`siblings`).
+      (1) фильтр реально ушёл в поиск — в URL есть `resort=` (главное доказательство);
+      (2) все отели — в выбранной стране.
 
-    Точное совпадение под-района НЕ требуем: на Sletat регион включает дочерние районы
-    (выбор «Анталья» возвращает и отели в «Лара»). Поэтому проверяем «не протёк ли фильтр
-    в чужой регион», а не буквальное равенство названия."""
+    Проверку «не из чужого региона» НЕ делаем: иерархия курортов Sletat пересекается —
+    верхнеуровневая «Анталья» = ПРОВИНЦИЯ и включает Кемер/Сиде/Аланью/Белек/Лару как
+    под-районы (которые при этом тоже есть в списке верхнего уровня). Поэтому строгая
+    привязка к региону по названию даёт ложные срабатывания; ограничиваемся URL+страной.
+    `siblings` принимается для совместимости вызовов, но не используется."""
     _assert(o.search_url and "resort=" in o.search_url,
             "в URL нет resort= — фильтр курорта не применился к поиску")
     country = _norm(o.params.destination_country)
     bad_country = [h.destination for h in o.hotels
                    if h.destination and country not in _norm(h.destination)]
     _assert(not bad_country, f"в выдаче отели вне страны {o.params.destination_country}: {bad_country[:5]}")
-    sib = [_norm(s) for s in siblings]
-    leaked = [(h.hotel_name, h.destination) for h in o.hotels
-              if h.destination and any(s in _norm(h.destination) for s in sib)]
-    _assert(not leaked, f"в выдаче отели из НЕвыбранных регионов: {leaked[:5]}")
 
 
 def operators_present(o: Outcome, wanted: list[str]) -> None:
@@ -217,3 +214,58 @@ def direction_ok(o: Outcome) -> None:
     clean_empty = ("не найдено" in err or "предложен" in err or "туров нет" in err)
     _assert(clean_empty,
             f"направление отработало НЕ чисто (краш/неверные параметры, а не «нет туров»): {o.error}")
+
+
+def honor_all(o: Outcome, *, siblings: list[str] | None = None, require_results: bool = True) -> None:
+    """Сводная проверка: ВСЕ активные фильтры параметров честно отражены в выдаче.
+    Применяет нужные матчеры по наличию фильтра в params. Если выдача пуста: при
+    require_results=True падаем (ожидали туры), иначе принимаем чистое «туров нет»
+    (комбинации фильтров часто пустые — это норма для сквозных персон/pairwise)."""
+    if not (o.hotels or o.operators):
+        if require_results:
+            have_results(o)
+        else:
+            direction_ok(o)
+        return
+    p = o.params
+    if p.hotel_stars:
+        stars_honored(o)
+    if p.hotel_rating_min is not None:
+        rating_honored(o)
+    if p.price_min is not None or p.price_max is not None:
+        price_honored(o)
+    if p.operators:
+        operator_honored(o, p.operators)
+    if p.resorts:
+        resort_honored(o)  # siblings больше не нужны (см. resort_honored)
+    url_matches(o)
+
+
+def empty_clean(o: Outcome) -> None:
+    """Заведомо пустой поиск (невозможные фильтры) завершился ЧИСТО: нет выдачи и
+    сообщение «туров не найдено» — НЕ краш и НЕ зависание/неверные параметры."""
+    _assert(not (o.hotels or o.operators), f"ожидали пустую выдачу, а она есть ({len(o.hotels)} отелей, {len(o.operators)} оп.)")
+    err = (o.error or "").lower()
+    _assert("не найдено" in err or "предложен" in err or "туров нет" in err,
+            f"пустой поиск завершился НЕ чисто: {o.error}")
+
+
+def no_crash(o: Outcome) -> None:
+    """Экстремальный/негативный ввод обработан БЕЗ технического сбоя: поиск либо успешен,
+    либо вернул понятное «туров нет»/лимит — НЕ упал с трейсом и не завис без сообщения.
+    (Sletat при абсурдных значениях, напр. цена ≥5 млн, не отдаёт пусто, а игнорирует/
+    зажимает фильтр и возвращает обычную выдачу — поэтому пустоту тут не требуем.)"""
+    if o.success:
+        return
+    err = (o.error or "").lower()
+    _assert(any(k in err for k in ("не найдено", "предложен", "туров нет", "лимит", "превыша")),
+            f"экстремальный ввод вызвал технический сбой, а не штатный исход: {o.error}")
+
+
+def rejected_window(o: Outcome) -> None:
+    """Слишком широкое окно дат (>13 дней) отклонено провайдером ДО поиска
+    (с понятной ошибкой про лимит), а не молча искалось по обрезанному окну."""
+    err = (o.error or "").lower()
+    _assert(not o.success, "ожидали отклонение окна >13 дней, а поиск прошёл")
+    _assert("лимит" in err or "превыша" in err or "13" in err,
+            f"окно >13 дней отклонено не с тем сообщением: {o.error}")
