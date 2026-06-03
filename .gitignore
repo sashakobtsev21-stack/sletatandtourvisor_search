@@ -21,7 +21,9 @@ _dump/
 # IDE / агентское тулинг
 .idea/
 .vscode/
-.claude/
+# .claude/ локальное, но проектных субагентов версионируем
+.claude/*
+!.claude/agents/
 
 # Покрытие тестами / логи
 .coverage
