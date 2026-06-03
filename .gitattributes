@@ -17,6 +17,8 @@
 *.yaml  text
 *.cfg   text
 *.txt   text
+# .bat ВСЕГДА с CRLF в рабочей копии — cmd.exe ломается на LF-переводах строк
+*.bat   text eol=crlf
 
 # Бинарные — не нормализовать
 *.png   binary
