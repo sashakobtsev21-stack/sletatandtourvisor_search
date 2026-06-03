@@ -233,3 +233,37 @@ def verify_level_search_url(url: str, params: SearchParams) -> list[Problem]:
         eq("date_from", params.date_from.strftime("%d.%m.%Y"), p["date"])
 
     return problems
+
+
+# --------------------------- Островок (ostrovok.ru) ---------------------------
+# Поиск отелей: /hotel/{country}/{city}/?dates=DD.MM.YYYY-DD.MM.YYYY&guests=N
+# Сверяем даты (заезд-выезд) и гостей; страна/город — слагом, который строим сами.
+
+
+def parse_ostrovok_url(url: str) -> dict:
+    u = urlparse(url)
+    query = {k: v[0] for k, v in parse_qs(u.query).items()}
+    out: dict = {"query": query, "path": u.path}
+    m = re.search(r"/hotel/(?P<country>[^/]+)/(?P<city>[^/?]+)", u.path)
+    if m:
+        out.update(m.groupdict())
+    return out
+
+
+def verify_ostrovok_search_url(url: str, params: SearchParams) -> list[Problem]:
+    """Сверить параметры поиска Островка по URL. Возвращает расхождения."""
+    q = parse_ostrovok_url(url).get("query", {})
+    problems: list[Problem] = []
+
+    def eq(field, expected, actual) -> None:
+        if str(expected) != str(actual):
+            problems.append((field, expected, actual))
+
+    if "dates" in q:
+        expected = (f"{params.date_from.strftime('%d.%m.%Y')}"
+                    f"-{params.date_to.strftime('%d.%m.%Y')}")
+        eq("dates", expected, q["dates"])
+    if "guests" in q:
+        eq("guests", params.adults + len(params.children_ages), int(q["guests"]))
+
+    return problems
