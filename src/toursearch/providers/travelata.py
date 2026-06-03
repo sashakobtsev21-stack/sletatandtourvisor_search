@@ -10,15 +10,20 @@
 
 id города/страны берём из словаря Travelata (JSONP gateway.travelata.ru/apiV1).
 Звёздность применяем чекбоксами сайдбара выдачи (server-rendered, работает headless).
-Выдача (.serpHotelCard) парсится из DOM; страна сверяется по карточкам (result-honoring).
+Отели парсятся из DOM (.serpHotelCard); страна сверяется по карточкам (result-honoring).
+
+ОПЕРАТОРЫ: фильтр операторов в выдаче AB-гейтится и не всегда виден, поэтому берём
+операторов из API выдачи — `api-gateway.travelata.ru/frontend/tours?...` (его дёргает
+сама SPA): `result.tours[].operator` (id) + словарь `result.operators[] {id, nameRu}`
+(+ `result.hotels[] {id, name}`). Сниффим этот ответ и строим offers/operator_offers.
 
 Только режим «Туры» (пакет с перелётом). «Отели» (без перелёта) не поддерживается.
-Фильтра по туроператору в выдаче нет → operators не поддерживается (best-effort).
 Экспериментальная (opt-in): не входит в набор по умолчанию.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import time
@@ -29,7 +34,7 @@ log = logging.getLogger("toursearch.providers.travelata")
 
 from playwright.async_api import Page, TimeoutError as PWTimeout, async_playwright
 
-from toursearch.models import HotelOffer, ProviderResult, SearchParams
+from toursearch.models import HotelOffer, Offer, OperatorOffer, ProviderResult, SearchParams
 from toursearch.providers.base import (
     capture_top as _capture_top,
     register_provider,
@@ -102,6 +107,42 @@ def build_hotel_offers(provider_name: str, rows: list[dict]) -> list[HotelOffer]
     return out
 
 
+def build_offers_from_api(provider_name: str, data: dict) -> tuple[list[Offer], list[OperatorOffer]]:
+    """Из ответа `frontend/tours?...` собрать офферы по туроператорам.
+
+    `result.tours[].operator` — id ТО, `result.operators[] {id, nameRu, name}` — словарь
+    имён, `result.hotels[] {id, name}` — словарь отелей. Для каждого оператора берём его
+    минимальную цену и отель этой цены. Чистая функция (без браузера) — тестируется.
+    """
+    result = (data or {}).get("result") or {}
+    tours = result.get("tours") or []
+    op_name = {}
+    for o in result.get("operators") or []:
+        if o.get("id") is not None:
+            op_name[o["id"]] = (o.get("nameRu") or o.get("name") or f"Оператор {o['id']}").strip()
+    hotel_name = {h["id"]: h.get("name") for h in (result.get("hotels") or []) if h.get("id") is not None}
+
+    best: dict[int, tuple[Decimal, object]] = {}  # operator_id -> (min_price, hotel_id)
+    for t in tours:
+        op, price = t.get("operator"), t.get("price")
+        if op is None or price is None:
+            continue
+        price = Decimal(str(price))
+        if op not in best or price < best[op][0]:
+            best[op] = (price, t.get("hotel"))
+
+    offers, operator_offers = [], []
+    for op, (price, hid) in best.items():
+        name = op_name.get(op) or f"Оператор {op}"
+        offers.append(Offer(provider=provider_name, operator=name, price=price, currency="RUB"))
+        operator_offers.append(OperatorOffer(
+            provider=provider_name, operator=name, price=price,
+            hotel_name=hotel_name.get(hid), currency="RUB"))
+    offers.sort(key=lambda o: o.price)
+    operator_offers.sort(key=lambda o: o.price)
+    return offers, operator_offers
+
+
 def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "")).replace("ё", "е").strip().lower()
 
@@ -158,6 +199,19 @@ class TravelataProvider:
             )
             page = await context.new_page()
             page.set_default_timeout(self.timeout_ms)
+            # Сниффим API выдачи (frontend/tours?…), из него берём операторов — фильтр
+            # операторов в DOM AB-гейтится, а этот ответ SPA дёргает всегда. Храним
+            # последний (самый полный) снимок: поиск дозапрашивает по мере ответа ТО.
+            tours_api: dict = {}
+
+            async def _grab_tours(resp) -> None:
+                if "/frontend/tours?" in resp.url:
+                    try:
+                        tours_api["data"] = await resp.json()
+                    except Exception:
+                        pass
+
+            page.on("response", lambda r: asyncio.create_task(_grab_tours(r)))
             pump = start_frame_pump(self.name, page, self.on_frame)
             start = time.monotonic()
             try:
@@ -181,6 +235,13 @@ class TravelataProvider:
                     await self._wait_for_completion(page)
 
                 hotel_offers = await self._parse_hotels(page)
+                # операторы из API выдачи (offers + operator_offers)
+                offers, operator_offers = (
+                    build_offers_from_api(self.name, tours_api["data"])
+                    if tours_api.get("data") else ([], []))
+                if operator_offers:
+                    log.info("Travelata: операторов из API — %d (дешевле всех: %s)",
+                             len(operator_offers), operator_offers[0].operator)
                 country_ok = await self._results_country_ok(page, params)
                 url_problems = verify_travelata_search_url(page.url, params)
                 if url_problems:
@@ -202,8 +263,7 @@ class TravelataProvider:
                 return ProviderResult(
                     provider=self.name, success=success, duration_seconds=dur,
                     search_mode="tours", hotel_offers=hotel_offers,
-                    # offers/operator_offers пустые: Travelata не раскрывает разрез по ТО.
-                    # Сравнение по hotel_offers обеспечивает ProviderResult.priced_items().
+                    offers=offers, operator_offers=operator_offers,
                     search_url=page.url, screenshot_path=shot, error=error,
                 )
             except Exception as exc:  # noqa: BLE001 — провал площадки не валит прогон
