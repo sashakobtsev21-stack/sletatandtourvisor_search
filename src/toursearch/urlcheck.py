@@ -187,3 +187,49 @@ def verify_travelata_search_url(url: str, params: SearchParams) -> list[Problem]
         eq("date_from", params.date_from.strftime("%d.%m.%Y"), q["dateFrom"])
 
     return problems
+
+
+# --------------------------- Level Travel ---------------------------
+# Поиск идёт по читаемому пути:
+#   /search/Moscow-RU-to-Any-TR-departure-28.06.2026-for-7-nights-2-adults-0-kids
+#           -1..5-stars-package-type
+# Сверяем словарь-независимые поля (ночи/взрослые/дети/дата заезда). Город/страна
+# закодированы слагом, который мы сами строим из карт — отдельно их не сверяем.
+
+_LEVEL_PATH = re.compile(
+    r"/search/(?P<dep>.+?)-to-(?P<dest>.+?)"
+    r"-departure-(?P<date>\d{2}\.\d{2}\.\d{4})-for-(?P<nights>\d+)-nights"
+    r"-(?P<adults>\d+)-adults-(?P<kids>\d+)-kids"
+    r"-(?P<smin>\d+)\.\.(?P<smax>\d+)-stars-(?P<kind>[a-zA-Z]+)-type",
+    re.IGNORECASE,
+)
+
+
+def parse_level_url(url: str) -> dict:
+    u = urlparse(url)
+    m = _LEVEL_PATH.search(u.path)
+    out: dict = {"path": u.path}
+    if m:
+        out.update({k: v for k, v in m.groupdict().items() if v is not None})
+    return out
+
+
+def verify_level_search_url(url: str, params: SearchParams) -> list[Problem]:
+    """Сверить параметры поиска Level Travel по пути /search/…. Возвращает расхождения."""
+    p = parse_level_url(url)
+    problems: list[Problem] = []
+
+    def eq(field, expected, actual) -> None:
+        if str(expected) != str(actual):
+            problems.append((field, expected, actual))
+
+    if "nights" in p:
+        eq("nights_min", params.nights_min, int(p["nights"]))
+    if "adults" in p:
+        eq("adults", params.adults, int(p["adults"]))
+    if "kids" in p:
+        eq("children_count", len(params.children_ages), int(p["kids"]))
+    if "date" in p:
+        eq("date_from", params.date_from.strftime("%d.%m.%Y"), p["date"])
+
+    return problems
