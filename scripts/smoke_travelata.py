@@ -48,8 +48,11 @@ async def main():
     print(f"screenshot     : {res.screenshot_path}")
     print(f"search_url     : {res.search_url}")
     print(f"hotel_offers   : {len(res.hotel_offers)}")
-    for h in sorted(res.hotel_offers, key=lambda x: x.price)[:8]:
+    for h in sorted(res.hotel_offers, key=lambda x: x.price)[:6]:
         print(f"   {h.price:>10} ₽  {h.stars or '?'}★ {h.rating or '—'}  {h.hotel_name}  ({h.destination})")
+    print(f"operator_offers: {len(res.operator_offers)}")
+    for o in sorted(res.operator_offers, key=lambda x: x.price)[:12]:
+        print(f"   {o.price:>10} ₽  {o.operator}  ({o.hotel_name})")
     c = res.cheapest
     if c:
         print(f"cheapest       : {c.label} — {c.price} ₽")

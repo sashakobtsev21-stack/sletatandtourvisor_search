@@ -26,6 +26,7 @@ from toursearch.providers.travelata import (
     _city_of,
     _parse_price,
     build_hotel_offers,
+    build_offers_from_api,
 )
 from toursearch.urlcheck import parse_travelata_url, verify_travelata_search_url
 
@@ -90,6 +91,42 @@ def test_star_and_meal_maps():
     # звёздность: id ≠ числу звёзд (5★=7)
     assert (_STARS_TO_ID[5], _STARS_TO_ID[4], _STARS_TO_ID[3]) == ("7", "4", "3")
     assert _MEAL_TO_ID == {"none": "7", "BB": "2", "HB": "5", "FB": "3", "AI": "1", "UAI": "8"}
+
+
+# ----------------- операторы из API выдачи (frontend/tours) ----------------
+
+_TOURS_API = {
+    "result": {
+        "tours": [
+            {"operator": 226, "price": 78561, "hotel": 1},
+            {"operator": 226, "price": 70000, "hotel": 2},   # для 226 дешевле — отель 2
+            {"operator": 55, "price": 90000, "hotel": 1},
+            {"operator": 999, "price": 60000, "hotel": 7},   # оператора нет в словаре
+            {"operator": None, "price": 10, "hotel": 1},     # без оператора — пропуск
+        ],
+        "operators": [
+            {"id": 226, "name": "Coral", "nameRu": "Корал Трэвел"},
+            {"id": 55, "name": "FUN&SUN", "nameRu": "Фан энд Сан"},
+        ],
+        "hotels": [{"id": 1, "name": "Hotel One"}, {"id": 2, "name": "Hotel Two"}],
+    }
+}
+
+
+def test_build_offers_from_api():
+    offers, ops = build_offers_from_api("travelata", _TOURS_API)
+    names = {o.operator for o in offers}
+    assert names == {"Корал Трэвел", "Фан энд Сан", "Оператор 999"}  # неизвестный → фолбэк-имя
+    coral = next(o for o in ops if o.operator == "Корал Трэвел")
+    assert coral.price == Decimal("70000")        # минимум для оператора 226
+    assert coral.hotel_name == "Hotel Two"        # отель самого дешёвого тура 226
+    assert all(o.provider == "travelata" for o in offers)
+    assert [o.price for o in ops] == sorted(o.price for o in ops)  # отсортировано по цене
+
+
+def test_build_offers_from_api_empty():
+    assert build_offers_from_api("travelata", {}) == ([], [])
+    assert build_offers_from_api("travelata", {"result": {"tours": []}}) == ([], [])
 
 
 # ----------------------- регистрация / opt-in ----------------------
