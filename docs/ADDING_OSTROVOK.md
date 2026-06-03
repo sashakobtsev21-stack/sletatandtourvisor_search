@@ -12,7 +12,21 @@
   Примеры слагов из SSR: `/hotel/turkey/antalya/`, `/hotel/united_arab_emirates/dubai/`,
   `/hotel/russia/st._petersburg/`, `/hotel/germany/berlin/`, `/hotel/united_kingdom/london/`.
 
-## Что ещё снять в Фазе 0 (проход 2)
+## ✅ Реализовано (v1, 2026-06-03)
+Провайдер `providers/ostrovok.py`, `@register_provider("ostrovok", experimental=True)`. Только режим
+«Отели»; в «Турах» → `success=False`. Deeplink `/hotel/{country}/{city}/?dates=DD.MM.YYYY-DD.MM.YYYY&guests=N`
+(подтверждено: формат дат с дефисом, `guests`=взрослые+дети). Карты `_COUNTRY_SLUG` (страна→слаг),
+`_CITY_SLUG` (курорт→слаг), `_DEFAULT_CITY` (страна→город по умолчанию); неизвестные → `success=False`.
+Парс карточек `[class*=HotelCard_container]`: имя `[class*=RightColumn_name]`, рейтинг
+`[class*=HotelTotalRating_root]` (0-10), звёзды (кол-во `[class*=HotelStars_star]`), **цена — минимальная
+`[class*=Rate_priceValue]`** (в карточке несколько ставок; цена грузится асинхронно — ждём её).
+Операторов нет → `offers`/`operator_offers` пустые; сравнение по `hotel_offers` (в hotels-режиме так и надо).
+`verify_ostrovok_search_url` (даты/гости). **Проверено headless:** Турция/Анталья → 20 отелей, cheapest
+**Отель Esse Joven 3★ — 32 383 ₽**, ~22 c. +10 юнит-тестов (pytest 122). Экспериментальный/opt-in.
+
+**v1 best-effort:** возраст детей (передаём только число гостей); список городов — по картам (популярные).
+
+## Что снято в Фазе 0 (проход 2)
 1. **Точный формат query** для дат и гостей (`?dates=DD.MM.YYYY-DD.MM.YYYY&guests=2` —
    подтвердить, выполнив реальный поиск и сняв итоговый URL + XHR).
 2. **Структура карточки отеля** (имя/звёзды/рейтинг/цена) — селекторы для парсинга.
