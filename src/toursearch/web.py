@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import uuid
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -38,24 +39,25 @@ _run_token_ctx: "contextvars.ContextVar[str | None]" = contextvars.ContextVar(
 )
 
 
-class _QueueLogHandler(logging.Handler):
-    """Перехватывает записи логов toursearch.* и кладёт их в очередь СВОЕГО прогона.
+class _LogEmitHandler(logging.Handler):
+    """Перехватывает записи логов toursearch.* СВОЕГО прогона и отдаёт их через колбэк.
 
     Хендлер висит на общем логгере `toursearch`, поэтому при параллельных поисках их
-    несколько. Чтобы логи не перетекали между стримами, пишем только записи, помеченные
-    нашим токеном (через `_run_token_ctx`, выставленный в задаче поиска).
+    несколько. Чтобы логи не перетекали между прогонами, пишем только записи, помеченные
+    нашим токеном (через `_run_token_ctx`, выставленный в задаче поиска). Колбэк кладёт
+    событие в буфер прогона и рассылает его активным SSE-подписчикам.
     """
 
-    def __init__(self, queue: "asyncio.Queue", token: str) -> None:
+    def __init__(self, emit_cb, token: str) -> None:
         super().__init__()
-        self.queue = queue
+        self.emit_cb = emit_cb
         self.token = token
 
     def emit(self, record: logging.LogRecord) -> None:
         if _run_token_ctx.get() != self.token:
             return
         try:
-            self.queue.put_nowait({"type": "log", "level": record.levelname, "msg": record.getMessage()})
+            self.emit_cb({"type": "log", "level": record.levelname, "msg": record.getMessage()})
         except Exception:
             pass
 
@@ -66,6 +68,55 @@ def _cap_tokens(store: dict, limit: int = 64) -> None:
     (обычный dict сохраняет порядок вставки → выкидываем самые старые)."""
     while len(store) > limit:
         store.pop(next(iter(store)), None)
+
+
+# --- Сессия живого поиска: переживает обрыв SSE-соединения (увод вкладки). ---
+@dataclass
+class _SearchSession:
+    """Состояние одного прогона поиска, НЕ привязанное к SSE-соединению.
+
+    Поиск идёт фоновой задачей и пишет события в `events` (+ последний кадр трансляции на
+    площадку — в `frames`), одновременно рассылая их активным подписчикам (`subscribers`).
+    Клиент, который переподключился (вернулся на вкладку), получает «переигровку»
+    events/frames — полное состояние на «сейчас» — и затем продолжение в реальном времени.
+    """
+
+    params: SearchParams
+    chosen: "list[str] | None"
+    events: list = field(default_factory=list)      # все НЕ-кадровые события (для переигровки)
+    frames: dict = field(default_factory=dict)       # провайдер → последний кадр трансляции
+    subscribers: set = field(default_factory=set)    # очереди активных SSE-соединений
+    task: "asyncio.Task | None" = None
+    done: bool = False
+    started: bool = False
+
+
+_TERMINAL_EVENTS = {"done", "error", "cancelled", "gate_failed"}
+_MAX_LOG_EVENTS = 1000  # кап буфера событий: лог прогона невелик, но страхуемся от роста
+
+
+def _emit(session: _SearchSession, event: dict) -> None:
+    """Событие → буфер прогона (для переигровки) + всем активным подписчикам."""
+    session.events.append(event)
+    if len(session.events) > _MAX_LOG_EVENTS:
+        del session.events[: len(session.events) - _MAX_LOG_EVENTS]
+    for q in list(session.subscribers):
+        try:
+            q.put_nowait(event)
+        except Exception:
+            pass
+
+
+def _emit_frame(session: _SearchSession, provider: str, data: str) -> None:
+    """Кадр трансляции площадки: храним только ПОСЛЕДНИЙ по площадке (чтобы буфер не
+    распухал от base64-картинок) и рассылаем активным подписчикам."""
+    session.frames[provider] = data
+    ev = {"type": "frame", "provider": provider, "data": data}
+    for q in list(session.subscribers):
+        try:
+            q.put_nowait(ev)
+        except Exception:
+            pass
 
 
 def _fmt_price(value) -> str:
@@ -273,9 +324,66 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
             request, "results.html", {"report": report, "run_id": run_id}
         )
 
-    # --- поиск с живым логом (SSE) ---
-    search_pending: dict[str, tuple] = {}
-    search_running: dict[str, asyncio.Task] = {}
+    # --- поиск с живым логом (SSE), устойчивый к обрыву соединения (смена вкладки) ---
+    # Прогон идёт ФОНОВОЙ задачей и не привязан к SSE-соединению: увели вкладку / сеть
+    # моргнула → соединение рвётся, но задача продолжается и пишет события в сессию.
+    # Вернулись и переподключились → отдаём «переигровку» накопленного (полное состояние)
+    # и продолжение в реальном времени. Токен живёт в сессии и не «расходуется».
+    _searches: dict[str, _SearchSession] = {}
+    _bg_tasks: set[asyncio.Task] = set()  # удержать фоновые задачи от сборки мусора
+
+    def _schedule_session_cleanup(token: str, delay: float = 180.0) -> None:
+        """Убрать сессию через ~3 мин после финала: даём вернувшемуся клиенту время
+        переподключиться и получить итог (done/run_id); сам прогон уже сохранён в истории."""
+        async def _later() -> None:
+            try:
+                await asyncio.sleep(delay)
+            except asyncio.CancelledError:
+                return  # таймер отменён (выключение/смена loop) — сессию НЕ трогаем
+            _searches.pop(token, None)
+        t = asyncio.create_task(_later())
+        _bg_tasks.add(t)
+        t.add_done_callback(_bg_tasks.discard)
+
+    async def _run_search_task(token: str, session: _SearchSession) -> None:
+        # Помечаем прогон токеном: задачи поиска унаследуют его, и лог-хендлер отберёт
+        # только наши записи (изоляция параллельных прогонов).
+        _run_token_ctx.set(token)
+        handler = _LogEmitHandler(lambda ev: _emit(session, ev), token)
+        tlog = logging.getLogger("toursearch")
+        tlog.addHandler(handler)
+
+        async def on_frame(name: str, data: str) -> None:
+            _emit_frame(session, name, data)
+
+        try:
+            _emit(session, {"type": "log", "level": "INFO", "msg": "Проверяю формы площадок (health-check)…"})
+            health = await run_health_check(providers=session.chosen, headless=True)
+            if not gate_passed(health):
+                miss = {k: (v.missing or v.error) for k, v in health.items()}
+                _emit(session, {"type": "gate_failed", "detail": miss})
+                return
+            _emit(session, {"type": "log", "level": "INFO", "msg": "Гейт пройден. Запускаю поиск на площадках…"})
+            report = await run_search(session.params, providers=session.chosen, headless=True, on_frame=on_frame)
+            with Storage(db_path) as storage:
+                run_id = storage.save_report(report)
+            _emit(session, {"type": "done", "run_id": run_id})
+        except asyncio.CancelledError:
+            # Остановка по запросу пользователя — штатный финал. Не пробрасываем дальше:
+            # внешнего ожидающего нет, а финал подписчикам уже отправлен.
+            _emit(session, {"type": "cancelled", "msg": "Поиск остановлен по запросу."})
+        except Exception as exc:  # noqa: BLE001
+            _emit(session, {"type": "error", "msg": f"{type(exc).__name__}: {exc}"})
+        finally:
+            tlog.removeHandler(handler)
+            session.done = True
+            # Разбудить активных подписчиков, чтобы их соединения штатно закрылись.
+            for q in list(session.subscribers):
+                try:
+                    q.put_nowait({"type": "_end"})
+                except Exception:
+                    pass
+            _schedule_session_cleanup(token)
 
     @app.post("/search/prepare")
     async def search_prepare(request: Request):
@@ -309,76 +417,62 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
         except ValueError as exc:
             return {"error": f"Некорректные параметры поиска: {exc}"}
         token = uuid.uuid4().hex
-        search_pending[token] = (params, chosen)
-        _cap_tokens(search_pending)
+        _searches[token] = _SearchSession(params=params, chosen=chosen)
+        _cap_tokens(_searches)
         return {"token": token}
 
     @app.post("/search/cancel")
     async def search_cancel(token: str):
-        task = search_running.get(token)
-        if task is not None and not task.done():
-            task.cancel()
+        session = _searches.get(token)
+        if session is not None and session.task is not None and not session.task.done():
+            session.task.cancel()
             return {"cancelled": True}
         return {"cancelled": False}
 
     @app.get("/search/stream")
     async def search_stream(token: str):
-        params, chosen = search_pending.pop(token, (None, None))
+        session = _searches.get(token)
 
         async def gen():
-            if params is None:
-                yield 'data: {"type":"error","msg":"истёк токен — повторите"}\n\n'
+            if session is None:
+                yield 'data: {"type":"error","msg":"истёк токен — повторите поиск"}\n\n'
                 return
+
+            # Фоновую задачу поиска запускаем один раз — при первом подключении к стриму.
+            # Дальше она живёт сама по себе и не зависит от наличия соединения.
+            if not session.started:
+                session.started = True
+                session.task = asyncio.create_task(_run_search_task(token, session))
+
+            # Подписываемся и АТОМАРНО (между add и снимком нет await/yield — событийный
+            # цикл не вклинится) снимаем уже накопленные события: всё до снимка отдадим
+            # переигровкой, всё после — придёт через очередь. Ни потерь, ни дублей.
             queue: asyncio.Queue = asyncio.Queue()
-            handler = _QueueLogHandler(queue, token)
-            tlog = logging.getLogger("toursearch")
-            tlog.addHandler(handler)
+            session.subscribers.add(queue)
+            replay = list(session.events)
+            replay_frames = list(session.frames.items())
+            finished_in_replay = any(ev.get("type") in _TERMINAL_EVENTS for ev in replay)
 
-            async def on_frame(name: str, data: str) -> None:
-                # кадр живой трансляции площадки → в очередь SSE
-                queue.put_nowait({"type": "frame", "provider": name, "data": data})
-
-            async def work():
-                # Пометить этот прогон: задачи поиска унаследуют токен, и хендлер будет
-                # отбирать только наши логи (изоляция параллельных стримов).
-                _run_token_ctx.set(token)
-                try:
-                    await queue.put({"type": "log", "level": "INFO", "msg": "Проверяю формы площадок (health-check)…"})
-                    health = await run_health_check(providers=chosen, headless=True)
-                    if not gate_passed(health):
-                        miss = {k: (v.missing or v.error) for k, v in health.items()}
-                        await queue.put({"type": "gate_failed", "detail": miss})
-                        return
-                    await queue.put({"type": "log", "level": "INFO", "msg": "Гейт пройден. Запускаю поиск на площадках…"})
-                    report = await run_search(params, providers=chosen, headless=True, on_frame=on_frame)
-                    with Storage(db_path) as storage:
-                        run_id = storage.save_report(report)
-                    await queue.put({"type": "done", "run_id": run_id})
-                except asyncio.CancelledError:
-                    await queue.put({"type": "cancelled", "msg": "Поиск остановлен по запросу."})
-                    raise
-                except Exception as exc:  # noqa: BLE001
-                    await queue.put({"type": "error", "msg": f"{type(exc).__name__}: {exc}"})
-                finally:
-                    await queue.put({"type": "_end"})
-
-            task = asyncio.create_task(work())
-            search_running[token] = task
             try:
+                # Маркер начала (пере)игровки — клиент сбрасывает живое состояние и строит
+                # его заново из присланного (без дублей в логе при переподключении).
+                yield 'data: {"type":"replay_start"}\n\n'
+                for ev in replay:
+                    yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+                for prov, data in replay_frames:
+                    yield f"data: {json.dumps({'type': 'frame', 'provider': prov, 'data': data}, ensure_ascii=False)}\n\n"
+
+                # Прогон уже завершился до нашего подключения (финал был в снимке) — ждать
+                # из очереди нечего (нам уже не пришлют _end). Иначе слушаем продолжение.
+                if finished_in_replay:
+                    return
                 while True:
                     event = await queue.get()
                     if event.get("type") == "_end":
                         break
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
             finally:
-                tlog.removeHandler(handler)
-                search_running.pop(token, None)
-                if not task.done():
-                    task.cancel()
-                try:
-                    await task
-                except BaseException:
-                    pass
+                session.subscribers.discard(queue)
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
