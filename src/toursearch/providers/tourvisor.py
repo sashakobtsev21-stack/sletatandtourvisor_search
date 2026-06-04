@@ -21,7 +21,6 @@ from toursearch.models import HotelOffer, Offer, OperatorOffer, ProviderResult, 
 from toursearch.providers._formcheck import (
     UNKNOWN,
     FormVerificationError,
-    exact,
     text_contains,
 )
 from toursearch.providers.base import (
@@ -806,12 +805,21 @@ class TourvisorProvider:
             check("tourists", params.adults, actual_adults, actual_adults == params.adults)
 
         if params.hotel_stars:
+            # Виджет «Класс отеля» подсвечивает звёзды КУМУЛЯТИВНО и по-разному в AB-вариантах
+            # (кол-во активных нестабильно: видели и 4, и 6 для «4★»), поэтому равенство
+            # «активных == min★» — ложный критерий и блокировало валидный поиск. Надёжно
+            # проверяем, что ИМЕННО нужная кнопка (target-я) активна; честность звёзд в ВЫДАЧЕ
+            # проверяется отдельно на уровне результатов.
+            target = min(params.hotel_stars)
             try:
-                active = await page.locator("div.TVStarsFilter .TVStarsSelectItem.TVActive").count()
+                btn_active = await page.evaluate(
+                    "(t) => { const it = [...document.querySelectorAll("
+                    "'div.TVStarsFilter .TVStarsSelectItem')]; "
+                    "return it[t - 1] ? it[t - 1].className.includes('TVActive') : null; }", target)
             except Exception:
-                active = None
-            if active is not None:
-                check("stars", min(params.hotel_stars), active, exact(min(params.hotel_stars), active))
+                btn_active = None
+            if btn_active is not None:
+                check("stars", f"кнопка {target}★ активна", btn_active, bool(btn_active))
 
         if params.meals:
             meal = await self._safe_text(page, "div.TVMealFilter")
