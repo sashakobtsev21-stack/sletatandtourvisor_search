@@ -43,7 +43,7 @@ from toursearch.providers.base import (
     start_frame_pump,
     stop_frame_pump,
 )
-from toursearch.urlcheck import verify_travelata_search_url
+from toursearch.urlcheck import travelata_effective_ages, verify_travelata_search_url
 
 # Звёздность → id чекбокса «Класс отеля» (value атрибута). ВНИМАНИЕ: id ≠ числу звёзд.
 _STARS_TO_ID = {5: "7", 4: "4", 3: "3", 2: "2", 1: "2"}  # 1—2 звезды = одна категория «2»
@@ -229,6 +229,9 @@ class TravelataProvider:
                 await page.goto(url, wait_until="domcontentloaded")
                 log.info("Travelata: поиск запущен, жду загрузки выдачи…")
                 await self._wait_for_completion(page)
+                # Скорость = от перехода (клик «Найти») до появления выдачи; фильтр звёзд
+                # и парсинг ниже в неё НЕ включаем (это уже пост-обработка).
+                dur = time.monotonic() - start
 
                 # 3) звёздность — чекбоксами сайдбара (server-rendered, работает headless)
                 if await self._apply_stars(page, params):
@@ -248,7 +251,6 @@ class TravelataProvider:
                     log.warning("Travelata: расхождение параметров в URL: %s", url_problems)
 
                 shot = await self._safe_screenshot(page)
-                dur = time.monotonic() - start
                 log.info("Travelata: выдача получена — %d отелей за %.1f с", len(hotel_offers), dur)
                 success = bool(hotel_offers) and country_ok and not url_problems
                 if not hotel_offers:
@@ -316,13 +318,13 @@ class TravelataProvider:
                 log.info("Travelata: поиск отелей запущен, жду загрузки выдачи…")
                 ready = ".serpHotelCard, [class*=no-result i], [class*=empty-serp i]"
                 await self._wait_for_completion(page, ready_sel=ready)
+                dur = time.monotonic() - start  # скорость = клик → выдача (до фильтра/парса)
                 if await self._apply_stars(page, params):
                     await self._wait_for_completion(page, ready_sel=ready)
 
                 hotel_offers = await self._parse_hotels(page)
                 country_ok = await self._results_country_ok(page, params)
                 shot = await self._safe_screenshot(page)
-                dur = time.monotonic() - start
                 log.info("Travelata: отели получены — %d за %.1f с", len(hotel_offers), dur)
                 success = bool(hotel_offers) and country_ok
                 if not hotel_offers:
@@ -385,7 +387,7 @@ class TravelataProvider:
             f"nightFrom={params.nights_min}", f"nightTo={params.nights_max}",
             f"adults={params.adults}", f"kids={len(params.children_ages)}",
         ]
-        for age in params.children_ages:
+        for age in travelata_effective_ages(params.children_ages):
             parts.append(f"ages[]={age}")
         if params.meals:
             mid = _MEAL_TO_ID.get(params.meals[0])
@@ -410,7 +412,7 @@ class TravelataProvider:
             f"nightFrom={nights}", f"nightTo={nights}",
             f"adults={params.adults}", f"kids={len(params.children_ages)}",
         ]
-        for age in params.children_ages:
+        for age in travelata_effective_ages(params.children_ages):
             parts.append(f"ages[]={age}")
         parts.append("hotelClass=all")
         mid = _MEAL_TO_ID.get(params.meals[0]) if params.meals else None

@@ -259,6 +259,7 @@ class TourvisorProvider:
                     start = time.monotonic()
                     log.info("Tourvisor: поиск запущен, жду полной загрузки результатов…")
                     await self._wait_for_completion(page)
+                    dur = time.monotonic() - start  # скорость = клик «Найти» → выдача (до парса)
                     hotel_offers = await self._parse_hotels(page)
                     # Операторы (best-effort): панель операторов, если есть; отель — по цене.
                     try:
@@ -270,10 +271,10 @@ class TourvisorProvider:
                     operator_offers = self._to_operator_offers(op_raw, hotel_offers)
                     shot = await self._safe_screenshot(page)
                     log.info("Tourvisor: результаты получены — %d отелей за %.1f с",
-                             len(hotel_offers), time.monotonic() - start)
+                             len(hotel_offers), dur)
                     return ProviderResult(
                         provider=self.name, success=bool(hotel_offers),
-                        duration_seconds=time.monotonic() - start,
+                        duration_seconds=dur,
                         search_mode="hotels", hotel_offers=hotel_offers,
                         operator_offers=operator_offers,
                         # ссылка «поиск»: URL страницы отелей после поиска
@@ -301,6 +302,7 @@ class TourvisorProvider:
                 log.info("Tourvisor: поиск запущен, жду полной загрузки результатов…")
                 await self._apply_tours_advanced(page, params)
                 await self._wait_for_completion(page)
+                dur = time.monotonic() - start  # скорость = клик «Найти» → выдача (до парса)
 
                 search_url = page.url
                 url_problems = verify_tourvisor_search_url(search_url, params)
@@ -316,7 +318,7 @@ class TourvisorProvider:
                 if url_problems:
                     return ProviderResult(
                         provider=self.name, success=False,
-                        duration_seconds=time.monotonic() - start,
+                        duration_seconds=dur,
                         search_mode="tours", search_url=search_url,
                         error="URL-параметры не совпали: " + "; ".join(
                             f"{f}: ожидали {e!r}, получили {a!r}" for f, e, a in url_problems),
@@ -325,10 +327,10 @@ class TourvisorProvider:
                 operator_offers = self._to_operator_offers(offers, top_hotels)
                 shot = await self._safe_screenshot(page)
                 log.info("Tourvisor: результаты получены — %d предложений за %.1f с",
-                         len(offers), time.monotonic() - start)
+                         len(offers), dur)
                 return ProviderResult(
                     provider=self.name, success=bool(offers),
-                    duration_seconds=time.monotonic() - start,
+                    duration_seconds=dur,
                     search_mode="tours", offers=offers, hotel_offers=top_hotels,
                     operator_offers=operator_offers,
                     search_url=search_url,

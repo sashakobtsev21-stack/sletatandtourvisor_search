@@ -153,6 +153,19 @@ def verify_tourvisor_search_url(url: str, params: SearchParams) -> list[Problem]
 # (dateFrom) + диапазону ночей, dateTo в хэше равен dateFrom (а не концу окна).
 
 
+TRAVELATA_MIN_CHILD_AGE = 2  # Travelata не принимает детей младше 2 в ages[]
+
+
+def travelata_effective_ages(ages: list[int]) -> list[int]:
+    """Возрасты детей, как их реально примет Travelata: младше 2 → 2.
+
+    Travelata не поддерживает в ages[] возраст 0–1 (младенцы): при недопустимом
+    значении SPA сбрасывает ВСЕ возрасты в дефолт 11 → поиск идёт «не тот». Поэтому
+    и в ссылке поиска, и при сверке URL используем «эффективные» (поджатые) возрасты.
+    """
+    return [max(a, TRAVELATA_MIN_CHILD_AGE) for a in ages]
+
+
 def parse_travelata_url(url: str) -> dict:
     u = urlparse(url)
     frag = u.fragment
@@ -182,7 +195,9 @@ def verify_travelata_search_url(url: str, params: SearchParams) -> list[Problem]
     if "kids" in q:
         eq("children_count", len(params.children_ages), int(q["kids"]))
     if "ages[]" in q:
-        eq("children_ages", sorted(params.children_ages), sorted(int(a) for a in q["ages[]"]))
+        # сверяем против «эффективных» возрастов (Travelata поджимает <2 → 2)
+        eq("children_ages", sorted(travelata_effective_ages(params.children_ages)),
+           sorted(int(a) for a in q["ages[]"]))
     if "dateFrom" in q:
         eq("date_from", params.date_from.strftime("%d.%m.%Y"), q["dateFrom"])
 
@@ -193,13 +208,14 @@ def verify_travelata_search_url(url: str, params: SearchParams) -> list[Problem]
 # Поиск идёт по читаемому пути:
 #   /search/Moscow-RU-to-Any-TR-departure-28.06.2026-for-7-nights-2-adults-0-kids
 #           -1..5-stars-package-type
-# Сверяем словарь-независимые поля (ночи/взрослые/дети/дата заезда). Город/страна
-# закодированы слагом, который мы сами строим из карт — отдельно их не сверяем.
+# Дети кодируются как «{кол-во}({возрасты через запятую})», напр. 3(0,1,3); 0 детей = «0»
+# (формат подтверждён регуляркой парсинга в JS-бандле Level). Без скобок-возрастов
+# Level редиректит на главную. Сверяем ночи/взрослых/детей+возрасты/дату заезда.
 
 _LEVEL_PATH = re.compile(
     r"/search/(?P<dep>.+?)-to-(?P<dest>.+?)"
     r"-departure-(?P<date>\d{2}\.\d{2}\.\d{4})-for-(?P<nights>\d+)-nights"
-    r"-(?P<adults>\d+)-adults-(?P<kids>\d+)-kids"
+    r"-(?P<adults>\d+)-adults-(?P<kids>\d+(?:\([\d,]+\))?)-kids"
     r"-(?P<smin>\d+)\.\.(?P<smax>\d+)-stars-(?P<kind>[a-zA-Z]+)-type",
     re.IGNORECASE,
 )
@@ -212,6 +228,20 @@ def parse_level_url(url: str) -> dict:
     if m:
         out.update({k: v for k, v in m.groupdict().items() if v is not None})
     return out
+
+
+def level_kids_token(ages: list[int]) -> str:
+    """Токен детей для URL Level: [] → '0'; [0,1,3] → '3(0,1,3)'."""
+    return f"{len(ages)}({','.join(str(a) for a in ages)})" if ages else "0"
+
+
+def _parse_level_kids(token: str) -> tuple[int, list[int]]:
+    """Разобрать токен детей: '0' → (0, []); '3(0,1,3)' → (3, [0,1,3])."""
+    m = re.match(r"(\d+)(?:\(([\d,]+)\))?$", token or "")
+    if not m:
+        return 0, []
+    ages = [int(a) for a in m.group(2).split(",")] if m.group(2) else []
+    return int(m.group(1)), ages
 
 
 def verify_level_search_url(url: str, params: SearchParams) -> list[Problem]:
@@ -228,7 +258,10 @@ def verify_level_search_url(url: str, params: SearchParams) -> list[Problem]:
     if "adults" in p:
         eq("adults", params.adults, int(p["adults"]))
     if "kids" in p:
-        eq("children_count", len(params.children_ages), int(p["kids"]))
+        count, ages = _parse_level_kids(p["kids"])
+        eq("children_count", len(params.children_ages), count)
+        if params.children_ages or ages:
+            eq("children_ages", sorted(params.children_ages), sorted(ages))
     if "date" in p:
         eq("date_from", params.date_from.strftime("%d.%m.%Y"), p["date"])
 

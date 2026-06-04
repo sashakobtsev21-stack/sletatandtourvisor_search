@@ -67,6 +67,8 @@ def test_maps():
     assert _COUNTRY_CC["Турция"] == "TR"
     assert _COUNTRY_CC["Египет"] == "EG"
     assert _DEPARTURE_SLUG["Москва"] == "Moscow-RU"
+    # СПб: правильный слаг — St.Petersburg-RU (Saint.Petersburg-RU редиректил на главную)
+    assert _DEPARTURE_SLUG["Санкт-Петербург"] == "St.Petersburg-RU"
 
 
 def test_registered_experimental():
@@ -95,6 +97,25 @@ def test_verify_url_nights_mismatch():
 
 def test_verify_url_adults_mismatch():
     assert any(p[0] == "adults" for p in verify_level_search_url(URL, _params(adults=3)))
+
+
+def test_build_search_url_kids():
+    # дети кодируются как «{кол-во}({возрасты})»; без скобок Level редиректит на главную
+    prov = get_provider("level")(headless=True)
+    url = prov._build_search_url(_params(children_ages=[0, 1, 3]), "St.Petersburg-RU", "EG")
+    assert "-3(0,1,3)-kids-" in url
+    assert "St.Petersburg-RU-to-Any-EG" in url
+    assert "-0-kids-" in prov._build_search_url(_params(), "Moscow-RU", "TR")  # без детей
+
+
+def test_parse_and_verify_kids_with_ages():
+    url = ("https://level.travel/search/St.Petersburg-RU-to-Any-EG-departure-28.06.2026"
+           "-for-7-nights-2-adults-3(0,1,3)-kids-1..5-stars-package-type")
+    assert parse_level_url(url)["kids"] == "3(0,1,3)"
+    assert verify_level_search_url(url, _params(children_ages=[0, 1, 3])) == []  # те же дети
+    # другие возрасты → расхождение по children_ages
+    assert any(x[0] == "children_ages"
+               for x in verify_level_search_url(url, _params(children_ages=[5, 6, 7])))
 
 
 def test_unsupported_departure_city():

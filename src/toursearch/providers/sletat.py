@@ -203,6 +203,9 @@ class SletatProvider:
                 op_seen: dict[str, float] = {}
                 log.info("Sletat: поиск запущен, жду полной загрузки результатов…")
                 await self._wait_for_completion(page, op_seen=op_seen, op_start=start)
+                # Скорость поиска = от клика «Найти» до появления результатов. Сортировку
+                # «по цене» и парсинг ниже в неё НЕ включаем (это уже пост-обработка).
+                dur = time.monotonic() - start
                 # URL результата кодирует реальные параметры поиска — финальная сверка.
                 search_url = page.url
                 url_problems = verify_sletat_search_url(search_url, params)
@@ -225,7 +228,7 @@ class SletatProvider:
                     # площадка искала не то, что просили — результаты невалидны
                     return ProviderResult(
                         provider=self.name, success=False,
-                        duration_seconds=time.monotonic() - start,
+                        duration_seconds=dur,
                         search_mode=params.search_mode, search_url=search_url,
                         error="URL-параметры не совпали: " + "; ".join(
                             f"{f}: ожидали {e!r}, получили {a!r}" for f, e, a in url_problems),
@@ -237,11 +240,11 @@ class SletatProvider:
                 await self._open_operator_panel(page)
                 shot = await self._safe_screenshot(page)
                 log.info("Sletat: результаты получены — %d предложений за %.1f с",
-                         len(offers) + len(hotel_offers), time.monotonic() - start)
+                         len(offers) + len(hotel_offers), dur)
                 return ProviderResult(
                     provider=self.name,
                     success=found,
-                    duration_seconds=time.monotonic() - start,
+                    duration_seconds=dur,
                     search_mode=params.search_mode,
                     offers=offers,
                     hotel_offers=hotel_offers,

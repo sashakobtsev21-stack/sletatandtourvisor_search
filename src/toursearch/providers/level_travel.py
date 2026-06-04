@@ -34,13 +34,13 @@ from toursearch.providers.base import (
     start_frame_pump,
     stop_frame_pump,
 )
-from toursearch.urlcheck import verify_level_search_url
+from toursearch.urlcheck import level_kids_token, verify_level_search_url
 
 # Город вылета (канон refdata) → слаг Level «{City}-{CC}». Только проверенные/уверенные;
 # неизвестный город → «не поддерживается» (нельзя гадать слаг — выдача станет несравнимой).
 _DEPARTURE_SLUG = {
     "Москва": "Moscow-RU",
-    "Санкт-Петербург": "Saint.Petersburg-RU",
+    "Санкт-Петербург": "St.Petersburg-RU",
     "Екатеринбург": "Yekaterinburg-RU",
     "Новосибирск": "Novosibirsk-RU",
     "Казань": "Kazan-RU",
@@ -191,6 +191,9 @@ class LevelTravelProvider:
                 log.info("Level Travel: открываю поиск %s", url)
                 await page.goto(url, wait_until="domcontentloaded")
                 await self._wait_for_completion(page)
+                # Скорость = от перехода (клик «Найти») до появления результатов; сортировку
+                # «По цене» и парсинг ниже в неё НЕ включаем (это уже пост-обработка).
+                dur = time.monotonic() - start
                 # список виртуализирован (в DOM ~5 карточек), а сортировка по умолчанию
                 # «по рекомендации» → дорогие сверху. Сортируем по цене, чтобы видимые
                 # карточки были самыми дешёвыми и сравнение цен было честным.
@@ -209,7 +212,6 @@ class LevelTravelProvider:
                 if url_problems:
                     log.warning("Level Travel: расхождение параметров в URL: %s", url_problems)
                 shot = await self._safe_screenshot(page)
-                dur = time.monotonic() - start
                 log.info("Level Travel: выдача получена — %d отелей за %.1f с", len(hotel_offers), dur)
                 success = bool(hotel_offers) and not url_problems
                 if not hotel_offers:
@@ -240,11 +242,13 @@ class LevelTravelProvider:
         stars = sorted(s for s in params.hotel_stars if 1 <= s <= 5)
         smin, smax = (stars[0], stars[-1]) if stars else (1, 5)
         kind = "hotel" if params.search_mode == "hotels" else "package"
+        # дети: «{кол-во}({возрасты})» — без скобок-возрастов Level редиректит на главную
+        kids = level_kids_token(params.children_ages)
         return (
             f"https://level.travel/search/{dep_slug}-to-Any-{cc}"
             f"-departure-{params.date_from.strftime('%d.%m.%Y')}"
             f"-for-{params.nights_min}-nights-{params.adults}-adults"
-            f"-{len(params.children_ages)}-kids-{smin}..{smax}-stars-{kind}-type")
+            f"-{kids}-kids-{smin}..{smax}-stars-{kind}-type")
 
     async def _wait_for_completion(self, page: Page, timeout_s: int = 100) -> None:
         """Дождаться завершения асинхронного поиска. Карточки СТРИМЯТСЯ пачками

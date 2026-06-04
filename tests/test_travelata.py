@@ -27,7 +27,11 @@ from toursearch.providers.travelata import (
     build_hotel_offers,
     build_offers_from_api,
 )
-from toursearch.urlcheck import parse_travelata_url, verify_travelata_search_url
+from toursearch.urlcheck import (
+    parse_travelata_url,
+    travelata_effective_ages,
+    verify_travelata_search_url,
+)
 
 # Реальный хэш-URL результата (снят с живого сайта в Фазе 1).
 URL = (
@@ -156,6 +160,14 @@ def test_build_hotels_search_url():
     assert "hotelClass=all" in url
 
 
+def test_build_search_url_clamps_infant_ages():
+    # Travelata не принимает детей младше 2 (сбрасывает ВСЕ возрасты в 11) → поджимаем 0/1 → 2
+    prov = get_provider("travelata")(headless=True)
+    url = prov._build_search_url(_params(children_ages=[0, 1, 3]), 2, 29)
+    assert "ages[]=2&ages[]=2&ages[]=3" in url
+    assert travelata_effective_ages([0, 1, 3]) == [2, 2, 3]
+
+
 # --------------------------- сверка URL ----------------------------
 
 def test_parse_travelata_url_hash():
@@ -169,6 +181,12 @@ def test_parse_travelata_url_hash():
 
 def test_verify_url_ok():
     assert verify_travelata_search_url(URL, _params()) == []
+
+
+def test_verify_url_accepts_clamped_infant_ages():
+    # URL с поджатыми возрастами (2,2,3) корректен для запроса с детьми 0,1,3
+    url = URL.replace("kids=1&ages[]=5", "kids=3&ages[]=2&ages[]=2&ages[]=3")
+    assert verify_travelata_search_url(url, _params(children_ages=[0, 1, 3])) == []
 
 
 def test_verify_url_detects_adults_mismatch():
