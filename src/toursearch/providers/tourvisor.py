@@ -13,8 +13,6 @@ import time
 from datetime import datetime
 from decimal import Decimal
 
-log = logging.getLogger("toursearch.providers.tourvisor")
-
 from playwright.async_api import Page, TimeoutError as PWTimeout, async_playwright
 
 from toursearch.models import HotelOffer, Offer, OperatorOffer, ProviderResult, SearchParams
@@ -30,6 +28,8 @@ from toursearch.providers.base import (
     stop_frame_pump,
 )
 from toursearch.urlcheck import verify_tourvisor_search_url
+
+log = logging.getLogger("toursearch.providers.tourvisor")
 
 _MONTHS_RU = {
     1: "ЯНВАРЬ", 2: "ФЕВРАЛЬ", 3: "МАРТ", 4: "АПРЕЛЬ",

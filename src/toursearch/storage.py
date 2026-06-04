@@ -78,6 +78,13 @@ CREATE TABLE IF NOT EXISTS operator_offers (
     load_seconds       REAL,
     raw_label          TEXT NOT NULL DEFAULT ''
 );
+-- Индексы по внешним ключам: SQLite их не создаёт автоматически, а чтение истории
+-- идёт по WHERE run_id/provider_result_id (иначе full scan на каждый прогон).
+CREATE INDEX IF NOT EXISTS idx_provider_results_run ON provider_results(run_id);
+CREATE INDEX IF NOT EXISTS idx_offers_pr ON offers(provider_result_id);
+CREATE INDEX IF NOT EXISTS idx_hotel_offers_pr ON hotel_offers(provider_result_id);
+CREATE INDEX IF NOT EXISTS idx_operator_offers_pr ON operator_offers(provider_result_id);
+CREATE INDEX IF NOT EXISTS idx_runs_run_at ON runs(run_at);
 """
 
 

@@ -20,8 +20,6 @@ import time
 from datetime import datetime
 from decimal import Decimal
 
-log = logging.getLogger("toursearch.providers.ostrovok")
-
 from playwright.async_api import Page, TimeoutError as PWTimeout, async_playwright
 
 from toursearch.models import HotelOffer, ProviderResult, SearchParams
@@ -32,6 +30,8 @@ from toursearch.providers.base import (
     stop_frame_pump,
 )
 from toursearch.urlcheck import verify_ostrovok_search_url
+
+log = logging.getLogger("toursearch.providers.ostrovok")
 
 # Настольный UA: без него Островок отдаёт другую вёрстку без формы поиска (важно и
 # для реального поиска, и для health-check — иначе якоря формы не находятся).

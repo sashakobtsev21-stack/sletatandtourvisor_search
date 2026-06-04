@@ -8,17 +8,17 @@ from datetime import datetime
 
 import typer
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
-
 from toursearch.healthcheck import format_health, gate_passed, run_health_check
 from toursearch.models import SearchParams
 from toursearch.orchestrator import run_search
 from toursearch.reporting import format_report
 from toursearch.storage import Storage
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 app = typer.Typer(add_completion=False, help="Сравнение поиска туров на разных площадках.")
 

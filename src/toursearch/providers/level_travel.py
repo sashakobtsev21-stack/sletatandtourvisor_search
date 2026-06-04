@@ -23,8 +23,6 @@ import time
 from datetime import datetime
 from decimal import Decimal
 
-log = logging.getLogger("toursearch.providers.level_travel")
-
 from playwright.async_api import Page, TimeoutError as PWTimeout, async_playwright
 
 from toursearch.models import HotelOffer, ProviderResult, SearchParams
@@ -35,6 +33,8 @@ from toursearch.providers.base import (
     stop_frame_pump,
 )
 from toursearch.urlcheck import level_kids_token, verify_level_search_url
+
+log = logging.getLogger("toursearch.providers.level_travel")
 
 # Город вылета (канон refdata) → слаг Level «{City}-{CC}». Только проверенные/уверенные;
 # неизвестный город → «не поддерживается» (нельзя гадать слаг — выдача станет несравнимой).

@@ -32,8 +32,6 @@ import time
 from datetime import datetime
 from decimal import Decimal
 
-log = logging.getLogger("toursearch.providers.travelata")
-
 from playwright.async_api import Page, TimeoutError as PWTimeout, async_playwright
 
 from toursearch.models import HotelOffer, Offer, OperatorOffer, ProviderResult, SearchParams
@@ -44,6 +42,8 @@ from toursearch.providers.base import (
     stop_frame_pump,
 )
 from toursearch.urlcheck import travelata_effective_ages, verify_travelata_search_url
+
+log = logging.getLogger("toursearch.providers.travelata")
 
 # Звёздность → id чекбокса «Класс отеля» (value атрибута). ВНИМАНИЕ: id ≠ числу звёзд.
 _STARS_TO_ID = {5: "7", 4: "4", 3: "3", 2: "2", 1: "2"}  # 1—2 звезды = одна категория «2»
