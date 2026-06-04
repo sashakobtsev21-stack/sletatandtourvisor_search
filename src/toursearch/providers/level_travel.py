@@ -153,7 +153,7 @@ def build_hotel_offers(provider_name: str, rows: list[dict]) -> list[HotelOffer]
         out.append(
             HotelOffer(
                 provider=provider_name, hotel_name=name,
-                stars=int(stars) if isinstance(stars, int) and stars else None,
+                stars=int(stars) if isinstance(stars, int) and 1 <= stars <= 5 else None,
                 rating=rating, destination=(row.get("resort") or "").strip() or None,
                 price=price, currency="RUB", raw_label=(row.get("price") or "").strip(),
             )
@@ -345,14 +345,14 @@ class LevelTravelProvider:
                     const resort = clean(q('[class*=HotelCardLocation_text]')?.textContent);
                     const rating = clean(q('[class*=HotelRating_rating]')?.textContent);
                     const price = clean(q('[class*=HotelCardPriceBlock_price]')?.textContent);
-                    const stars = c.querySelectorAll('[class*=HotelStars_container] svg, [class*=HotelStars_container] [class*=star i]').length;
+                    // звёзды = число svg в HotelStars_container: Level рендерит РОВНО рейтинг
+                    // (3/4/5 svg), а не 5 «контуров». Прежний селектор считал svg И .star —
+                    // получался двойной счёт, поэтому звёзды раньше отбрасывали.
+                    const stars = c.querySelectorAll('[class*=HotelStars_container] svg').length;
                     if (title && price) out.push({title, resort, rating, price, stars});
                 });
                 return out;
             }""")
-        # stars-иконки ненадёжны (могут быть 5 «контуров») → не доверяем, оставляем None
-        for r in rows:
-            r.pop("stars", None)
         return build_hotel_offers(self.name, rows)
 
     async def _safe_screenshot(self, page: Page) -> str | None:

@@ -299,6 +299,10 @@ class TravelataProvider:
                 # 3) звёздность — чекбоксами сайдбара (server-rendered, работает headless)
                 if await self._apply_stars(page, params):
                     await self._wait_for_completion(page)
+                # 3b) оператор — клик в сайдбаре «Туроператоры» (сайт оставит только его туры);
+                #     API пере-запросится под выбранного ТО → надёжнее пост-фильтра.
+                if params.operators and await self._apply_operators(page, params.operators):
+                    await self._wait_for_completion(page)
 
                 hotel_offers = await self._parse_hotels(page)
                 # операторы из API выдачи (offers + operator_offers); при фильтре по
@@ -306,6 +310,11 @@ class TravelataProvider:
                 offers, operator_offers = (
                     build_offers_from_api(self.name, tours_api["data"], operators=params.operators)
                     if tours_api.get("data") else ([], []))
+                # фолбэк: если фильтр по оператору не нашёл его в ПЕРЕХВАЧЕННОЙ выдаче
+                # (перехват API/сайдбар best-effort), не прячем данные — показываем всех
+                # операторов, а не пустоту (иначе выглядит как «у оператора нет туров»).
+                if params.operators and not offers and tours_api.get("data"):
+                    offers, operator_offers = build_offers_from_api(self.name, tours_api["data"])
                 if operator_offers:
                     log.info("Travelata: операторов из API — %d (дешевле всех: %s)",
                              len(operator_offers), operator_offers[0].operator)
@@ -529,6 +538,41 @@ class TravelataProvider:
         if n:
             log.info("Travelata: применил фильтр звёзд (%d категорий)", n)
         return bool(n)
+
+    async def _apply_operators(self, page: Page, operators: list[str]) -> bool:
+        """Фильтр по туроператору КАК НА САЙТЕ: раскрыть список «Туроператоры» в сайдбаре
+        выдачи и кликнуть пункт выбранного ТО (single-select) — сайт оставит только его
+        туры (надёжнее пост-фильтра: выдача и API пере-запрашиваются под выбранного ТО).
+        best-effort. Матчинг по СЛОВАМ пункта (рус/лат), точное/префикс — не подстрока."""
+        if not operators:
+            return False
+        try:
+            # развернуть свёрнутый блок «Туроператоры»
+            await page.evaluate(
+                """() => { const b = [...document.querySelectorAll('.toggle-list-content__button')]
+                    .find(x => /Туроператор/i.test(x.textContent || '')); if (b) b.click(); }""")
+            await page.wait_for_timeout(900)
+            clicked = await page.evaluate(
+                """(wanted) => {
+                    const norm = s => (s || '').toLowerCase().replace(/ё/g, 'е')
+                        .replace(/&/g, '').replace(/ and /g, ' ').replace(/[^a-zа-я0-9 ]/g, ' ');
+                    const wn = wanted.map(w => norm(w).replace(/\\s+/g, ''));
+                    let n = 0;
+                    document.querySelectorAll(
+                        '.check-box-input-list-with-one-select__item, label.checkbox-item, .filter-list-item label'
+                    ).forEach(it => {
+                        const words = norm(it.textContent).split(/\\s+/).filter(Boolean);
+                        const hit = wn.some(w => w.length >= 3 && words.some(
+                            word => word === w || (word.length >= 4 && (word.startsWith(w) || w.startsWith(word)))));
+                        if (hit) { it.click(); n++; }
+                    });
+                    return n;
+                }""", operators)
+            if clicked:
+                log.info("Travelata: применил фильтр оператора в сайдбаре (%d)", clicked)
+            return bool(clicked)
+        except Exception:
+            return False
 
     # ----------------------- ожидание/парсинг -------------------------
 
