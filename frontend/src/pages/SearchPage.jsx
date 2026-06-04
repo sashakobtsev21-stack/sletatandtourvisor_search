@@ -6,6 +6,7 @@ import LiveViews from "../components/LiveViews.jsx";
 import { navigate } from "../lib/router.js";
 import { takeRepeat } from "../lib/repeatStore.js";
 import { PROVIDERS } from "../lib/constants.js";
+import { progressFloorForLog, isSearchStart, parseProviderDone } from "../lib/searchEvents.js";
 
 let logSeq = 0;
 const now = () => new Date().toTimeString().slice(0, 8);
@@ -16,7 +17,7 @@ const now = () => new Date().toTimeString().slice(0, 8);
 let activeRun = null; // { token, providers } | null
 
 /** Параметры прогона (из истории) → payload для runRealSearch. */
-function payloadFromParams(p) {
+export function payloadFromParams(p) {
   return {
     mode: p.search_mode,
     departure_city: p.departure_city,
@@ -193,19 +194,15 @@ export default function SearchPage() {
         case "log": {
           const level = e.level === "WARNING" ? "warning" : "info";
           pushLog(e.msg, level);
-          if (/health-check/i.test(e.msg)) setProgress((v) => Math.max(v, 10));
-          else if (/Гейт пройден/i.test(e.msg)) setProgress((v) => Math.max(v, 20));
-          else if (/search start|Запускаю поиск/i.test(e.msg)) {
-            setProgress((v) => Math.max(v, 28));
-            providers.forEach((p) => setPhase(p, "loading"));
-          }
-          const done = e.msg.match(/provider\s+(\w+)\s*:\s*(OK|FAIL)/i);
+          const floor = progressFloorForLog(e.msg);
+          if (floor) setProgress((v) => Math.max(v, floor));
+          if (isSearchStart(e.msg)) providers.forEach((p) => setPhase(p, "loading"));
+          const done = parseProviderDone(e.msg);
           if (done) {
-            const [, name, verdict] = done;
-            setPhase(name, "done");
+            setPhase(done.name, "done");
             doneCount += 1;
             setProgress((v) => Math.max(v, 28 + Math.round((doneCount / total) * 68)));
-            pushLog(`✓ ${name}: ${verdict}`, verdict.toUpperCase() === "OK" ? "ok" : "warning");
+            pushLog(`✓ ${done.name}: ${done.verdict}`, done.verdict === "OK" ? "ok" : "warning");
           }
           break;
         }

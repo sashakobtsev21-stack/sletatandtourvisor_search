@@ -30,3 +30,15 @@ jobs:
             junit.xml
             coverage.xml
           if-no-files-found: ignore
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install deps
+        run: npm --prefix frontend ci
+      - name: Frontend unit tests (vitest)
+        run: npm --prefix frontend test
