@@ -152,7 +152,9 @@ class LevelTravelProvider:
         "поиск-форма": "[class*=DepartureController], [class*=DestinationButtons], [class*=search i]",
     }
 
-    def __init__(self, headless: bool = False, timeout_ms: int = 20_000) -> None:
+    # Level — тяжёлый Next.js SPA + анти-бот: открытие deeplink порой дольше 20 c, из-за
+    # чего page.goto падал по таймауту. Даём навигации больше времени (45 c).
+    def __init__(self, headless: bool = False, timeout_ms: int = 45_000) -> None:
         self.headless = headless
         self.timeout_ms = timeout_ms
         self.on_frame = None
