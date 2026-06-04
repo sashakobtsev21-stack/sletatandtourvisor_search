@@ -35,6 +35,7 @@ async def main():
     print(f"hotel_offers   : {len(res.hotel_offers)}")
     for h in sorted(res.hotel_offers, key=lambda x: x.price)[:8]:
         print(f"   {h.price:>11} ₽  рейтинг {h.rating or '—'}  {h.hotel_name}  ({h.destination})")
+    print(f"operators_available ({len(res.operators_available)}): {', '.join(res.operators_available)}")
     c = res.cheapest
     if c:
         print(f"cheapest       : {c.label} — {c.price} ₽")

@@ -112,7 +112,7 @@ export default function ResultsPage({ runId }) {
                   <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted">
                     Туроператоры
                   </h4>
-                  <OperatorTable offers={r.operator_offers} />
+                  <OperatorTable offers={r.operator_offers} available={r.operators_available} />
                 </div>
 
                 {r.hotel_offers?.length > 0 && (
@@ -205,9 +205,24 @@ function Stars({ n }) {
  * выглядели по-разному. Пусто (площадка не раскрывает операторов, напр. Level) —
  * нейтральная строка в том же месте, чтобы структура карточек совпадала.
  */
-function OperatorTable({ offers = [] }) {
-  if (!offers.length)
-    return <p className="text-sm text-muted">Площадка не раскрывает разбивку по операторам.</p>;
+function OperatorTable({ offers = [], available = [] }) {
+  if (!offers.length) {
+    // Цены по операторам недоступны (Level шифрует), но известны имена ТО с турами.
+    if (available.length)
+      return (
+        <div>
+          <p className="mb-1.5 text-xs text-muted">Цены по операторам не раскрываются; туры есть у:</p>
+          <div className="flex flex-wrap gap-1.5">
+            {available.map((n) => (
+              <span key={n} className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[11px] text-ink">
+                {n}
+              </span>
+            ))}
+          </div>
+        </div>
+      );
+    return <p className="text-sm text-muted">Разбивка по операторам недоступна.</p>;
+  }
   const rows = offers.map((o) => [o.operator, formatPrice(o.price, o.currency)]);
   return <ProviderTable head={["Туроператор", "Наименьшая цена"]} emphasizeCol={1} rows={rows} />;
 }

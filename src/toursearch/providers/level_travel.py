@@ -78,6 +78,33 @@ _COUNTRY_CC = {
 }
 
 
+# Хук JSON.parse: API Level зашифрован (AES), но страница расшифровывает данные сама,
+# чтобы отрисовать. Перехватываем РАСПАРСЕННЫЙ словарь операторов (id→имя) из
+# расшифрованной выдачи — ключ не нужен. Цены по операторам Level не раскрывает
+# (в отеле только список id + общая min_price), поэтому берём только ИМЕНА операторов
+# с турами. Ставится через add_init_script (до загрузки страницы).
+_JSON_HOOK = r"""
+if (!window.__lvHooked) {
+    window.__lvHooked = true;
+    window.__lvOperators = [];
+    const _parse = JSON.parse;
+    JSON.parse = function (s, reviver) {
+        const out = _parse(s, reviver);
+        try {
+            const o = (out && typeof out === 'object') ? out : null;
+            const arr = o && (o.operators || (o.result && o.result.operators)
+                              || (Array.isArray(o) ? o : null));
+            if (Array.isArray(arr) && arr.length && arr[0] &&
+                arr[0].id != null && (arr[0].name || arr[0].nameRu || arr[0].title)) {
+                window.__lvOperators = arr.map(x => x.name || x.nameRu || x.title).filter(Boolean);
+            }
+        } catch (e) {}
+        return out;
+    };
+}
+"""
+
+
 def _parse_price(text: str) -> Decimal | None:
     digits = re.sub(r"[^\d]", "", text or "")
     return Decimal(digits) if digits else None
@@ -155,6 +182,7 @@ class LevelTravelProvider:
                             "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"))
             await context.add_init_script(
                 "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            await context.add_init_script(_JSON_HOOK)  # перехват операторов (см. выше)
             page = await context.new_page()
             page.set_default_timeout(self.timeout_ms)
             pump = start_frame_pump(self.name, page, self.on_frame)
@@ -169,6 +197,14 @@ class LevelTravelProvider:
                 if await self._sort_by_price(page):
                     await page.wait_for_timeout(6000)
                 hotel_offers = await self._parse_hotels(page)
+                # операторы с турами (имена) из перехваченной расшифрованной выдачи
+                try:
+                    op_names = await page.evaluate("() => window.__lvOperators || []")
+                except Exception:
+                    op_names = []
+                operators_available = sorted({n.strip() for n in op_names if n and n.strip()})
+                if operators_available:
+                    log.info("Level Travel: операторов с турами — %d", len(operators_available))
                 url_problems = verify_level_search_url(page.url, params)
                 if url_problems:
                     log.warning("Level Travel: расхождение параметров в URL: %s", url_problems)
@@ -186,6 +222,7 @@ class LevelTravelProvider:
                 return ProviderResult(
                     provider=self.name, success=success, duration_seconds=dur,
                     search_mode=params.search_mode, hotel_offers=hotel_offers,
+                    operators_available=operators_available,
                     search_url=page.url, screenshot_path=shot, error=error)
             except Exception as exc:  # noqa: BLE001
                 log.warning("level search failed: %s: %s", type(exc).__name__, exc)
