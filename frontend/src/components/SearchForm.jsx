@@ -13,6 +13,7 @@ import {
   PROVIDERS, NIGHTS, ADULTS, CHILDREN, CHILD_AGES, MAX_DATE_SPAN_DAYS,
 } from "../lib/constants.js";
 import { useRefData } from "../lib/refdata.js";
+import { providerLabel } from "../lib/format.js";
 
 const addDays = (iso, n) => {
   const d = new Date(iso);
@@ -382,7 +383,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
                         : "bg-muted/40"
                   }`}
                 />
-                {p}
+                {providerLabel(p)}
                 {experimental && !incompatible && (
                   <span className="rounded-md bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-bold uppercase not-italic tracking-wider text-amber-300">
                     β
@@ -471,7 +472,7 @@ function HealthCheckInfo({ providers = [] }) {
               <p>
                 Проверяются <b className="text-ink">только выбранные</b> площадки
                 {providers.length
-                  ? <>: <span className="capitalize text-ink">{providers.join(", ")}</span>.</>
+                  ? <>: <span className="capitalize text-ink">{providers.map(providerLabel).join(", ")}</span>.</>
                   : " (отметь площадки ниже)."}
               </p>
             </div>

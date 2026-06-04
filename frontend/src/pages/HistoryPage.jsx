@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import GlassCard from "../components/ui/GlassCard.jsx";
 import { staggerContainer, fadeUp } from "../lib/animations.js";
-import { formatPrice, formatDate, formatDateTime } from "../lib/format.js";
+import { formatPrice, formatDate, formatDateTime, providerLabel } from "../lib/format.js";
 import { navigate } from "../lib/router.js";
 import { setRepeat } from "../lib/repeatStore.js";
 
@@ -110,7 +110,7 @@ export default function HistoryPage() {
                         ].join(" ")}
                       >
                         {s.ok ? <CheckCircle2 className="size-2.5" /> : <AlertTriangle className="size-2.5" />}
-                        {s.provider}
+                        {providerLabel(s.provider)}
                       </span>
                     ))}
                   </div>

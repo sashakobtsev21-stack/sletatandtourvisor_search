@@ -2,6 +2,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Radio, MonitorPlay, Loader2, CheckCircle2 } from "lucide-react";
 import GlassCard from "./ui/GlassCard.jsx";
 import { staggerContainer, fadeUp, slideIn } from "../lib/animations.js";
+import { providerLabel } from "../lib/format.js";
 
 /**
  * LiveViews — левая колонка: «живые» окна площадок (скриншоты в реальном времени).
@@ -58,7 +59,7 @@ export default function LiveViews({ providers = [], frames = {}, phases = {}, ac
                     </span>
                   )}
                   <Radio className={`size-4 ${done ? "text-emerald-300" : "text-rose-300"}`} />
-                  <span className="text-sm font-semibold capitalize text-ink">{p}</span>
+                  <span className="text-sm font-semibold capitalize text-ink">{providerLabel(p)}</span>
                   <span
                     className={`ml-auto text-[10px] font-medium uppercase tracking-wider ${
                       done ? "text-emerald-300/80" : "text-rose-300/80"
