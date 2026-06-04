@@ -160,9 +160,15 @@ class TravelataProvider:
     HOTELS_URL = "https://travelata.ru/hotels/search"
     GW = "https://gateway.travelata.ru"
 
-    # Якоря health-check (форма поиска на месте).
+    # Якоря health-check (форма поиска на месте). Travelata, как и Островок, в дефолтном
+    # headless-UA / без вьюпорта рендерит НЕ всю форму (фильтры «Класс отеля»/«Питание»
+    # не появляются) → health-check в «настольном» контексте + чуть больше времени.
     HEALTH_URL = URL
     HEALTH_POPUPS: list[str] = []
+    HEALTH_USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                         "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+    HEALTH_VIEWPORT = {"width": 1600, "height": 1080}
+    HEALTH_WAIT_MS = 5000
     HEALTH_ANCHORS = {
         "форма поиска": "form.searchFormNew",
         "город вылета": ".from_city.customSelect",
