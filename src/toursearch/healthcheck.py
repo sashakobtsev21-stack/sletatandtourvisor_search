@@ -40,6 +40,12 @@ async def check_provider(name: str, headless: bool = True, timeout_ms: int = 15_
     popups: list[str] = getattr(cls, "HEALTH_POPUPS", [])
     if not url or not anchors:
         return ProviderHealth(provider=name, ok=False, error="не заданы HEALTH_URL/HEALTH_ANCHORS")
+    # Некоторым сайтам нужен «настольный» контекст, иначе отдаётся другая вёрстка
+    # (Островок без desktop-UA/viewport вообще не отрисовывает форму поиска). По
+    # умолчанию контекст — как раньше (no_viewport, дефолтный UA, ожидание 3.5 с).
+    health_ua: str | None = getattr(cls, "HEALTH_USER_AGENT", None)
+    health_vp: dict | None = getattr(cls, "HEALTH_VIEWPORT", None)
+    health_wait: int = getattr(cls, "HEALTH_WAIT_MS", 3500)
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(
@@ -47,12 +53,19 @@ async def check_provider(name: str, headless: bool = True, timeout_ms: int = 15_
             args=["--disable-blink-features=AutomationControlled", "--start-maximized"],
         )
         try:
-            context = await browser.new_context(no_viewport=True, permissions=[])
+            ctx_kwargs: dict = {"permissions": []}
+            if health_vp:
+                ctx_kwargs["viewport"] = health_vp
+            else:
+                ctx_kwargs["no_viewport"] = True
+            if health_ua:
+                ctx_kwargs["user_agent"] = health_ua
+            context = await browser.new_context(**ctx_kwargs)
             page = await context.new_page()
             page.set_default_timeout(timeout_ms)
             log.info("Health-check %s: открываю форму %s…", name, url)
             await page.goto(url, wait_until="domcontentloaded")
-            await page.wait_for_timeout(3500)
+            await page.wait_for_timeout(health_wait)
             if popups:
                 log.info("Health-check %s: закрываю всплывающие окна (реклама/куки)…", name)
             for sel in popups:

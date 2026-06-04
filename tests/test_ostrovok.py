@@ -78,6 +78,19 @@ def test_registered_experimental():
     assert is_experimental("ostrovok")
 
 
+def test_hotels_only_mode():
+    # Островок объявляет себя «только Отели» — фронт по этому гасит его в режиме «Туры».
+    assert get_provider("ostrovok").SEARCH_MODES == ("hotels",)
+
+
+def test_health_anchors_meaningful():
+    # Раньше было 2 общих селектора (logo + любой input) — health-check почти ничего не
+    # проверял. Теперь это конкретные поля формы поиска (data-testid), как у Sletat.
+    anchors = get_provider("ostrovok").HEALTH_ANCHORS
+    assert len(anchors) >= 6
+    assert all("data-testid" in sel for sel in anchors.values())
+
+
 def test_parse_ostrovok_url():
     p = parse_ostrovok_url(URL)
     assert p["country"] == "turkey" and p["city"] == "antalya"

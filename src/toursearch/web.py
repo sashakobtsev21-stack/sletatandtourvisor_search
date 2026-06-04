@@ -22,7 +22,12 @@ from toursearch import refdata
 from toursearch.healthcheck import gate_passed, run_health_check
 from toursearch.models import SearchParams
 from toursearch.orchestrator import run_search
-from toursearch.providers import is_experimental, list_providers, load_browser_providers
+from toursearch.providers import (
+    get_provider,
+    is_experimental,
+    list_providers,
+    load_browser_providers,
+)
 from toursearch.storage import Storage
 from toursearch.testkit import REGISTRY, run_selected
 
@@ -232,6 +237,22 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
 
     def _providers() -> list[str]:
         return list_providers()
+
+    def _provider_modes() -> dict[str, list[str]]:
+        """Режимы, которые поддерживает каждая площадка (по умолчанию оба).
+
+        Островок — только «Отели», Travelata — только «Туры». Фронт по этому списку
+        помечает и гасит несовместимые с текущим режимом площадки, чтобы они не
+        запускались впустую (без результатов и без живой трансляции).
+        """
+        out: dict[str, list[str]] = {}
+        for name in _providers():
+            try:
+                modes = getattr(get_provider(name), "SEARCH_MODES", ("tours", "hotels"))
+            except Exception:  # noqa: BLE001
+                modes = ("tours", "hotels")
+            out[name] = list(modes)
+        return out
 
     def _form_ctx() -> dict:
         today = date.today()
@@ -536,6 +557,8 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
             # экспериментальные (opt-in) площадки: видны для выбора, но не отмечены
             # по умолчанию и не входят в гейт без явного выбора.
             "experimental_providers": [p for p in _providers() if is_experimental(p)],
+            # режимы каждой площадки → форма гасит несовместимые с выбранным режимом
+            "provider_modes": _provider_modes(),
             "max_date_span_days": MAX_DATE_SPAN_DAYS,
         }
 
