@@ -2558,3 +2558,125 @@ add(G, "URL детект currency RUB→EUR", lambda: _detect(mk(currency="RUB")
 REGISTRY.describe_group(
     G, "Быстрые детерминированные проверки (без браузера) — расширение целостности логики: "
        "парсинг цен/рейтингов, границы моделей, фильтр операторов, детект расхождений URL.")
+
+
+# ======================================================================
+# Live: ПОТОК ФОРМЫ АНАЛИЗА по ВСЕМ площадкам + СВЕРКА площадок
+# ----------------------------------------------------------------------
+# Для КАЖДОЙ площадки: параметры → реальный поиск → (а) на площадку ушёл ВЕРНЫЙ запрос
+# (URL кодирует параметры), (б) ОТВЕТ прочитан корректно (данные осмысленны), (в) видимые
+# фильтры честны в выдаче. Плюс сверка результатов площадок по ОДНОМУ запросу.
+# Реализация: testkit/flowkit.py (провайдеро-агностично).
+# ======================================================================
+from toursearch.testkit import flowkit as _fk  # noqa: E402
+
+
+def _flow_label(mode: str, over: dict) -> str:
+    bits = []
+    if over.get("destination_country"):
+        bits.append(over["destination_country"])
+    if over.get("departure_city"):
+        bits.append(f"из {over['departure_city']}")
+    if over.get("resorts"):
+        bits.append("/".join(over["resorts"]))
+    if over.get("children_ages"):
+        bits.append(f"{len(over['children_ages'])} реб.")
+    if over.get("hotel_stars"):
+        bits.append(f"{'/'.join(map(str, over['hotel_stars']))}★")
+    if over.get("meals"):
+        bits.append("/".join(over["meals"]))
+    if over.get("price_max") is not None:
+        bits.append(f"до {int(over['price_max'])}₽")
+    return f"{mode}: {', '.join(bits) if bits else 'базовый'} → верный запрос + корректный ответ"
+
+
+def _flow_case(provider: str, params: SearchParams, require_results: bool):
+    async def _case():
+        o = await _fk.run_flow(provider, params)
+        _fk.flow_ok(o, require_results=require_results)
+    return _case
+
+
+# Площадка → (заголовок, [(режим, доп.параметры, требовать_результаты)]). Базовые кейсы
+# требуют результатов (Турция плотная), вариации — нет (наличие зависит от дат/направления;
+# проверяем КОРРЕКТНОСТЬ ПОТОКА: верный запрос + чистый ответ, а не наличие туров).
+_FLOW_PLAN = {
+    "sletat": ("Sletat", [
+        ("tours", {}, True),
+        ("hotels", {}, True),
+        ("tours", {"destination_country": "Египет"}, False),
+        ("tours", {"destination_country": "ОАЭ"}, False),
+        ("tours", {"departure_city": "Санкт-Петербург"}, False),
+        ("tours", {"children_ages": [5]}, False),
+        ("tours", {"hotel_stars": [4, 5]}, False),
+        ("tours", {"meals": ["AI"]}, False),
+        ("tours", {"price_max": Decimal("150000")}, False),
+        ("hotels", {"hotel_stars": [4, 5]}, False)]),
+    "tourvisor": ("Tourvisor", [
+        ("tours", {}, True),
+        ("hotels", {}, True),
+        ("tours", {"destination_country": "Египет"}, False),
+        ("tours", {"destination_country": "Таиланд"}, False),
+        ("tours", {"departure_city": "Санкт-Петербург"}, False),
+        ("tours", {"children_ages": [5]}, False),
+        ("tours", {"hotel_stars": [4, 5]}, False)]),
+    "travelata": ("Travelata", [
+        ("tours", {}, True),
+        ("hotels", {}, True),
+        ("tours", {"destination_country": "Египет"}, False),
+        ("tours", {"children_ages": [5]}, False),
+        ("tours", {"children_ages": [0, 1, 3]}, False),
+        ("tours", {"hotel_stars": [4, 5]}, False)]),
+    "level": ("Level", [
+        ("tours", {}, True),
+        ("hotels", {}, True),
+        ("tours", {"destination_country": "Египет"}, False),
+        ("tours", {"departure_city": "Санкт-Петербург"}, False),
+        ("tours", {"children_ages": [0, 1, 3]}, False)]),
+    "ostrovok": ("Ostrovok", [
+        ("hotels", {}, True),
+        ("hotels", {"destination_country": "Египет", "resorts": ["Хургада"]}, False),
+        ("hotels", {"destination_country": "ОАЭ", "resorts": ["Дубай"]}, False)]),
+}
+
+for _prov, (_title, _cases) in _FLOW_PLAN.items():
+    _items = [
+        (_flow_case(_prov, _fk.base_params(_mode, **_over), _req),
+         _flow_label(_mode, _over),
+         f"{_title}: реальный поиск с этими параметрами и проверка ВСЕГО потока формы — "
+         f"на площадку ушёл верный запрос (URL кодирует параметры), ответ прочитан корректно "
+         f"(цены>0, рейтинг 0–10, звёзды 1–5, имена непустые) и видимые фильтры честны в выдаче.")
+        for _mode, _over, _req in _cases
+    ]
+    _reg(f"Live: Сценарий — поток {_title}", _items,
+         f"⏱ Поток формы {_title}: параметры → реальный поиск → верный запрос (URL) + "
+         f"корректное чтение ответа + честность фильтров. Неподдерживаемый режим → чистый отказ.")
+
+
+# --- Сверка результатов разных площадок по одному запросу ---
+def _cross_case(mode: str, providers: list[str], **over):
+    async def _case():
+        report = await _fk.run_all(_fk.base_params(mode, **over), providers)
+        _fk.consistent(report)
+    return _case
+
+
+_TOUR_PLATFORMS = ["sletat", "tourvisor", "travelata", "level"]
+_ALL_PLATFORMS = ["sletat", "tourvisor", "travelata", "level", "ostrovok"]
+
+_reg("Live: Сверка площадок", [
+    (_cross_case("tours", _TOUR_PLATFORMS),
+     "туры Турция: 4 площадки → согласованы",
+     "Один и тот же запрос (Москва→Турция, туры) уходит на Sletat/Tourvisor/Travelata/Level. "
+     "Сверяем согласованность: единая валюта, каждая цена в правдоподобном диапазоне, мин. цены "
+     "площадок не расходятся сверх 8× (детектор «кто-то ищет/парсит не то»), у каждой успешной "
+     "площадки данные корректны."),
+    (_cross_case("tours", _TOUR_PLATFORMS, destination_country="Египет"),
+     "туры Египет: 4 площадки → согласованы",
+     "Тот же сценарий сверки для направления Египет (Москва→Египет, туры)."),
+    (_cross_case("hotels", _ALL_PLATFORMS),
+     "отели Турция: 5 площадок → согласованы",
+     "Один запрос (Турция, отели) на все 5 площадок (Островок — только отели). Сверка "
+     "согласованности результатов и корректности данных по каждой площадке."),
+], "⏱ Сверка результатов РАЗНЫХ площадок по ОДНОМУ запросу: валюта/диапазон/разброс цен + "
+   "корректность данных каждой. Прогон последовательный (каждый кейс поднимает несколько браузеров).")
