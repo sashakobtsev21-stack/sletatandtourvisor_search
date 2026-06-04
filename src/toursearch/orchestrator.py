@@ -39,28 +39,25 @@ async def run_search(
                 inst.on_frame = on_frame
             except Exception:
                 pass
-    raw = await asyncio.gather(
-        *(inst.search(params) for inst in instances), return_exceptions=True
-    )
-
-    results: list[ProviderResult] = []
-    for name, res in zip(names, raw):
-        if isinstance(res, Exception):
-            log.warning("provider %s raised: %s: %s", name, type(res).__name__, res)
-            results.append(
-                ProviderResult(
-                    provider=name,
-                    success=False,
-                    duration_seconds=0.0,
-                    search_mode=params.search_mode,
-                    error=f"{type(res).__name__}: {res}",
-                )
-            )
+    async def _run_one(name: str, inst) -> ProviderResult:
+        # Логируем завершение КАЖДОЙ площадки сразу, как она закончила (а не общим списком
+        # после gather): тогда веб-прогресс растёт по мере готовности площадок в реальном
+        # времени, а не скачком в самом конце.
+        try:
+            res = await inst.search(params)
+        except Exception as exc:  # noqa: BLE001 — падение площадки не должно валить прогон
+            log.warning("provider %s raised: %s: %s", name, type(exc).__name__, exc)
+            return ProviderResult(
+                provider=name, success=False, duration_seconds=0.0,
+                search_mode=params.search_mode, error=f"{type(exc).__name__}: {exc}")
+        n = len(res.offers) + len(res.hotel_offers)
+        if res.success:
+            log.info("provider %s: OK %.1fs, %d результатов", name, res.duration_seconds, n)
         else:
-            n = len(res.offers) + len(res.hotel_offers)
-            if res.success:
-                log.info("provider %s: OK %.1fs, %d результатов", name, res.duration_seconds, n)
-            else:
-                log.warning("provider %s: FAIL %.1fs — %s", name, res.duration_seconds, res.error)
-            results.append(res)
+            log.warning("provider %s: FAIL %.1fs — %s", name, res.duration_seconds, res.error)
+        return res
+
+    results: list[ProviderResult] = list(
+        await asyncio.gather(*(_run_one(name, inst) for name, inst in zip(names, instances)))
+    )
     return ComparisonReport(params=params, results=results)

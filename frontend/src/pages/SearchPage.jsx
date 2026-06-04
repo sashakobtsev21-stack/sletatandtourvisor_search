@@ -58,6 +58,7 @@ export default function SearchPage() {
   const statusRef = useRef("idle"); // зеркало status для слушателей (visibilitychange)
   const providersRef = useRef([]); // площадки текущего прогона (для сброса фаз при реконнекте)
   const reconnRef = useRef(false); // «переподключаюсь…» показываем один раз за обрыв
+  const creepRef = useRef(null); // таймер плавного роста прогресса во время поиска
   // Параметры повтора прогона (из истории) — читаем один раз при монтировании.
   const [repeatInitial] = useState(() => takeRepeat());
 
@@ -127,7 +128,25 @@ export default function SearchPage() {
     }
   };
 
+  function stopCreep() {
+    if (creepRef.current) {
+      clearInterval(creepRef.current);
+      creepRef.current = null;
+    }
+  }
+
+  // Плавный рост прогресса во время поиска: асимптотически подползаем к 90%, чтобы бар
+  // не стоял на месте, пока площадки ищут (между их готовностью). Реальные вехи (гейт,
+  // готовая площадка, done) перебивают это через Math.max — прогресс не «откатывается».
+  function startCreep() {
+    stopCreep();
+    creepRef.current = setInterval(() => {
+      setProgress((v) => (v >= 24 && v < 90 ? Math.min(90, v + Math.max(0.4, (90 - v) * 0.04)) : v));
+    }, 1000);
+  }
+
   function closeStream() {
+    stopCreep();
     if (esRef.current) {
       esRef.current.close();
       esRef.current = null;
@@ -151,6 +170,7 @@ export default function SearchPage() {
     let doneCount = 0;
     const es = new EventSource(`/search/stream?token=${token}`);
     esRef.current = es;
+    startCreep(); // плавно двигаем прогресс, пока идёт поиск
 
     es.onmessage = (m) => {
       let e;
