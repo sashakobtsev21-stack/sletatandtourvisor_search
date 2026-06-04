@@ -33,7 +33,7 @@ def gate_passed(results: dict[str, ProviderHealth]) -> bool:
     return bool(results) and all(r.ok for r in results.values())
 
 
-async def check_provider(name: str, headless: bool = True, timeout_ms: int = 15_000) -> ProviderHealth:
+async def check_provider(name: str, headless: bool = True, timeout_ms: int = 30_000) -> ProviderHealth:
     cls = get_provider(name)
     url = getattr(cls, "HEALTH_URL", None) or getattr(cls, "URL", None)
     anchors: dict[str, str] = getattr(cls, "HEALTH_ANCHORS", {})
@@ -45,6 +45,7 @@ async def check_provider(name: str, headless: bool = True, timeout_ms: int = 15_
     # умолчанию контекст — как раньше (no_viewport, дефолтный UA, ожидание 3.5 с).
     health_ua: str | None = getattr(cls, "HEALTH_USER_AGENT", None)
     health_vp: dict | None = getattr(cls, "HEALTH_VIEWPORT", None)
+    timeout_ms = getattr(cls, "HEALTH_TIMEOUT_MS", timeout_ms)  # площадка может задать свой таймаут
     health_wait: int = getattr(cls, "HEALTH_WAIT_MS", 3500)
 
     async with async_playwright() as pw:
