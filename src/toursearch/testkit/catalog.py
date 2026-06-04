@@ -2597,13 +2597,15 @@ def _flow_case(provider: str, params: SearchParams, require_results: bool):
     return _case
 
 
-# Площадка → (заголовок, [(режим, доп.параметры, требовать_результаты)]). Базовые кейсы
-# требуют результатов (Турция плотная), вариации — нет (наличие зависит от дат/направления;
-# проверяем КОРРЕКТНОСТЬ ПОТОКА: верный запрос + чистый ответ, а не наличие туров).
+# Площадка → (заголовок, [(режим, доп.параметры, требовать_результаты)]).
+# require_results=True — ТОЛЬКО где выдача НАДЁЖНО плотная: туры Турция у пакетных площадок
+# и отели у Островка (профильный отельный сайт). Отели-без-перелёта у пакетных агрегаторов
+# (Sletat/Tourvisor/Travelata/Level) — инвентарь скудный/переменный → require_results=False:
+# проверяем КОРРЕКТНОСТЬ ПОТОКА (верный запрос + чистое чтение ответа), а не наличие инвентаря.
 _FLOW_PLAN = {
     "sletat": ("Sletat", [
         ("tours", {}, True),
-        ("hotels", {}, True),
+        ("hotels", {}, False),
         ("tours", {"destination_country": "Египет"}, False),
         ("tours", {"destination_country": "ОАЭ"}, False),
         ("tours", {"departure_city": "Санкт-Петербург"}, False),
@@ -2614,7 +2616,7 @@ _FLOW_PLAN = {
         ("hotels", {"hotel_stars": [4, 5]}, False)]),
     "tourvisor": ("Tourvisor", [
         ("tours", {}, True),
-        ("hotels", {}, True),
+        ("hotels", {}, False),
         ("tours", {"destination_country": "Египет"}, False),
         ("tours", {"destination_country": "Таиланд"}, False),
         ("tours", {"departure_city": "Санкт-Петербург"}, False),
@@ -2622,14 +2624,14 @@ _FLOW_PLAN = {
         ("tours", {"hotel_stars": [4, 5]}, False)]),
     "travelata": ("Travelata", [
         ("tours", {}, True),
-        ("hotels", {}, True),
+        ("hotels", {}, False),
         ("tours", {"destination_country": "Египет"}, False),
         ("tours", {"children_ages": [5]}, False),
         ("tours", {"children_ages": [0, 1, 3]}, False),
         ("tours", {"hotel_stars": [4, 5]}, False)]),
     "level": ("Level", [
         ("tours", {}, True),
-        ("hotels", {}, True),
+        ("hotels", {}, False),
         ("tours", {"destination_country": "Египет"}, False),
         ("tours", {"departure_city": "Санкт-Петербург"}, False),
         ("tours", {"children_ages": [0, 1, 3]}, False)]),

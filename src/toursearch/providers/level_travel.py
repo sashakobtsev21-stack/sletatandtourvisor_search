@@ -277,8 +277,10 @@ class LevelTravelProvider:
             # завершено: число стабильно ДОЛГО (≥5 чтений ≈10 c) И прошло ≥25 c догрузки
             if count > 0 and stable >= 5 and elapsed >= 25:
                 return
-            # честно пусто: долго держится ноль
-            if count == 0 and stable >= 8:
+            # честно пусто: ноль держится долго И прошло достаточно времени на догрузку.
+            # Без min-elapsed под нагрузкой (несколько браузеров) тяжёлый SPA не успевал
+            # стримить карточки за ~16 c → ложное «Предложений не найдено».
+            if count == 0 and stable >= 8 and elapsed >= 45:
                 return
 
     async def _sort_by_price(self, page: Page) -> bool:
