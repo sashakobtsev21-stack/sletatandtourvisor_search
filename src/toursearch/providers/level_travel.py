@@ -47,7 +47,7 @@ _DEPARTURE_SLUG = {
     "Краснодар": "Krasnodar-RU",
     "Самара": "Samara-RU",
     "Уфа": "Ufa-RU",
-    "Ростов-на-Дону": "Rostov-on-Don-RU",
+    "Ростов-на-Дону": "Rostov.on.Don-RU",
     "Нижний Новгород": "Nizhny.Novgorod-RU",
     "Сочи": "Sochi-RU",
     "Калининград": "Kaliningrad-RU",
