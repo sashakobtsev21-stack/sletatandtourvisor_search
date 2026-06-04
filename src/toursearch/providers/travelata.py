@@ -17,7 +17,9 @@ id города/страны берём из словаря Travelata (JSONP gat
 сама SPA): `result.tours[].operator` (id) + словарь `result.operators[] {id, nameRu}`
 (+ `result.hotels[] {id, name}`). Сниффим этот ответ и строим offers/operator_offers.
 
-Только режим «Туры» (пакет с перелётом). «Отели» (без перелёта) не поддерживается.
+Режим «Туры» (пакет с перелётом) — раздел /search. Режим «Отели» (без перелёта) —
+раздел /hotels/search: тот же приём (хэш-ссылка результата) и те же карточки
+`.serpHotelCard`, но БЕЗ fromCity (перелёта нет) и без операторов.
 Экспериментальная (opt-in): не входит в набор по умолчанию.
 """
 
@@ -153,8 +155,9 @@ class TravelataProvider:
 
     name = "travelata"
     experimental = True
-    SEARCH_MODES = ("tours",)  # пакетные туры с перелётом; режим «Отели» не поддерживает
+    SEARCH_MODES = ("tours", "hotels")  # туры (/search) и отели без перелёта (/hotels/search)
     URL = "https://travelata.ru/search"
+    HOTELS_URL = "https://travelata.ru/hotels/search"
     GW = "https://gateway.travelata.ru"
 
     # Якоря health-check (форма поиска на месте).
@@ -179,11 +182,7 @@ class TravelataProvider:
 
     async def search(self, params: SearchParams) -> ProviderResult:
         if params.search_mode == "hotels":
-            return ProviderResult(
-                provider=self.name, success=False, duration_seconds=0.0,
-                search_mode="hotels",
-                error="Travelata: режим «Отели» (без перелёта) не поддерживается — только пакетные туры.",
-            )
+            return await self._search_hotels(params)
 
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(
@@ -280,10 +279,83 @@ class TravelataProvider:
                 await stop_frame_pump(pump)
                 await browser.close()
 
+    # ----------------------------- отели ------------------------------
+
+    async def _search_hotels(self, params: SearchParams) -> ProviderResult:
+        """Поиск ОТЕЛЕЙ (без перелёта) — раздел /hotels/search. Тот же приём, что и
+        для туров: строим хэш-ссылку результата (но без fromCity — перелёта нет) и
+        парсим те же карточки .serpHotelCard. Операторов нет (это не пакетный тур)."""
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(
+                headless=self.headless,
+                args=["--disable-blink-features=AutomationControlled", "--window-size=1600,1080"],
+            )
+            context = await browser.new_context(
+                viewport={"width": 1600, "height": 1080},
+                user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"),
+            )
+            await context.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+            )
+            page = await context.new_page()
+            page.set_default_timeout(self.timeout_ms)
+            pump = start_frame_pump(self.name, page, self.on_frame)
+            start = time.monotonic()
+            try:
+                await page.goto(self.HOTELS_URL, wait_until="domcontentloaded")
+                await page.wait_for_timeout(3000)
+                await self._close_popups(page)
+                # для отелей нужен только id страны (города вылета/перелёта нет)
+                _city, country_id = await self._resolve_ids(page, params, need_city=False)
+                url = self._build_hotels_search_url(params, country_id)
+                log.info("Travelata: отели — id страны=%s; строю ссылку поиска…", country_id)
+
+                start = time.monotonic()
+                await page.goto(url, wait_until="domcontentloaded")
+                log.info("Travelata: поиск отелей запущен, жду загрузки выдачи…")
+                ready = ".serpHotelCard, [class*=no-result i], [class*=empty-serp i]"
+                await self._wait_for_completion(page, ready_sel=ready)
+                if await self._apply_stars(page, params):
+                    await self._wait_for_completion(page, ready_sel=ready)
+
+                hotel_offers = await self._parse_hotels(page)
+                country_ok = await self._results_country_ok(page, params)
+                shot = await self._safe_screenshot(page)
+                dur = time.monotonic() - start
+                log.info("Travelata: отели получены — %d за %.1f с", len(hotel_offers), dur)
+                success = bool(hotel_offers) and country_ok
+                if not hotel_offers:
+                    error = "Отелей не найдено по заданным параметрам."
+                elif not country_ok:
+                    error = "Выдача не соответствует запрошенной стране."
+                else:
+                    error = None
+                return ProviderResult(
+                    provider=self.name, success=success, duration_seconds=dur,
+                    search_mode="hotels", hotel_offers=hotel_offers,
+                    search_url=page.url, screenshot_path=shot, error=error,
+                )
+            except Exception as exc:  # noqa: BLE001 — провал площадки не валит прогон
+                log.warning("travelata hotels search failed: %s: %s", type(exc).__name__, exc)
+                shot = await self._safe_screenshot(page)
+                return ProviderResult(
+                    provider=self.name, success=False,
+                    duration_seconds=time.monotonic() - start, search_mode="hotels",
+                    error=f"{type(exc).__name__}: {exc}", screenshot_path=shot,
+                    search_url=page.url if not page.is_closed() else None,
+                )
+            finally:
+                await stop_frame_pump(pump)
+                await browser.close()
+
     # ----------------------- словарь id / ссылка ----------------------
 
-    async def _resolve_ids(self, page: Page, params: SearchParams) -> tuple[int, int]:
-        """id города вылета и страны из словаря Travelata (destinationList, JSONP)."""
+    async def _resolve_ids(
+        self, page: Page, params: SearchParams, need_city: bool = True
+    ) -> tuple[int, int]:
+        """id города вылета и страны из словаря Travelata (destinationList, JSONP).
+        Для отелей города вылета нет (need_city=False) — возвращаем 0 как city_id."""
         try:
             data = await page.evaluate(_JSONP, f"{self.GW}/apiV1/destinationList/serp?slug=search")
         except Exception as exc:
@@ -297,11 +369,11 @@ class TravelataProvider:
                 countries[_norm(c["name"])] = c.get("id")
         city_id = cities.get(_norm(params.departure_city))
         country_id = countries.get(_norm(params.destination_country))
-        if city_id is None:
+        if need_city and city_id is None:
             raise RuntimeError(f"Город вылета «{params.departure_city}» не найден в справочнике Travelata")
         if country_id is None:
             raise RuntimeError(f"Страна «{params.destination_country}» не предлагается на Travelata")
-        return int(city_id), int(country_id)
+        return (int(city_id) if city_id is not None else 0), int(country_id)
 
     def _build_search_url(self, params: SearchParams, city_id: int, country_id: int) -> str:
         """Собрать хэш-URL результата. Дата заезда = date_from (Travelata ищет по дате
@@ -325,6 +397,30 @@ class TravelataProvider:
             parts.append(f"priceTo={int(params.price_max)}")
         parts.append("sort=priceUp")  # дешёвые первыми — честная мин. цена на 1-й странице
         return f"{self.URL}#?" + "&".join(parts)
+
+    def _build_hotels_search_url(self, params: SearchParams, country_id: int) -> str:
+        """Хэш-ссылка раздела отелей: как у туров, но БЕЗ fromCity (перелёта нет).
+        Ночи = срок проживания (выезд − заезд); dateTo = dateFrom (Travelata ищет по
+        дате заезда + диапазону ночей). hotelClass/meal по умолчанию «all»."""
+        df = params.date_from.strftime("%d.%m.%Y")
+        nights = max(1, (params.date_to - params.date_from).days)
+        parts = [
+            f"toCountry={country_id}",
+            f"dateFrom={df}", f"dateTo={df}",
+            f"nightFrom={nights}", f"nightTo={nights}",
+            f"adults={params.adults}", f"kids={len(params.children_ages)}",
+        ]
+        for age in params.children_ages:
+            parts.append(f"ages[]={age}")
+        parts.append("hotelClass=all")
+        mid = _MEAL_TO_ID.get(params.meals[0]) if params.meals else None
+        parts.append(f"meal={mid}" if mid else "meal=all")
+        if params.price_min is not None:
+            parts.append(f"priceFrom={int(params.price_min)}")
+        if params.price_max is not None:
+            parts.append(f"priceTo={int(params.price_max)}")
+        parts.append("sort=priceUp")  # дешёвые первыми — честная мин. цена
+        return f"{self.HOTELS_URL}#?" + "&".join(parts)
 
     # ------------------------------ попапы ----------------------------
 
@@ -365,13 +461,16 @@ class TravelataProvider:
 
     # ----------------------- ожидание/парсинг -------------------------
 
-    async def _wait_for_completion(self, page: Page, timeout_s: int = 90) -> None:
+    async def _wait_for_completion(self, page: Page, timeout_s: int = 90,
+                                   ready_sel: str | None = None) -> None:
         """Дождаться завершения поиска по стабилизации числа карточек .serpHotelCard.
-        Не завершаемся на временном нуле (смена фильтра обнуляет выдачу на время)."""
+        Не завершаемся на временном нуле (смена фильтра обнуляет выдачу на время).
+        ready_sel — селектор «выдача готова»: туры ждут клиентскую цену .right-block__price,
+        а у отелей карточки server-rendered → ждём .serpHotelCard (иначе зря висим 40 с)."""
+        sel = ready_sel or (
+            ".right-block__price, [class*=no-result i], [class*=noResult i], [class*=empty-serp i]")
         try:
-            await page.wait_for_selector(
-                ".right-block__price, [class*=no-result i], [class*=noResult i], [class*=empty-serp i]",
-                timeout=40_000)
+            await page.wait_for_selector(sel, timeout=40_000)
         except PWTimeout:
             pass
         deadline = time.monotonic() + timeout_s

@@ -4,7 +4,6 @@
 регистрация как экспериментальной (opt-in). Живой e2e — scripts/smoke_travelata.py.
 """
 
-import asyncio
 from datetime import date
 from decimal import Decimal
 
@@ -139,12 +138,22 @@ def test_provider_registered_as_experimental():
     assert is_experimental("travelata")
 
 
-def test_hotels_mode_unsupported():
-    # режим «Отели» отсекается ДО запуска браузера — можно тестировать без Playwright
+def test_supports_both_modes():
+    # Travelata умеет и туры (/search), и отели без перелёта (/hotels/search).
+    assert set(get_provider("travelata").SEARCH_MODES) == {"tours", "hotels"}
+
+
+def test_build_hotels_search_url():
+    # Чистый билдер ссылки отелей (без браузера): /hotels/search, БЕЗ fromCity,
+    # ночи = срок проживания (выезд−заезд = 3), toCountry присутствует.
     prov = get_provider("travelata")(headless=True)
-    res = asyncio.run(prov.search(_params(search_mode="hotels")))
-    assert res.success is False
-    assert "Отели" in (res.error or "")
+    url = prov._build_hotels_search_url(_params(search_mode="hotels"), 92)
+    assert url.startswith("https://travelata.ru/hotels/search#?")
+    assert "toCountry=92" in url
+    assert "fromCity=" not in url          # у отелей нет города вылета (нет перелёта)
+    assert "nightFrom=3" in url and "nightTo=3" in url  # 27→30 июня = 3 ночи
+    assert "adults=2" in url and "ages[]=5" in url
+    assert "hotelClass=all" in url
 
 
 # --------------------------- сверка URL ----------------------------
