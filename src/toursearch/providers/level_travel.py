@@ -79,30 +79,55 @@ _COUNTRY_CC = {
 
 
 # Хук JSON.parse: API Level зашифрован (AES), но страница расшифровывает данные сама,
-# чтобы отрисовать. Перехватываем РАСПАРСЕННЫЙ словарь операторов (id→имя) из
-# расшифрованной выдачи — ключ не нужен. Цены по операторам Level не раскрывает
-# (в отеле только список id + общая min_price), поэтому берём только ИМЕНА операторов
-# с турами. Ставится через add_init_script (до загрузки страницы).
+# чтобы отрисовать. Перехватываем из расшифрованной выдачи: (1) словарь операторов
+# `__lvOps` [{id, name}] (ключ/расшифровка не нужны); (2) отели выдачи `__lvHotels`
+# [{name, stars, rating, resort, price, ops:[id]}] — у каждого отеля есть СПИСОК id
+# операторов → можно фильтровать отели по выбранному ТО. Цены по оператору Level не
+# раскрывает (только общий min_price отеля), поэтому при фильтре показываем «отели этого
+# ТО» с их min_price. Ставится через add_init_script (до загрузки страницы).
 _JSON_HOOK = r"""
 if (!window.__lvHooked) {
     window.__lvHooked = true;
-    window.__lvOperators = [];
+    window.__lvOps = [];      // [{id, name}]
+    window.__lvHotels = [];   // [{name, stars, rating, resort, price, ops:[id]}]
     const _parse = JSON.parse;
     JSON.parse = function (s, reviver) {
         const out = _parse(s, reviver);
         try {
             const o = (out && typeof out === 'object') ? out : null;
-            const arr = o && (o.operators || (o.result && o.result.operators)
-                              || (Array.isArray(o) ? o : null));
-            if (Array.isArray(arr) && arr.length && arr[0] &&
-                arr[0].id != null && (arr[0].name || arr[0].nameRu || arr[0].title)) {
-                window.__lvOperators = arr.map(x => x.name || x.nameRu || x.title).filter(Boolean);
+            const res = o && (o.result || o);
+            const ops = res && res.operators;
+            if (Array.isArray(ops) && ops.length && ops[0] && ops[0].id != null
+                && (ops[0].name || ops[0].nameRu || ops[0].title)
+                && ops.length >= window.__lvOps.length) {
+                window.__lvOps = ops.map(x => ({id: x.id, name: x.name || x.nameRu || x.title}));
+            }
+            const hs = res && res.hotels;
+            if (Array.isArray(hs) && hs.length && hs[0] && ('operators' in hs[0])
+                && hs[0].hotel && hs[0].hotel.name && hs.length >= window.__lvHotels.length) {
+                window.__lvHotels = hs.map(h => ({
+                    name: h.hotel.name, stars: h.hotel.stars, rating: h.hotel.rating,
+                    resort: h.hotel.region_name || h.hotel.city, price: h.min_price,
+                    ops: h.operators || [],
+                }));
             }
         } catch (e) {}
         return out;
     };
 }
 """
+
+
+def _matched_level_op_ids(ops_map: list[dict], wanted: list[str]) -> set:
+    """id операторов Level, совпавших с запрошенными именами (точное/префикс, не подстрока)."""
+    wn = [_op_norm(w) for w in wanted if w]
+    ids: set = set()
+    for o in ops_map:
+        n = _op_norm(o.get("name"))
+        if o.get("id") is not None and n and any(
+                w == n or (len(w) >= 4 and len(n) >= 4 and (n.startswith(w) or w.startswith(n))) for w in wn):
+            ids.add(o["id"])
+    return ids
 
 
 def _parse_price(text: str) -> Decimal | None:
@@ -237,15 +262,21 @@ class LevelTravelProvider:
                 # карточки были самыми дешёвыми и сравнение цен было честным.
                 if await self._sort_by_price(page):
                     await page.wait_for_timeout(6000)
-                hotel_offers = await self._parse_hotels(page)
-                # операторы с турами (имена) из перехваченной расшифрованной выдачи
+                # операторы (id→имя) из перехваченной расшифрованной выдачи
                 try:
-                    op_names = await page.evaluate("() => window.__lvOperators || []")
+                    ops_map = await page.evaluate("() => window.__lvOps || []")
                 except Exception:
-                    op_names = []
+                    ops_map = []
+                op_names = [o.get("name") for o in ops_map if o.get("name")]
                 operators_available = sorted({n.strip() for n in op_names if n and n.strip()})
-                if params.operators:  # «поиск по оператору» → оставить только запрошенных
+                op_ids = None
+                if params.operators:  # «поиск по оператору»
                     operators_available = filter_operators_available(operators_available, params.operators)
+                    op_ids = list(_matched_level_op_ids(ops_map, params.operators)) or None
+                # Отели из расшифрованной выдачи (полнее/надёжнее DOM; с фильтром по ТО, если
+                # задан). Если хук не перехватил — фолбэк на DOM-парсинг.
+                hotel_offers = (await self._parse_hotels_decoded(page, op_ids)
+                                or await self._parse_hotels(page))[:30]
                 if operators_available:
                     log.info("Level Travel: операторов с турами — %d", len(operators_available))
                 url_problems = verify_level_search_url(page.url, params)
@@ -354,6 +385,26 @@ class LevelTravelProvider:
                 return out;
             }""")
         return build_hotel_offers(self.name, rows)
+
+    async def _parse_hotels_decoded(self, page: Page, op_ids: list[int] | None = None) -> list[HotelOffer]:
+        """Отели из РАСШИФРОВАННОЙ выдачи (`window.__lvHotels`): имя/звёзды/рейтинг/курорт/
+        min_price — надёжнее и полнее DOM (список виртуализирован, в DOM ~5 карточек).
+        Если `op_ids` задан — только отели, у кого id выбранного ТО в списке `ops` (фильтр
+        по оператору). Цена — общий min_price отеля (per-operator цену Level не отдаёт).
+        Сортируем по цене. Пусто (хук не перехватил) → вызывающий откатится на DOM."""
+        try:
+            rows = await page.evaluate(
+                """(ids) => (window.__lvHotels || [])
+                    .filter(h => !ids || (Array.isArray(h.ops) && h.ops.some(x => ids.includes(x))))
+                    .map(h => ({title: h.name, stars: h.stars,
+                                rating: h.rating == null ? '' : String(h.rating),
+                                resort: h.resort || '', price: h.price == null ? '' : String(h.price)}))""",
+                op_ids)
+        except Exception:
+            return []
+        offers = build_hotel_offers(self.name, rows)
+        offers.sort(key=lambda h: h.price)
+        return offers
 
     async def _safe_screenshot(self, page: Page) -> str | None:
         try:
