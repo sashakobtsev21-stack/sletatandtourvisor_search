@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS provider_results (
     screenshot_path  TEXT,
     search_url       TEXT,
     operators_no_tours       TEXT,
-    operators_not_responding TEXT
+    operators_not_responding TEXT,
+    operators_available      TEXT
 );
 CREATE TABLE IF NOT EXISTS offers (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -114,6 +115,8 @@ class Storage:
             self._conn.execute("ALTER TABLE provider_results ADD COLUMN operators_no_tours TEXT")
         if "operators_not_responding" not in cols:
             self._conn.execute("ALTER TABLE provider_results ADD COLUMN operators_not_responding TEXT")
+        if "operators_available" not in cols:
+            self._conn.execute("ALTER TABLE provider_results ADD COLUMN operators_available TEXT")
         self._conn.commit()
 
     def close(self) -> None:
@@ -136,8 +139,8 @@ class Storage:
             rcur = self._conn.execute(
                 """INSERT INTO provider_results
                    (run_id, provider, success, duration_seconds, search_mode, error, screenshot_path,
-                    search_url, operators_no_tours, operators_not_responding)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    search_url, operators_no_tours, operators_not_responding, operators_available)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     run_id,
                     result.provider,
@@ -149,6 +152,7 @@ class Storage:
                     result.search_url,
                     json.dumps(result.operators_no_tours, ensure_ascii=False),
                     json.dumps(result.operators_not_responding, ensure_ascii=False),
+                    json.dumps(result.operators_available, ensure_ascii=False),
                 ),
             )
             pr_id = int(rcur.lastrowid)
@@ -279,6 +283,7 @@ class Storage:
                     operator_offers=operator_offers,
                     operators_no_tours=_jlist("operators_no_tours"),
                     operators_not_responding=_jlist("operators_not_responding"),
+                    operators_available=_jlist("operators_available"),
                     error=pr["error"],
                     screenshot_path=pr["screenshot_path"],
                     search_url=pr["search_url"] if "search_url" in pr.keys() else None,

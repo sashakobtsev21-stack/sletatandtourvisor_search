@@ -154,6 +154,9 @@ class ProviderResult(BaseModel):
     operator_offers: list["OperatorOffer"] = Field(default_factory=list)  # оператор+отель+цена+скорость
     operators_no_tours: list[str] = Field(default_factory=list)          # блинчик: «Туров нет»
     operators_not_responding: list[str] = Field(default_factory=list)    # блинчик: «Оператор не отвечает»
+    # Имена операторов с турами, когда цены по ТО недоступны (Level шифрует разрез по
+    # операторам → берём только список «у кого есть туры», без сумм).
+    operators_available: list[str] = Field(default_factory=list)
     error: str | None = None
     screenshot_path: str | None = None
     search_url: str | None = None  # URL результата (если площадка его формирует)
