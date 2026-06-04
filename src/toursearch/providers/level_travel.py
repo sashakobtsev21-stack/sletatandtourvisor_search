@@ -110,6 +110,30 @@ def _parse_price(text: str) -> Decimal | None:
     return Decimal(digits) if digits else None
 
 
+def _op_norm(s: str) -> str:
+    s = (s or "").lower().replace("ё", "е").replace("&", "").replace(" and ", "")
+    return re.sub(r"[^a-zа-я0-9]", "", s)
+
+
+def filter_operators_available(available: list[str], wanted: list[str]) -> list[str]:
+    """Оставить из имён операторов с турами только запрошенные (фильтр «поиск по ТО»).
+
+    Level НЕ раскрывает цены по операторам (в выдаче только id-список ТО у отеля + общая
+    min_price), поэтому фильтр по оператору применяется к СПИСКУ ИМЁН — подтверждает,
+    есть ли туры у выбранного оператора. Пустой запрос = без фильтра."""
+    if not wanted:
+        return available
+    wn = [_op_norm(w) for w in wanted if w]
+
+    def _match(a: str) -> bool:
+        na = _op_norm(a)
+        # точное совпадение ИЛИ префикс (не подстрока: «anex» не должен ловить «russianexpress»)
+        return any(w == na or (len(w) >= 4 and len(na) >= 4 and (na.startswith(w) or w.startswith(na)))
+                   for w in wn)
+
+    return [a for a in available if _match(a)]
+
+
 def build_hotel_offers(provider_name: str, rows: list[dict]) -> list[HotelOffer]:
     """Собрать HotelOffer из «сырых» карточек Level. Чистая функция (без браузера)."""
     out: list[HotelOffer] = []
@@ -147,9 +171,21 @@ class LevelTravelProvider:
 
     HEALTH_URL = URL
     HEALTH_POPUPS: list[str] = []
+    # Level — тяжёлый Next.js SPA: health-check в «настольном» контексте + больше времени,
+    # иначе форма (placeholder-контролы) не рендерится. Было 2 общих якоря — стало 6 по
+    # ключевым контролам формы. Классы-модули с хэшем → матчим по стабильному префиксу.
+    HEALTH_USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                         "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+    HEALTH_VIEWPORT = {"width": 1600, "height": 1080}
+    HEALTH_WAIT_MS = 5000
+    HEALTH_TIMEOUT_MS = 45_000
     HEALTH_ANCHORS = {
         "логотип": "a[href='/']",
-        "поиск-форма": "[class*=DepartureController], [class*=DestinationButtons], [class*=search i]",
+        "форма поиска": "[class*=SearchForm_searchForm], [class*=SearchBlock_searchForm]",
+        "город вылета": "[class*=SearchFormPlaceholder_departurePicker], [class*=SearchFormPlaceholder_selectedDeparturePicker]",
+        "направление": "[class*=SearchFormPlaceholder_destinationPicker]",
+        "туристы": "[class*=SearchFormPlaceholder_touristsPicker]",
+        "режимы (Туры/Отели)": "[class*=SearchTypeTab_tab]",
     }
 
     # Level — тяжёлый Next.js SPA + анти-бот: открытие deeplink порой дольше 20 c, из-за
@@ -208,6 +244,8 @@ class LevelTravelProvider:
                 except Exception:
                     op_names = []
                 operators_available = sorted({n.strip() for n in op_names if n and n.strip()})
+                if params.operators:  # «поиск по оператору» → оставить только запрошенных
+                    operators_available = filter_operators_available(operators_available, params.operators)
                 if operators_available:
                     log.info("Level Travel: операторов с турами — %d", len(operators_available))
                 url_problems = verify_level_search_url(page.url, params)

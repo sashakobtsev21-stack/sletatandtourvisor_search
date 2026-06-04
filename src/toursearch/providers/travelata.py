@@ -109,25 +109,52 @@ def build_hotel_offers(provider_name: str, rows: list[dict]) -> list[HotelOffer]
     return out
 
 
-def build_offers_from_api(provider_name: str, data: dict) -> tuple[list[Offer], list[OperatorOffer]]:
+def _op_norm(s: str) -> str:
+    """Нормализация имени оператора для матчинга (рус/лат, без пунктуации, & / and)."""
+    s = (s or "").lower().replace("ё", "е").replace("&", "").replace(" and ", "")
+    return re.sub(r"[^a-zа-я0-9]", "", s)
+
+
+def matched_operator_ids(operators: list[dict], wanted: list[str]) -> set:
+    """id операторов Travelata, совпавших с запрошенными именами формы (по name/nameRu).
+
+    У Travelata в API есть латинское `name` («Anex») и русское `nameRu` («Анекс») —
+    матчим запрошенное имя против обоих (нормализовано; вхождение при длине ≥4)."""
+    wn = [_op_norm(w) for w in wanted if w]
+    ids: set = set()
+    for o in operators:
+        oid = o.get("id")
+        if oid is None:
+            continue
+        names = [n for n in (_op_norm(o.get("name")), _op_norm(o.get("nameRu"))) if n]
+        # точное совпадение ИЛИ префикс (не подстрока: иначе «anex» ловит «russi-anex-press»)
+        if any(w == n or (len(w) >= 4 and len(n) >= 4 and (n.startswith(w) or w.startswith(n)))
+               for w in wn for n in names):
+            ids.add(oid)
+    return ids
+
+
+def build_offers_from_api(
+    provider_name: str, data: dict, operators: list[str] | None = None
+) -> tuple[list[Offer], list[OperatorOffer]]:
     """Из ответа `frontend/tours?...` собрать офферы по туроператорам.
 
     `result.tours[].operator` — id ТО, `result.operators[] {id, nameRu, name}` — словарь
     имён, `result.hotels[] {id, name}` — словарь отелей. Для каждого оператора берём его
-    минимальную цену и отель этой цены. Чистая функция (без браузера) — тестируется.
-    """
+    минимальную цену и отель этой цены. Если задан `operators` (фильтр по оператору, как
+    на Sletat/Tourvisor) — оставляем ТОЛЬКО туры выбранных ТО. Чистая функция."""
     result = (data or {}).get("result") or {}
     tours = result.get("tours") or []
-    op_name = {}
-    for o in result.get("operators") or []:
-        if o.get("id") is not None:
-            op_name[o["id"]] = (o.get("nameRu") or o.get("name") or f"Оператор {o['id']}").strip()
+    op_objs = result.get("operators") or []
+    op_name = {o["id"]: (o.get("nameRu") or o.get("name") or f"Оператор {o['id']}").strip()
+               for o in op_objs if o.get("id") is not None}
     hotel_name = {h["id"]: h.get("name") for h in (result.get("hotels") or []) if h.get("id") is not None}
+    keep = matched_operator_ids(op_objs, operators) if operators else None
 
     best: dict[int, tuple[Decimal, object]] = {}  # operator_id -> (min_price, hotel_id)
     for t in tours:
         op, price = t.get("operator"), t.get("price")
-        if op is None or price is None:
+        if op is None or price is None or (keep is not None and op not in keep):
             continue
         price = Decimal(str(price))
         if op not in best or price < best[op][0]:
@@ -143,6 +170,29 @@ def build_offers_from_api(provider_name: str, data: dict) -> tuple[list[Offer], 
     offers.sort(key=lambda o: o.price)
     operator_offers.sort(key=lambda o: o.price)
     return offers, operator_offers
+
+
+def build_hotels_from_api(
+    provider_name: str, data: dict, operators: list[str] | None = None
+) -> list[HotelOffer]:
+    """Отели ВЫБРАННОГО оператора из API: мин. цена этого ТО по каждому отелю (для
+    режима «поиск по оператору» — чтобы список отелей соответствовал фильтру ТО)."""
+    result = (data or {}).get("result") or {}
+    op_objs = result.get("operators") or []
+    hotel_name = {h["id"]: h.get("name") for h in (result.get("hotels") or []) if h.get("id") is not None}
+    keep = matched_operator_ids(op_objs, operators) if operators else None
+    best: dict[object, Decimal] = {}  # hotel_id -> min price (выбранного ТО)
+    for t in result.get("tours") or []:
+        op, price, hid = t.get("operator"), t.get("price"), t.get("hotel")
+        if price is None or hid is None or (keep is not None and op not in keep):
+            continue
+        price = Decimal(str(price))
+        if hid not in best or price < best[hid]:
+            best[hid] = price
+    out = [HotelOffer(provider=provider_name, hotel_name=hotel_name[hid], price=price, currency="RUB")
+           for hid, price in best.items() if hotel_name.get(hid)]
+    out.sort(key=lambda h: h.price)
+    return out
 
 
 def _norm(s: str) -> str:
@@ -206,16 +256,23 @@ class TravelataProvider:
             page = await context.new_page()
             page.set_default_timeout(self.timeout_ms)
             # Сниффим API выдачи (frontend/tours?…), из него берём операторов — фильтр
-            # операторов в DOM AB-гейтится, а этот ответ SPA дёргает всегда. Храним
-            # последний (самый полный) снимок: поиск дозапрашивает по мере ответа ТО.
+            # операторов в DOM AB-гейтится, а этот ответ SPA дёргает всегда. SPA шлёт
+            # несколько ответов (по мере прихода ТО); последний бывает ЧАСТИЧНЫМ, из-за
+            # чего фильтр по оператору мог не найти нужного ТО. Храним САМЫЙ ПОЛНЫЙ снимок
+            # (с наибольшим числом туров) — надёжнее и для списка ТО, и для фильтра.
             tours_api: dict = {}
+
+            def _tours_count(d: dict) -> int:
+                return len(((d or {}).get("result") or {}).get("tours") or [])
 
             async def _grab_tours(resp) -> None:
                 if "/frontend/tours?" in resp.url:
                     try:
-                        tours_api["data"] = await resp.json()
+                        d = await resp.json()
                     except Exception:
-                        pass
+                        return
+                    if _tours_count(d) >= _tours_count(tours_api.get("data")):
+                        tours_api["data"] = d
 
             page.on("response", lambda r: asyncio.create_task(_grab_tours(r)))
             pump = start_frame_pump(self.name, page, self.on_frame)
@@ -244,13 +301,19 @@ class TravelataProvider:
                     await self._wait_for_completion(page)
 
                 hotel_offers = await self._parse_hotels(page)
-                # операторы из API выдачи (offers + operator_offers)
+                # операторы из API выдачи (offers + operator_offers); при фильтре по
+                # оператору оставляем ТОЛЬКО выбранных ТО (как Sletat/Tourvisor).
                 offers, operator_offers = (
-                    build_offers_from_api(self.name, tours_api["data"])
+                    build_offers_from_api(self.name, tours_api["data"], operators=params.operators)
                     if tours_api.get("data") else ([], []))
                 if operator_offers:
                     log.info("Travelata: операторов из API — %d (дешевле всех: %s)",
                              len(operator_offers), operator_offers[0].operator)
+                # фильтр по оператору → список отелей тоже по выбранному ТО (из API)
+                if params.operators and tours_api.get("data"):
+                    op_hotels = build_hotels_from_api(self.name, tours_api["data"], operators=params.operators)
+                    if op_hotels:
+                        hotel_offers = op_hotels[:10]
                 country_ok = await self._results_country_ok(page, params)
                 url_problems = verify_travelata_search_url(page.url, params)
                 if url_problems:
