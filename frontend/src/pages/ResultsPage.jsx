@@ -108,7 +108,12 @@ export default function ResultsPage({ runId }) {
               )
             ) : (
               <div className="space-y-4">
-                <OperatorTable offers={r.operator_offers} />
+                <div>
+                  <h4 className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted">
+                    Туроператоры
+                  </h4>
+                  <OperatorTable offers={r.operator_offers} />
+                </div>
 
                 {r.hotel_offers?.length > 0 && (
                   <div>
@@ -195,22 +200,16 @@ function Stars({ n }) {
 }
 
 /**
- * OperatorTable — «Туроператор / Наименьшая цена / Скорость». Колонка «Скорость»
- * показывается, только если у площадки есть тайминги (Sletat); у Tourvisor их нет —
- * тогда таблица в 2 колонки.
+ * OperatorTable — единый формат для всех площадок: «Туроператор / Наименьшая цена»
+ * (2 колонки). Колонку «Скорость» убрали — её даёт только Sletat, из-за неё карточки
+ * выглядели по-разному. Пусто (площадка не раскрывает операторов, напр. Level) —
+ * нейтральная строка в том же месте, чтобы структура карточек совпадала.
  */
 function OperatorTable({ offers = [] }) {
-  if (!offers.length) return <p className="text-sm text-muted">Предложений по операторам не найдено.</p>;
-  const hasSpeed = offers.some((o) => o.load_seconds != null);
-  const head = hasSpeed
-    ? ["Туроператор", "Наименьшая цена", "Скорость"]
-    : ["Туроператор", "Наименьшая цена"];
-  const rows = offers.map((o) =>
-    hasSpeed
-      ? [o.operator, formatPrice(o.price, o.currency), o.load_seconds != null ? `${o.load_seconds} с` : "—"]
-      : [o.operator, formatPrice(o.price, o.currency)]
-  );
-  return <ProviderTable head={head} emphasizeCol={1} rows={rows} />;
+  if (!offers.length)
+    return <p className="text-sm text-muted">Площадка не раскрывает разбивку по операторам.</p>;
+  const rows = offers.map((o) => [o.operator, formatPrice(o.price, o.currency)]);
+  return <ProviderTable head={["Туроператор", "Наименьшая цена"]} emphasizeCol={1} rows={rows} />;
 }
 
 /** OperatorStatuses — операторы без туров и не ответившие (из блинчика Sletat). */
