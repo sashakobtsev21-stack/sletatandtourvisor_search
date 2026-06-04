@@ -98,7 +98,14 @@ export default function ResultsPage({ runId }) {
             </div>
 
             {!r.success ? (
-              <p className="text-sm text-rose-300">⚠️ {r.error || "поиск не дал результатов"}</p>
+              r.not_applicable ? (
+                <p className="flex items-start gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-muted">
+                  <span className="shrink-0">ℹ️</span>
+                  <span>{r.error}</span>
+                </p>
+              ) : (
+                <p className="text-sm text-rose-300">⚠️ {r.error || "поиск не дал результатов"}</p>
+              )
             ) : (
               <div className="space-y-4">
                 <OperatorTable offers={r.operator_offers} />
