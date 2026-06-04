@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import glob
+import os
+import time
 from typing import Awaitable, Callable, Protocol, runtime_checkable
 
 from toursearch.models import ProviderResult, SearchParams
@@ -85,6 +88,39 @@ async def capture_top(page, path: str, max_height: int = 1500) -> "str | None":
         return path
     except Exception:
         return None
+
+
+def prune_screenshots(
+    directory: str = "screenshots", max_age_days: float = 10.0, keep_max: int = 250
+) -> int:
+    """Best-effort очистка скриншотов прогонов: удалить старше `max_age_days` И оставить
+    не более `keep_max` самых свежих (иначе папка растёт безгранично — каждый поиск каждой
+    площадки пишет ~1 МБ). Возвращает число удалённых; ошибки/отсутствие папки глотаем."""
+    try:
+        files = [(p, os.path.getmtime(p)) for p in glob.glob(os.path.join(directory, "*"))
+                 if os.path.isfile(p)]
+    except Exception:
+        return 0
+    removed = 0
+    cutoff = time.time() - max_age_days * 86400
+    survivors: list[tuple[str, float]] = []
+    for path, mtime in files:
+        if mtime < cutoff:
+            try:
+                os.remove(path)
+                removed += 1
+            except Exception:
+                pass
+        else:
+            survivors.append((path, mtime))
+    survivors.sort(key=lambda x: x[1], reverse=True)  # свежие первыми
+    for path, _ in survivors[keep_max:]:
+        try:
+            os.remove(path)
+            removed += 1
+        except Exception:
+            pass
+    return removed
 
 
 @runtime_checkable

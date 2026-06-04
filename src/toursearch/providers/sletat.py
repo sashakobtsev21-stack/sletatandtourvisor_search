@@ -18,8 +18,6 @@ import time
 from datetime import date, datetime
 from decimal import Decimal
 
-log = logging.getLogger("toursearch.providers.sletat")
-
 from playwright.async_api import Page, TimeoutError as PWTimeout, async_playwright
 
 from toursearch.models import HotelOffer, Offer, OperatorOffer, ProviderResult, SearchParams
@@ -38,6 +36,8 @@ from toursearch.providers.base import (
     stop_frame_pump,
 )
 from toursearch.urlcheck import verify_sletat_search_url
+
+log = logging.getLogger("toursearch.providers.sletat")
 
 _MONTHS_RU = [
     "январь", "февраль", "март", "апрель", "май", "июнь",

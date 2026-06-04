@@ -28,6 +28,7 @@ from toursearch.providers import (
     list_providers,
     load_browser_providers,
 )
+from toursearch.providers.base import prune_screenshots
 from toursearch.storage import Storage
 from toursearch.testkit import REGISTRY, run_selected
 
@@ -226,6 +227,7 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
     )
     app = FastAPI(title="Tour Search")
     Path("screenshots").mkdir(exist_ok=True)
+    prune_screenshots()  # на старте подчистить накопившиеся скриншоты прогонов
     app.mount("/screenshots", StaticFiles(directory="screenshots"), name="screenshots")
     # Собранный React-дашборд (frontend/dist) раздаём под /app, если он существует.
     # API (/search, /run, ...) тот же origin → проксирование в проде не нужно.
@@ -404,6 +406,7 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
                     q.put_nowait({"type": "_end"})
                 except Exception:
                     pass
+            prune_screenshots()  # держать папку скриншотов ограниченной после каждого прогона
             _schedule_session_cleanup(token)
 
     @app.post("/search/prepare")
