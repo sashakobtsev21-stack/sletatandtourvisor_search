@@ -33,6 +33,12 @@ from toursearch.providers.base import (
 )
 from toursearch.urlcheck import verify_ostrovok_search_url
 
+# Настольный UA: без него Островок отдаёт другую вёрстку без формы поиска (важно и
+# для реального поиска, и для health-check — иначе якоря формы не находятся).
+_DESKTOP_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+               "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+_DESKTOP_VIEWPORT = {"width": 1600, "height": 1080}
+
 # Страна канона → слаг Островка.
 _COUNTRY_SLUG = {
     "Турция": "turkey", "Египет": "egypt", "ОАЭ": "united_arab_emirates",
@@ -116,11 +122,25 @@ class OstrovokProvider:
     experimental = True
     URL = "https://ostrovok.ru/"
 
+    SEARCH_MODES = ("hotels",)  # отельный сайт без перелёта — работает только в «Отели»
+
     HEALTH_URL = URL
     HEALTH_POPUPS: list[str] = []
+    # Health-check в «настольном» контексте (иначе форма поиска не рендерится) + чуть
+    # больше времени на гидрацию Next.js.
+    HEALTH_USER_AGENT = _DESKTOP_UA
+    HEALTH_VIEWPORT = _DESKTOP_VIEWPORT
+    HEALTH_WAIT_MS = 5000
+    # Якоря формы поиска на главной — стабильные data-testid. Раньше было 2 общих
+    # селектора (logo + любой `input`) — health-check почти ничего не проверял;
+    # теперь 6 ключевых полей формы (назначение, даты, гости, кнопка), как у Sletat.
     HEALTH_ANCHORS = {
-        "логотип": "a[href='/']",
-        "поиск": "[class*=search i], [class*=Search i], input",
+        "логотип": "[data-testid=header-logo-link]",
+        "поле назначения": "[data-testid=destination-input]",
+        "дата заезда": "[data-testid=date-start-input]",
+        "дата выезда": "[data-testid=date-end-input]",
+        "гости": "[data-testid=guests-input]",
+        "кнопка поиска": "[data-testid=search-button]",
     }
 
     def __init__(self, headless: bool = False, timeout_ms: int = 20_000) -> None:
@@ -159,9 +179,7 @@ class OstrovokProvider:
                 headless=self.headless,
                 args=["--disable-blink-features=AutomationControlled", "--window-size=1600,1080"])
             context = await browser.new_context(
-                viewport={"width": 1600, "height": 1080},
-                user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"))
+                viewport=_DESKTOP_VIEWPORT, user_agent=_DESKTOP_UA)
             await context.add_init_script(
                 "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
             page = await context.new_page()

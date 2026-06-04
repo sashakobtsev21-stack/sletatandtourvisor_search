@@ -40,7 +40,7 @@ const defaultTo = addDays(minDate, 7);
 export default function SearchForm({ onSubmit, isSearching = false, initial = null }) {
   // Справочники с бэкенда (/api/refdata); до ответа — фолбэк-константы.
   const { departureCities, countries, operators: operatorOptions, providers: providerOptions,
-          experimentalProviders = [] } = useRefData();
+          experimentalProviders = [], providerModes = {} } = useRefData();
   const [mode, setMode] = useState(initial?.search_mode ?? "tours"); // tours | hotels
   const [childrenCount, setChildrenCount] = useState(initial?.children_ages?.length ?? 0);
   const [childAges, setChildAges] = useState(initial?.children_ages ?? []);
@@ -97,8 +97,27 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
     setChildAges((prev) => Array.from({ length: n }, (_, i) => prev[i] ?? 7));
   };
 
-  const toggleProvider = (p) =>
+  // Режимы площадки (с бэкенда /api/refdata). Нет данных → считаем, что поддерживает оба.
+  const providerSupportsMode = (p, m = mode) =>
+    (providerModes[p] ?? ["tours", "hotels"]).includes(m);
+  // Если площадка работает только в одном режиме — подпись для подсказки/бейджа.
+  const providerOnlyMode = (p) => {
+    const m = providerModes[p];
+    if (!m || m.length !== 1) return null;
+    return m[0] === "hotels" ? "Отели" : "Туры";
+  };
+
+  // При смене режима (или подгрузке справочника) убираем выбранные площадки, которые в
+  // этом режиме не работают (напр. Островок в «Турах») — чтобы не запускать их впустую
+  // (без результатов и без живой трансляции).
+  useEffect(() => {
+    setProviders((prev) => prev.filter((p) => providerSupportsMode(p, mode)));
+  }, [mode, providerModes]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const toggleProvider = (p) => {
+    if (!providerSupportsMode(p)) return; // несовместима с текущим режимом — не выбираем
     setProviders((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
+  };
 
   const toggleOperator = (op) =>
     setOperators((prev) => (prev.includes(op) ? prev.filter((x) => x !== op) : [...prev, op]));
@@ -328,28 +347,50 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
           {providerOptions.map((p) => {
             const active = providers.includes(p);
             const experimental = experimentalProviders.includes(p);
+            const incompatible = !providerSupportsMode(p); // не работает в текущем режиме
+            const onlyMode = providerOnlyMode(p);          // "Туры"/"Отели" — для бейджа
             return (
               <motion.button
                 key={p}
                 type="button"
+                disabled={incompatible}
                 onClick={() => toggleProvider(p)}
-                whileHover={{ scale: 1.04 }}
-                whileTap={{ scale: 0.96 }}
-                title={experimental ? "Экспериментальная площадка (по умолчанию выключена)" : undefined}
+                whileHover={incompatible ? undefined : { scale: 1.04 }}
+                whileTap={incompatible ? undefined : { scale: 0.96 }}
+                title={
+                  incompatible
+                    ? `Площадка работает только в режиме «${onlyMode}» — переключите режим выше`
+                    : experimental
+                      ? "Экспериментальная площадка (по умолчанию выключена)"
+                      : undefined
+                }
                 className={[
                   "flex items-center gap-2 rounded-xl border px-3.5 py-2 text-sm font-semibold capitalize transition-colors",
-                  active
-                    ? "border-ocean/40 bg-ocean/15 text-white"
-                    : "border-white/10 bg-white/[0.03] text-muted hover:text-ink",
+                  incompatible
+                    ? "cursor-not-allowed border-white/5 bg-white/[0.02] text-muted/40"
+                    : active
+                      ? "border-ocean/40 bg-ocean/15 text-white"
+                      : "border-white/10 bg-white/[0.03] text-muted hover:text-ink",
                 ].join(" ")}
               >
                 <span
-                  className={`size-2 rounded-full ${active ? "bg-ocean shadow-[0_0_10px_2px_rgba(56,224,216,0.6)]" : "bg-muted/40"}`}
+                  className={`size-2 rounded-full ${
+                    incompatible
+                      ? "bg-muted/20"
+                      : active
+                        ? "bg-ocean shadow-[0_0_10px_2px_rgba(56,224,216,0.6)]"
+                        : "bg-muted/40"
+                  }`}
                 />
                 {p}
-                {experimental && (
+                {experimental && !incompatible && (
                   <span className="rounded-md bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-bold uppercase not-italic tracking-wider text-amber-300">
                     β
+                  </span>
+                )}
+                {incompatible && onlyMode && (
+                  <span className="rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-wide text-muted/70">
+                    только {onlyMode}
                   </span>
                 )}
               </motion.button>

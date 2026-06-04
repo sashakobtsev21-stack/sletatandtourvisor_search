@@ -153,6 +153,7 @@ class TravelataProvider:
 
     name = "travelata"
     experimental = True
+    SEARCH_MODES = ("tours",)  # пакетные туры с перелётом; режим «Отели» не поддерживает
     URL = "https://travelata.ru/search"
     GW = "https://gateway.travelata.ru"
 

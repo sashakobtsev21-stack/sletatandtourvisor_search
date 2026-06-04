@@ -11,6 +11,7 @@ const FALLBACK = {
   operators: OPERATORS,
   providers: PROVIDERS,
   experimentalProviders: [],
+  providerModes: {}, // { provider: ["tours","hotels"] }; пусто/нет → считаем «оба»
 };
 
 export function useRefData() {
@@ -28,6 +29,7 @@ export function useRefData() {
           operators: j.operators?.length ? j.operators : OPERATORS,
           providers: j.providers?.length ? j.providers : PROVIDERS,
           experimentalProviders: j.experimental_providers ?? [],
+          providerModes: j.provider_modes ?? {},
         });
       })
       .catch(() => {

@@ -104,6 +104,11 @@ def test_api_refdata(tmp_path):
     assert isinstance(rd["operators"], list) and rd["operators"]
     assert "sletat" in rd["providers"] and "tourvisor" in rd["providers"]
     assert rd["max_date_span_days"] == 13
+    # Режимы площадок: фронт по ним гасит несовместимые с выбранным режимом площадки.
+    pm = rd["provider_modes"]
+    assert pm["ostrovok"] == ["hotels"]          # Островок — только «Отели»
+    assert pm["travelata"] == ["tours"]          # Travelata — только «Туры»
+    assert set(pm["sletat"]) == {"tours", "hotels"}  # зрелые — оба режима
 
 
 def test_api_tests_catalog(tmp_path):
