@@ -140,9 +140,10 @@ export default function SearchPage() {
   // готовая площадка, done) перебивают это через Math.max — прогресс не «откатывается».
   function startCreep() {
     stopCreep();
+    // Частые мелкие шаги (≈4/с) + плавная ширина бара = непрерывный рост, без рывков.
     creepRef.current = setInterval(() => {
-      setProgress((v) => (v >= 24 && v < 90 ? Math.min(90, v + Math.max(0.4, (90 - v) * 0.04)) : v));
-    }, 1000);
+      setProgress((v) => (v >= 24 && v < 90 ? Math.min(90, v + Math.max(0.15, (90 - v) * 0.013)) : v));
+    }, 250);
   }
 
   function closeStream() {

@@ -1,5 +1,13 @@
 // Форматтеры для отображения цен и дат (единый стиль по всему дашборду).
 
+// Отображаемые названия площадок (ключ провайдера → как показывать). Внутренний ключ
+// остаётся прежним (URL/хранение/логи), меняется только подпись в интерфейсе.
+const PROVIDER_LABELS = { level: "Level Travel" };
+
+export function providerLabel(name) {
+  return PROVIDER_LABELS[name] ?? name;
+}
+
 export function formatPrice(value, currency = "RUB") {
   if (value === null || value === undefined || value === "") return "—";
   const n = Math.round(Number(value));

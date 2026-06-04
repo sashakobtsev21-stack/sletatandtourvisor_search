@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Terminal, CircleStop, CheckCircle2, AlertTriangle, Info, Loader2 } from "lucide-react";
 import GlassCard from "./ui/GlassCard.jsx";
-import { fadeUp, logLine, spring } from "../lib/animations.js";
+import { fadeUp, logLine } from "../lib/animations.js";
 
 // Цвет/иконка строки лога по уровню. Уровни совпадают с SSE-потоком бэкенда:
 // log(level=INFO|WARNING), ok, err.
@@ -32,7 +32,8 @@ export default function SearchTerminal({ logs = [], progress = 0, status = "idle
   }, [logs.length]);
 
   const isRunning = status === "running";
-  const pct = Math.max(0, Math.min(100, Math.round(progress)));
+  const clamped = Math.max(0, Math.min(100, progress)); // нескруглённое — для плавной ширины бара
+  const pct = Math.round(clamped);
 
   return (
     <GlassCard variants={fadeUp} initial="hidden" animate="show" className="flex h-full flex-col p-5">
@@ -84,14 +85,14 @@ export default function SearchTerminal({ logs = [], progress = 0, status = "idle
         <motion.span
           className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-brand-deep via-brand to-ocean"
           initial={{ width: 0 }}
-          animate={{ width: `${pct}%` }}
-          transition={spring}
+          animate={{ width: `${clamped}%` }}
+          transition={{ duration: 0.5, ease: "easeOut" }}
         />
         {/* бегущий блик поверх заполненной части, пока идёт поиск */}
         {isRunning && (
           <span
             className="absolute inset-y-0 left-0 animate-shimmer rounded-full bg-[length:200%_100%] bg-gradient-to-r from-transparent via-white/40 to-transparent"
-            style={{ width: `${pct}%` }}
+            style={{ width: `${clamped}%` }}
           />
         )}
       </div>
