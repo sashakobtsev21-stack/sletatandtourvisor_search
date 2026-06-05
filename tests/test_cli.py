@@ -173,3 +173,45 @@ def test_history_lists_saved_run(tmp_path):
     assert r.exit_code == 0, r.output
     assert "#1" in r.output
     assert "Coral" in r.output
+
+
+# --------------------------- init-auth / passwd ---------------------------
+
+def test_init_auth_creates_admin(tmp_path):
+    db = str(tmp_path / "a.db")
+    r = runner.invoke(app, ["init-auth", "--username", "admin", "--db", db],
+                      input="secret1\nsecret1\n")  # пароль + подтверждение
+    assert r.exit_code == 0 and "Создан" in r.output
+    with Storage(db) as s:
+        u = s.get_user_by_username("admin")
+        assert u and u["role"] == "admin"
+
+
+def test_init_auth_rejects_duplicate(tmp_path):
+    db = str(tmp_path / "a.db")
+    with Storage(db) as s:
+        s.create_user("admin", "secret1", role="admin", iters=1000)
+    r = runner.invoke(app, ["init-auth", "--username", "admin", "--db", db],
+                      input="secret1\nsecret1\n")
+    assert r.exit_code == 1 and "уже существует" in r.output
+
+
+def test_init_auth_rejects_bad_role(tmp_path):
+    db = str(tmp_path / "a.db")
+    r = runner.invoke(app, ["init-auth", "--username", "x", "--role", "superuser", "--db", db])
+    assert r.exit_code == 1 and "роль" in r.output.lower()
+
+
+def test_passwd_changes_and_clears_sessions(tmp_path):
+    from toursearch import auth
+    db = str(tmp_path / "a.db")
+    with Storage(db) as s:
+        uid = s.create_user("u", "oldpass", role="user", iters=1000)
+        s.create_session(uid, auth.new_session_token())
+    r = runner.invoke(app, ["passwd", "--username", "u", "--db", db],
+                      input="newpass1\nnewpass1\n")
+    assert r.exit_code == 0
+    with Storage(db) as s:
+        assert auth.verify_password("newpass1", s.get_user_by_id(uid)["password_hash"])
+        sess = s._conn.execute("SELECT COUNT(*) FROM sessions WHERE user_id=?", (uid,)).fetchone()[0]
+        assert sess == 0  # сессии сброшены при смене пароля
