@@ -218,8 +218,10 @@ def _bearer(header: "str | None") -> str:
     return ""
 
 
-# Пути, где middleware не делает НИЧЕГО (статика SPA, скриншоты, docs, корень-редирект).
-_AUTH_SKIP_PREFIXES = ("/app", "/screenshots", "/assets")
+# Пути, где middleware не делает НИЧЕГО (статика SPA, docs, корень-редирект).
+# `/screenshots` НЕ здесь намеренно: скриншоты выдачи — данные прогонов, в мультиюзере их
+# гейтит вход (<img> шлёт cookie сам). В локальном режиме они по-прежнему открыты.
+_AUTH_SKIP_PREFIXES = ("/app", "/assets")
 _AUTH_SKIP_EXACT = ("/", "/favicon.ico", "/openapi.json", "/docs", "/redoc")
 # Пути, где creds резолвятся, но доступ НЕ требуется (вход / выход / «кто я»).
 _AUTH_EXEMPT_EXACT = ("/api/login", "/api/logout", "/api/me")
@@ -318,6 +320,8 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
                 request.state.auth_mode = "multiuser"
                 tok = request.cookies.get("ts_session")
                 request.state.user = s.get_session_user(tok) if tok else None
+                if request.state.user is not None:
+                    s.touch_session(tok)  # скользящее продление (дросселировано внутри)
             elif auth_token:
                 request.state.auth_mode = "legacy"
                 supplied = (request.cookies.get("ts_auth")
