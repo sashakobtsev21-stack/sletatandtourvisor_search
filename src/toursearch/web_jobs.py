@@ -68,6 +68,10 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
                 with Storage(db_path) as s:
                     s.update_job(job_id, status="failed", finished_at=auth.utcnow_iso(),
                                  error="Health-check площадок не пройден — структура форм изменилась.")
+                    if user_id:
+                        s.add_notification(user_id, "batch_failed",
+                                           f"Батч-анализ #{job_id} не выполнен: health-check площадок не пройден.",
+                                           job_id=job_id)
                 return
             done = 0
             for country in destinations:
@@ -101,10 +105,17 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
                     s.update_job(job_id, progress_done=done)
             with Storage(db_path) as s:
                 s.update_job(job_id, status="done", finished_at=auth.utcnow_iso())
+                if user_id:
+                    s.add_notification(user_id, "batch_done",
+                                       f"Батч-анализ #{job_id} готов: {done} из {len(destinations)} направлений.",
+                                       job_id=job_id)
         except Exception as exc:  # noqa: BLE001
             logger.exception("батч #%s упал", job_id)
             with Storage(db_path) as s:
                 s.update_job(job_id, status="failed", finished_at=auth.utcnow_iso(), error=str(exc))
+                if user_id:
+                    s.add_notification(user_id, "batch_failed",
+                                       f"Батч-анализ #{job_id} завершился ошибкой.", job_id=job_id)
 
     app_state.run_job = _run_job  # хук для тестов/будущего ретрая: await app.state.run_job(id)
 
@@ -207,3 +218,29 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
                 "progress_total": job["progress_total"], "created_at": job["created_at"],
                 "finished_at": job.get("finished_at"), "error": job.get("error"),
                 "directions": directions}
+
+    # --- Уведомления в приложении (Ф2): значок «готово» поллит непрочитанные ---
+
+    @app.get("/api/notifications")
+    async def list_notifications_ep(request: Request):
+        uid = current_user_id(request)
+        if uid is None:  # локальный режим / нет юзера — уведомлений нет
+            return {"items": [], "unread": 0}
+        with Storage(db_path) as s:
+            return {"items": s.list_notifications(uid), "unread": s.count_unread_notifications(uid)}
+
+    @app.post("/api/notifications/{notif_id}/read")
+    async def read_notification_ep(request: Request, notif_id: int):
+        uid = current_user_id(request)
+        if uid is not None:
+            with Storage(db_path) as s:
+                s.mark_notification_read(notif_id, uid)  # owner в WHERE → чужое не тронуть
+        return {"ok": True}
+
+    @app.post("/api/notifications/read-all")
+    async def read_all_notifications_ep(request: Request):
+        uid = current_user_id(request)
+        if uid is not None:
+            with Storage(db_path) as s:
+                s.mark_all_notifications_read(uid)
+        return {"ok": True}

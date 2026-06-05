@@ -147,3 +147,30 @@ def test_worker_runs_all_directions_and_consumes_credits(tmp_path, monkeypatch):
         runs = s.list_job_runs(job_id)
         assert sorted(c for c, _, _ in runs) == ["Египет", "Турция"]
         assert s.get_user_by_id(uid)["searches_left"] == 3  # 5 − 2 направления
+        assert s.count_unread_notifications(uid) == 1       # Ф2: уведомление «готово»
+        assert s.list_notifications(uid)[0]["kind"] == "batch_done"
+
+
+def test_notifications_api_and_isolation(tmp_path, monkeypatch):
+    _patch_search(monkeypatch)
+    db = _seed(tmp_path, [("u", "secret1", "user"), ("v", "secret1", "user")])
+    with Storage(db) as s:
+        uid = s.get_user_by_username("u")["id"]
+        s.add_notification(uid, "batch_done", "Готов #1", job_id=1)
+    cli = TestClient(create_app(db_path=db))
+    _login(cli, "u", "secret1")
+    data = cli.get("/api/notifications").json()
+    assert data["unread"] == 1 and len(data["items"]) == 1
+    nid = data["items"][0]["id"]
+    assert cli.post(f"/api/notifications/{nid}/read", headers=_csrf(cli)).status_code == 200
+    assert cli.get("/api/notifications").json()["unread"] == 0
+
+    other = TestClient(create_app(db_path=db))
+    _login(other, "v", "secret1")
+    assert other.get("/api/notifications").json()["unread"] == 0  # чужие не видны
+
+
+def test_notifications_guest_blocked(tmp_path):
+    client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))
+    client.get("/api/me")  # гость
+    assert client.get("/api/notifications").status_code == 401
