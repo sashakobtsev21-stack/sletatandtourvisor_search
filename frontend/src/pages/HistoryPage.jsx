@@ -9,6 +9,7 @@ import { staggerContainer, fadeUp } from "../lib/animations.js";
 import { formatPrice, formatDate, formatDateTime, providerLabel } from "../lib/format.js";
 import { navigate } from "../lib/router.js";
 import { setRepeat } from "../lib/repeatStore.js";
+import { apiFetch } from "../lib/api.js";
 
 /** Краткая сводка параметров прогона для заголовка строки истории. */
 function summarize(p) {
@@ -27,7 +28,7 @@ export default function HistoryPage() {
 
   useEffect(() => {
     let alive = true;
-    fetch("/api/runs")
+    apiFetch("/api/runs")
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((j) => alive && setRuns(j))
       .catch((e) => alive && setError(String(e)));

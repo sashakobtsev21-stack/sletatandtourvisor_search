@@ -4,6 +4,7 @@
 // так фронт и бэкенд больше не расходятся вручную.
 import { useEffect, useState } from "react";
 import { DEPARTURE_CITIES, COUNTRIES, OPERATORS, PROVIDERS } from "./constants.js";
+import { apiFetch } from "./api.js";
 
 const FALLBACK = {
   departureCities: DEPARTURE_CITIES,
@@ -18,7 +19,7 @@ export function useRefData() {
   const [data, setData] = useState(FALLBACK);
   useEffect(() => {
     let alive = true;
-    fetch("/api/refdata")
+    apiFetch("/api/refdata")
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((j) => {
         if (!alive) return;

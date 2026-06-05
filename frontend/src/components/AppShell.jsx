@@ -1,19 +1,26 @@
 import { motion } from "framer-motion";
-import { Palmtree, Search, History, FlaskConical } from "lucide-react";
+import { Palmtree, Search, History, FlaskConical, Users, LogOut } from "lucide-react";
 import { fadeUp } from "../lib/animations.js";
+import { useAuth } from "../lib/auth.jsx";
 
 /**
  * AppShell — общий каркас всех экранов дашборда: анимированный фон (световые
  * пятна для glassmorphism) + липкая шапка с навигацией по hash-маршрутам.
- * Содержимое конкретной страницы передаётся через children.
+ * Вкладки фильтруются по правам текущего пользователя (`perm`); справа — кто вошёл
+ * и кнопка выхода. Содержимое конкретной страницы передаётся через children.
  */
 const NAV = [
-  { label: "Поиск", href: "#/", icon: Search, match: (p) => p === "/" || p.startsWith("/run") },
-  { label: "История", href: "#/history", icon: History, match: (p) => p.startsWith("/history") },
-  { label: "Автотесты", href: "#/tests", icon: FlaskConical, match: (p) => p.startsWith("/tests") },
+  { label: "Поиск", href: "#/", icon: Search, perm: "search.run", match: (p) => p === "/" || p.startsWith("/run") },
+  { label: "История", href: "#/history", icon: History, perm: "history.view.own", match: (p) => p.startsWith("/history") },
+  { label: "Автотесты", href: "#/tests", icon: FlaskConical, perm: "tests.view", match: (p) => p.startsWith("/tests") },
+  { label: "Пользователи", href: "#/admin/users", icon: Users, perm: "users.manage", match: (p) => p.startsWith("/admin/users") },
 ];
 
+const ROLE_LABEL = { admin: "админ", user: "пользователь" };
+
 export default function AppShell({ route = "/", children }) {
+  const { user, can, logout } = useAuth();
+  const nav = NAV.filter((n) => !n.perm || can(n.perm));
   return (
     <div className="relative min-h-screen">
       {/* Анимированный градиентный фон путешествий (мягкие световые пятна) */}
@@ -43,7 +50,7 @@ export default function AppShell({ route = "/", children }) {
             </div>
           </a>
           <nav className="ml-auto flex items-center gap-1 text-sm font-semibold text-muted">
-            {NAV.map(({ label, href, icon: Icon, match }) => {
+            {nav.map(({ label, href, icon: Icon, match }) => {
               const active = match(route);
               return (
                 <a
@@ -60,6 +67,24 @@ export default function AppShell({ route = "/", children }) {
               );
             })}
           </nav>
+
+          {/* Кто вошёл + выход (в мультиюзере; в локальном режиме username пуст → скрыто) */}
+          {user?.username && (
+            <div className="ml-2 flex items-center gap-2 border-l border-white/10 pl-3">
+              <div className="hidden text-right leading-tight sm:block">
+                <div className="text-sm font-semibold text-ink">{user.username}</div>
+                <div className="text-[11px] text-muted">{ROLE_LABEL[user.role] || user.role}</div>
+              </div>
+              <button
+                onClick={logout}
+                title="Выйти"
+                className="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm font-semibold text-muted transition-colors hover:bg-white/5 hover:text-ink"
+              >
+                <LogOut className="size-4" />
+                <span className="hidden md:inline">Выход</span>
+              </button>
+            </div>
+          )}
         </div>
       </motion.header>
 
