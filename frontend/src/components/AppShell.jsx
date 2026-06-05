@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Palmtree, Search, History, FlaskConical, Users, LogOut } from "lucide-react";
+import { Palmtree, Search, History, FlaskConical, Users, CreditCard, LogOut } from "lucide-react";
 import { fadeUp } from "../lib/animations.js";
 import { useAuth } from "../lib/auth.jsx";
 
@@ -13,6 +13,8 @@ const NAV = [
   { label: "Поиск", href: "#/", icon: Search, perm: "search.run", match: (p) => p === "/" || p.startsWith("/run") },
   { label: "История", href: "#/history", icon: History, perm: "history.view.own", match: (p) => p.startsWith("/history") },
   { label: "Автотесты", href: "#/tests", icon: FlaskConical, perm: "tests.view", match: (p) => p.startsWith("/tests") },
+  // «Подписка» — только в мультиюзере (в локальном режиме оплата не нужна).
+  { label: "Подписка", href: "#/billing", icon: CreditCard, mode: "multiuser", match: (p) => p.startsWith("/billing") },
   { label: "Пользователи", href: "#/admin/users", icon: Users, perm: "users.manage", match: (p) => p.startsWith("/admin/users") },
 ];
 
@@ -20,7 +22,7 @@ const ROLE_LABEL = { admin: "админ", user: "пользователь" };
 
 export default function AppShell({ route = "/", children }) {
   const { user, can, logout } = useAuth();
-  const nav = NAV.filter((n) => !n.perm || can(n.perm));
+  const nav = NAV.filter((n) => (!n.perm || can(n.perm)) && (!n.mode || user?.mode === n.mode));
   return (
     <div className="relative min-h-screen">
       {/* Анимированный градиентный фон путешествий (мягкие световые пятна) */}

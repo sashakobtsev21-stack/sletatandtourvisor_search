@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -138,6 +138,22 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_users_username   ON users(username);
 CREATE INDEX IF NOT EXISTS idx_sessions_user    ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+
+-- Платежи за подписку (SaaS). При успехе продлевают users.paid_until на `days`.
+-- provider='stub' — имитация; в Ф1 добавится 'yookassa'. provider_payment_id — id у провайдера.
+CREATE TABLE IF NOT EXISTS payments (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    provider            TEXT NOT NULL,
+    plan                TEXT NOT NULL,
+    amount              INTEGER NOT NULL,        -- рубли
+    days                INTEGER NOT NULL,        -- на сколько продлевает подписку
+    status              TEXT NOT NULL DEFAULT 'pending',   -- pending / succeeded / canceled
+    created_at          TEXT NOT NULL,
+    paid_at             TEXT,
+    provider_payment_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_id);
 """
 
 
@@ -472,13 +488,56 @@ class Storage:
 
     def grant_subscription(self, user_id: int, *, days: "int | None" = None,
                            until: "str | None" = None, plan: str = "paid") -> None:
-        """Выдать/продлить подписку: `paid_until = сейчас + days` (или явный `until` — UTC ISO).
-        В Ф1 это же делает вебхук провайдера после успешной оплаты."""
+        """Выдать/ПРОДЛИТЬ подписку. С `days` продлевает от max(сейчас, текущий paid_until) —
+        повторная оплата стэкается, а не обнуляет остаток. `until` — задать явный срок (UTC ISO)."""
         if until is None and days is not None:
-            until = auth.iso(auth.utcnow() + timedelta(days=days))
+            base = auth.utcnow()
+            row = self._conn.execute("SELECT paid_until FROM users WHERE id = ?", (user_id,)).fetchone()
+            if row and row["paid_until"]:
+                try:
+                    cur = datetime.fromisoformat(row["paid_until"])
+                    if cur.tzinfo is None:
+                        cur = cur.replace(tzinfo=timezone.utc)
+                    if cur > base:
+                        base = cur
+                except ValueError:
+                    pass
+            until = auth.iso(base + timedelta(days=days))
         self._conn.execute("UPDATE users SET plan = ?, paid_until = ? WHERE id = ?",
                            (plan, until, user_id))
         self._conn.commit()
+
+    # --- платежи за подписку ---
+
+    def create_payment(self, user_id: int, *, provider: str, plan: str,
+                       amount: int, days: int) -> int:
+        """Создать платёж в статусе pending, вернуть его id."""
+        cur = self._conn.execute(
+            "INSERT INTO payments (user_id, provider, plan, amount, days, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+            (user_id, provider, plan, amount, days, auth.utcnow_iso()),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def get_payment(self, payment_id: int) -> "dict | None":
+        return _row(self._conn.execute(
+            "SELECT * FROM payments WHERE id = ?", (payment_id,)).fetchone())
+
+    def complete_payment(self, payment_id: int) -> "dict | None":
+        """Идемпотентно отметить платёж успешным и ПРОДЛИТЬ подписку на его `days`. Повторный
+        вызов ничего не продлевает (условный UPDATE по статусу). None — если платежа нет."""
+        p = self.get_payment(payment_id)
+        if p is None:
+            return None
+        cur = self._conn.execute(
+            "UPDATE payments SET status = 'succeeded', paid_at = ? WHERE id = ? AND status != 'succeeded'",
+            (auth.utcnow_iso(), payment_id),
+        )
+        self._conn.commit()
+        if cur.rowcount == 1:  # переход pending→succeeded сделали именно мы → продлеваем один раз
+            self.grant_subscription(p["user_id"], days=p["days"], plan=p["plan"])
+        return self.get_payment(payment_id)
 
     def create_session(self, user_id: int, token: str, *, remember: bool = False) -> None:
         now = auth.utcnow()

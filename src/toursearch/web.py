@@ -32,6 +32,7 @@ from toursearch.providers import (
 from toursearch.providers.base import prune_screenshots
 from toursearch.storage import Storage
 from toursearch.web_auth import LOCAL_HOSTS, current_user_id, owner_filter, register_auth
+from toursearch.web_billing import register_billing
 from toursearch.testkit import REGISTRY, run_selected
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -226,6 +227,7 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
     secure_cookies = (host not in LOCAL_HOSTS) or os.environ.get("TOURSEARCH_SECURE_COOKIES") == "1"
     app.state.secure_cookies = secure_cookies
     register_auth(app, db_path=db_path, auth_token=auth_token, secure_cookies=secure_cookies)
+    register_billing(app, db_path=db_path)
 
     # --- Предел одновременных поисков (каждый поднимает ~5 браузеров) ---
     # Защита машины от лавины браузеров (двойной клик, баг-ретрай, лёгкое выставление

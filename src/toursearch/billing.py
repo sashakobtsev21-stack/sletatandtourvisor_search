@@ -5,10 +5,26 @@
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 
 # Право, для которого нужна активная подписка (граница «бесплатно/платно»).
 PAID_PERMISSION = "search.run"
+
+# Провайдер оплаты: 'stub' — имитация (без денег, для локальной проверки потока);
+# 'yookassa' появится в Ф1. Переключается env TOURSEARCH_PAYMENT_PROVIDER.
+PROVIDER = (os.environ.get("TOURSEARCH_PAYMENT_PROVIDER") or "stub").strip()
+
+# Тарифы: сколько стоит (₽) и на сколько дней продлевает подписку.
+PLANS: dict = {
+    "month": {"title": "Подписка на месяц", "amount": 990, "days": 30},
+    "year": {"title": "Подписка на год", "amount": 9900, "days": 365},
+}
+
+
+def public_plans() -> dict:
+    """Тарифы для отдачи на фронт (то же содержимое; отдельная функция — на случай фильтрации)."""
+    return {k: dict(v) for k, v in PLANS.items()}
 
 
 def subscription_active(user: "dict | None", *, now: "datetime | None" = None) -> bool:
