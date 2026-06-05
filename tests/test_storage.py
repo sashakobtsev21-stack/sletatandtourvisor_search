@@ -372,3 +372,26 @@ def test_grant_subscription_and_payment(tmp_path):
     assert p["status"] == "succeeded" and p["kind"] == "subscription"
     assert storage.get_user_by_id(uid)["searches_left"] == 5   # кредиты не тронуты
     storage.close()
+
+
+def test_anon_consume_refund_and_device_limit(tmp_path):
+    storage = Storage(tmp_path / "t.db")
+    assert storage.anon_used("devA") == 0
+    assert storage.try_consume_anon("devA", "1.1.1.1") is True   # 1
+    assert storage.try_consume_anon("devA", "1.1.1.1") is True   # 2 (лимит устройства = 2)
+    assert storage.anon_used("devA") == 2
+    assert storage.try_consume_anon("devA", "1.1.1.1") is False  # устройство исчерпано
+    storage.refund_anon("devA")                                  # возврат при сбое/отмене
+    assert storage.anon_used("devA") == 1
+    assert storage.try_consume_anon("devA", "1.1.1.1") is True   # снова можно
+    storage.close()
+
+
+def test_anon_ip_cap(tmp_path):
+    # мягкий cap по IP (анти-абьюз очистки cookie): разные устройства с одного IP
+    storage = Storage(tmp_path / "t.db")
+    for i in range(3):
+        assert storage.try_consume_anon(f"d{i}", "9.9.9.9", device_limit=1, ip_limit=3) is True
+    assert storage.try_consume_anon("d9", "9.9.9.9", device_limit=1, ip_limit=3) is False  # IP-cap режет
+    assert storage.try_consume_anon("d9", "8.8.8.8", device_limit=1, ip_limit=3) is True   # другой IP — ок
+    storage.close()

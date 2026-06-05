@@ -28,6 +28,10 @@ _AUTH_SKIP_EXACT = ("/", "/favicon.ico", "/openapi.json", "/docs", "/redoc")
 # Пути, где creds резолвятся, но доступ НЕ требуется (вход / регистрация / выход / «кто я»).
 _AUTH_EXEMPT_EXACT = ("/api/login", "/api/register", "/api/logout", "/api/me")
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+# Пути, доступные анонимному гостю (мультиюзер, без входа): сам поиск + справочники/статус.
+# Лимит ANON_CREDITS на устройство; история/тесты/пользователи — только после входа.
+_ANON_ALLOWED_PREFIXES = ("/search/",)               # /search/prepare|stream|cancel (не bare /search)
+_ANON_ALLOWED_EXACT = ("/api/refdata", "/api/billing/status")
 
 
 def _bearer(header: "str | None") -> str:
@@ -40,6 +44,18 @@ def _bearer(header: "str | None") -> str:
 def _auth_skip(path: str) -> bool:
     return path in _AUTH_SKIP_EXACT or any(
         path == p or path.startswith(p + "/") for p in _AUTH_SKIP_PREFIXES)
+
+
+def _anon_allowed(path: str) -> bool:
+    """Доступен ли путь анонимному гостю в мультиюзер-режиме."""
+    return path in _ANON_ALLOWED_EXACT or any(path.startswith(p) for p in _ANON_ALLOWED_PREFIXES)
+
+
+def _csrf_ok(request: Request) -> bool:
+    """Double-submit: заголовок X-CSRF-Token совпадает с НЕ-httponly cookie ts_csrf."""
+    cookie_csrf = request.cookies.get("ts_csrf") or ""
+    header_csrf = request.headers.get("x-csrf-token") or ""
+    return bool(cookie_csrf and hmac.compare_digest(cookie_csrf, header_csrf))
 
 
 def _required_permission(path: str) -> "str | None":
@@ -100,6 +116,24 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
       CSRF на мутирующих запросах.
     """
 
+    def _finalize(request: Request, response):
+        """Единая точка выхода: доставить отложенные cookie на ответ — id устройства (учёт
+        анонимных поисков), CSRF гостю (double-submit) и legacy `?auth=`→cookie. Так и
+        exempt-пути (/api/me) выдают гостю ts_device+ts_csrf на первом заходе."""
+        if getattr(request.state, "device_new", False):
+            response.set_cookie("ts_device", request.state.device, httponly=True,
+                                samesite="lax", secure=secure_cookies, max_age=365 * 24 * 3600)
+        csrf_set = getattr(request.state, "csrf_set", None)
+        if csrf_set:
+            response.set_cookie("ts_csrf", csrf_set, httponly=False, samesite="lax",
+                                secure=secure_cookies, max_age=30 * 24 * 3600)
+        if (getattr(request.state, "auth_mode", "local") == "legacy"
+                and request.query_params.get("auth")
+                and request.cookies.get("ts_auth") != auth_token):
+            response.set_cookie("ts_auth", auth_token, httponly=True, samesite="lax",
+                                max_age=7 * 24 * 3600)
+        return response
+
     @app.middleware("http")
     async def _auth(request: Request, call_next):
         path = request.url.path
@@ -125,12 +159,25 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
                 request.state.legacy_ok = hmac.compare_digest(supplied, auth_token)
         mode = request.state.auth_mode
 
+        # id устройства (cookie ts_device) — для учёта анонимных бесплатных поисков. Заводим
+        # на всех путях (в т.ч. exempt /api/me), чтобы гость получил cookie на первом заходе.
+        device = request.cookies.get("ts_device")
+        request.state.device_new = False
+        if not device:
+            device = auth.new_session_token()
+            request.state.device_new = True
+        request.state.device = device
+        # CSRF-токен гостю (мультиюзер без входа), если ещё нет — для double-submit на мутациях.
+        request.state.csrf_set = None
+        if mode == "multiuser" and request.state.user is None and not request.cookies.get("ts_csrf"):
+            request.state.csrf_set = auth.new_session_token()
+
         # 2) Вход/выход/«кто я»: creds резолвлены, доступ не требуем (хендлер сам решит).
         #    На мутирующих — лёгкая защита от login-CSRF через Origin.
         if path in _AUTH_EXEMPT_EXACT:
             if request.method in _UNSAFE_METHODS and not _origin_ok(request):
                 return JSONResponse({"error": "Неверный источник запроса."}, status_code=403)
-            return await call_next(request)
+            return _finalize(request, await call_next(request))
 
         # 3) Защищённые пути. Origin-проверку мутирующих делаем во ВСЕХ режимах (дешёвый
         # анти-CSRF: скрипты/тесты без Origin не страдают, кросс-сайт из браузера — режется;
@@ -141,32 +188,34 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
             return JSONResponse({"error": "Требуется авторизация (TOURSEARCH_TOKEN)."}, status_code=401)
         if mode == "multiuser":
             if request.state.user is None:
-                if request.method == "GET" and "text/html" in (request.headers.get("accept") or ""):
-                    return RedirectResponse(url="/app/")    # навигация браузера → SPA покажет вход
-                return JSONResponse({"error": "Требуется вход."}, status_code=401)
-            if request.method in _UNSAFE_METHODS:           # CSRF double-submit (Origin уже проверён)
-                cookie_csrf = request.cookies.get("ts_csrf") or ""
-                header_csrf = request.headers.get("x-csrf-token") or ""
-                if not (cookie_csrf and hmac.compare_digest(cookie_csrf, header_csrf)):
+                # Анонимный гость: ограниченный доступ (поиск/справочники) с лимитом ANON_CREDITS.
+                if not _anon_allowed(path):
+                    if request.method == "GET" and "text/html" in (request.headers.get("accept") or ""):
+                        return RedirectResponse(url="/app/")   # навигация браузера → SPA (вход/гость)
+                    return JSONResponse({"error": "Требуется вход."}, status_code=401)
+                if request.method in _UNSAFE_METHODS and not _csrf_ok(request):  # CSRF и для гостя
                     return JSONResponse({"error": "CSRF-проверка не пройдена."}, status_code=403)
-            perm = _required_permission(path)
-            if perm and not auth.has_permission(request.state.user["role"], perm):
-                return JSONResponse({"error": "Недостаточно прав."}, status_code=403)
-            # Запуск анализа требует остатка поисков (admin — без ограничений). Отмену
-            # (/search/cancel) не гейтим: остаток мог обнулиться уже запущенным поиском.
-            if (perm == billing.PAID_PERMISSION and not path.endswith("/cancel")
-                    and not billing.has_search_access(request.state.user)):
-                return JSONResponse({"error": "Закончились поиски — пополните на вкладке «Подписка»."},
-                                    status_code=402)
+                if path == "/search/prepare":                  # вход в поиск — гейт лимита гостя
+                    with Storage(db_path) as s:                 # (жёсткое списание — на старте стрима)
+                        if s.anon_used(request.state.device) >= billing.ANON_CREDITS:
+                            return JSONResponse(
+                                {"error": "Бесплатные поиски закончились — зарегистрируйтесь, "
+                                          "5 поисков бесплатно."}, status_code=402)
+            else:
+                if request.method in _UNSAFE_METHODS and not _csrf_ok(request):  # Origin уже проверён
+                    return JSONResponse({"error": "CSRF-проверка не пройдена."}, status_code=403)
+                perm = _required_permission(path)
+                if perm and not auth.has_permission(request.state.user["role"], perm):
+                    return JSONResponse({"error": "Недостаточно прав."}, status_code=403)
+                # Запуск анализа требует остатка поисков (admin — без ограничений). Отмену
+                # (/search/cancel) не гейтим: остаток мог обнулиться уже запущенным поиском.
+                if (perm == billing.PAID_PERMISSION and not path.endswith("/cancel")
+                        and not billing.has_search_access(request.state.user)):
+                    return JSONResponse({"error": "Закончились поиски — пополните на вкладке «Подписка»."},
+                                        status_code=402)
         # local → открыто (Origin мутирующих уже проверён выше)
 
-        response = await call_next(request)
-        # legacy `?auth=…` → ставим cookie, чтобы EventSource дальше проходил сам
-        if (mode == "legacy" and request.query_params.get("auth")
-                and request.cookies.get("ts_auth") != auth_token):
-            response.set_cookie("ts_auth", auth_token, httponly=True, samesite="lax",
-                                max_age=7 * 24 * 3600)
-        return response
+        return _finalize(request, await call_next(request))
 
     def _user_public(user: dict) -> dict:
         """Поля пользователя наружу — БЕЗ password_hash."""
@@ -265,8 +314,13 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
             return {"mode": "legacy", "username": "(token)", "role": "admin",
                     "permissions": list(auth.PERMISSIONS)}
         user = _current_user(request)  # multiuser
-        if user is None:
-            raise HTTPException(status_code=401, detail="Требуется вход")
+        if user is None:               # аноним → гостевое состояние (воронка: 2 поиска без входа)
+            device = getattr(request.state, "device", "") or ""
+            with Storage(db_path) as storage:
+                used = storage.anon_used(device) if device else 0
+            return {"mode": "guest", "username": None, "role": "guest",
+                    "permissions": ["search.run"],  # ровно чтобы SPA показал вкладку «Поиск»
+                    "searches_left": max(0, billing.ANON_CREDITS - used)}
         return {"mode": "multiuser", "username": user["username"], "role": user["role"],
                 "permissions": auth.permissions_for(user["role"]),
                 "searches_left": billing.searches_left(user)}  # None → безлимит (admin)

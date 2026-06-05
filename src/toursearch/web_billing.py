@@ -22,7 +22,16 @@ def register_billing(app: FastAPI, *, db_path: str) -> None:
     async def billing_status(request: Request):
         user = getattr(request.state, "user", None)
         plans = billing.public_plans()
-        if user is None:  # локальный режим — оплата не нужна
+        if user is None:
+            if getattr(request.state, "auth_mode", "local") == "multiuser":
+                # Анонимный гость: лимит бесплатных поисков; оплата — после регистрации/входа.
+                device = getattr(request.state, "device", "") or ""
+                with Storage(db_path) as s:
+                    used = s.anon_used(device) if device else 0
+                return {"provider": billing.PROVIDER, "local": False, "is_guest": True,
+                        "unlimited": False, "subscription_active": False, "subscription_until": None,
+                        "searches_left": max(0, billing.ANON_CREDITS - used), "plans": plans}
+            # локальный режим — оплата не нужна
             return {"provider": billing.PROVIDER, "local": True, "unlimited": True,
                     "searches_left": None, "plans": plans}
         is_admin = user.get("role") == "admin"
@@ -40,7 +49,7 @@ def register_billing(app: FastAPI, *, db_path: str) -> None:
     async def billing_checkout(request: Request, plan: str = Form("month")):
         user = getattr(request.state, "user", None)
         if user is None:
-            return JSONResponse({"error": "Оплата доступна только при входе (мультиюзер-режим)."},
+            return JSONResponse({"error": "Войдите или зарегистрируйтесь, чтобы оформить доступ."},
                                 status_code=400)
         kind, spec = billing.plan_spec(plan)
         if spec is None:
