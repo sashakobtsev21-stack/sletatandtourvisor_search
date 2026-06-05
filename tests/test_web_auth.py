@@ -78,6 +78,48 @@ def test_login_bad_credentials(tmp_path):
     assert _login(client, "ghost", "secret1").status_code == 401
 
 
+# --------------------------- анти-брутфорс / заголовки (безопасность) ---------------------------
+
+def test_login_lockout_after_failures(tmp_path):
+    client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))
+    for _ in range(5):
+        assert _login(client, "admin", "WRONG").status_code == 401   # 5 неудач (username|ip)
+    assert _login(client, "admin", "WRONG").status_code == 429        # лок
+    assert _login(client, "admin", "secret1").status_code == 429      # даже верный пароль — пока залочено
+
+
+def test_login_ip_rate_limit(tmp_path):
+    client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))
+    for _ in range(20):  # успешные входы (без неудач → лока нет), но копится лимит попыток с IP
+        assert _login(client, "admin", "secret1").status_code == 200
+    assert _login(client, "admin", "secret1").status_code == 429      # 21-я с одного IP — лимит
+
+
+def test_login_no_user_enumeration(tmp_path):
+    # неизвестный логин и неверный пароль → одинаковый ответ (не выдаём существование аккаунта)
+    client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))
+    unknown = _login(client, "ghostuser", "whatever1")
+    wrongpw = _login(client, "admin", "WRONGpw1")
+    assert unknown.status_code == 401 and wrongpw.status_code == 401
+    assert unknown.json()["error"] == wrongpw.json()["error"]
+
+
+def test_security_headers_present(tmp_path):
+    client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))
+    h = client.get("/api/me").headers
+    assert h["x-frame-options"] == "DENY"
+    assert h["x-content-type-options"] == "nosniff"
+    assert "default-src 'self'" in h["content-security-policy"]
+    assert "strict-transport-security" not in h  # localhost (без HTTPS) → без HSTS
+
+
+def test_hsts_on_secure_host(tmp_path):
+    # host != localhost → secure-cookie режим → есть HSTS
+    client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")]),
+                                   host="0.0.0.0"))
+    assert "strict-transport-security" in client.get("/api/me").headers
+
+
 def test_register_creates_user_and_logs_in(tmp_path):
     # мультиюзер (есть админ) → регистрация открыта; новый юзер сразу залогинен, 5 поисков
     client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))

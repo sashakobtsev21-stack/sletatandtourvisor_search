@@ -41,6 +41,19 @@ _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 # Sletat ограничивает окно вылета ±13 дней от первой даты (наблюдено вживую).
 MAX_DATE_SPAN_DAYS = 13
 
+# Content-Security-Policy для SPA. script/connect — только свой origin; стили инлайновые
+# разрешены (framer-motion ставит style-атрибуты); шрифты — Google Fonts (см. index.html);
+# картинки — свой origin + data:. frame-ancestors 'none' = защита от кликджекинга.
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+)
+
 
 # Токен текущего прогона — наследуется задачами поиска (asyncio копирует контекст
 # при создании), поэтому позволяет хендлеру отличать логи СВОЕГО прогона от чужих.
@@ -245,6 +258,19 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
     # Батч-анализ (Ф1): мульти-направления фоновой задачей. Регистрируем после active_runs —
     # воркер занимает общий слот одновременных поисков (app.state.active_runs).
     register_jobs(app, db_path=db_path, app_state=app.state)
+
+    @app.middleware("http")
+    async def _security_headers(request: Request, call_next):
+        """Заголовки безопасности на все ответы (добавлен последним → внешний слой).
+        HSTS — только когда secure-cookie (за HTTPS), чтобы не ломать локальный HTTP."""
+        resp = await call_next(request)
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("X-Frame-Options", "DENY")
+        resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        resp.headers.setdefault("Content-Security-Policy", _CSP)
+        if secure_cookies:
+            resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        return resp
 
     Path("screenshots").mkdir(exist_ok=True)
     prune_screenshots()  # на старте подчистить накопившиеся скриншоты прогонов
@@ -466,8 +492,10 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
             # внешнего ожидающего нет, а финал подписчикам уже отправлен.
             _emit(session, {"type": "cancelled", "msg": "Поиск остановлен по запросу."})
             _refund()  # отменили — результата нет, поиск возвращаем
-        except Exception as exc:  # noqa: BLE001
-            _emit(session, {"type": "error", "msg": f"{type(exc).__name__}: {exc}"})
+        except Exception:  # noqa: BLE001
+            # Полную трассу — в серверный лог; клиенту — общее (не светим внутренние детали).
+            logging.getLogger("toursearch.web").exception("Сбой поиска (прогон %s)", token)
+            _emit(session, {"type": "error", "msg": "Внутренняя ошибка поиска. Повторите попытку."})
             _refund()  # системный сбой — поиск возвращаем
         finally:
             active_runs["n"] = max(0, active_runs["n"] - 1)  # освободить слот (парно к гейту)
