@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
 from toursearch.models import ComparisonReport, ProviderResult, SearchParams
 from toursearch.providers import default_providers, get_provider, load_browser_providers
@@ -16,13 +17,21 @@ async def run_search(
     providers: list[str] | None = None,
     headless: bool = False,
     on_frame=None,
+    provider_timeout_s: float | None = None,
 ) -> ComparisonReport:
     """Запустить поиск на всех (или указанных) площадках параллельно.
 
     Каждый провайдер сам ловит свои ошибки и возвращает ProviderResult; на всякий
     случай неожиданные исключения тоже превращаются в неуспешный результат, чтобы
     падение одной площадки не валило весь прогон.
+
+    Сверху — жёсткий таймаут на каждую площадку (`provider_timeout_s`, по умолчанию из
+    env `TOURSEARCH_PROVIDER_TIMEOUT_S` или 180с): если внутренние таймауты площадки не
+    сработали (зависший браузер/цикл), её `search()` отменяется (провайдер закрывает
+    браузер в `finally`) и не подвешивает всё сравнение.
     """
+    timeout_s = (provider_timeout_s if provider_timeout_s is not None
+                 else float(os.environ.get("TOURSEARCH_PROVIDER_TIMEOUT_S") or 180))
     load_browser_providers()
     # providers=None → набор по умолчанию (без экспериментальных/opt-in площадок).
     names = providers or default_providers()
@@ -44,7 +53,15 @@ async def run_search(
         # после gather): тогда веб-прогресс растёт по мере готовности площадок в реальном
         # времени, а не скачком в самом конце.
         try:
-            res = await inst.search(params)
+            res = await asyncio.wait_for(inst.search(params), timeout=timeout_s)
+        except TimeoutError:
+            # Внешняя страховка: внутренние таймауты площадки не сработали (зависший
+            # браузер/цикл). wait_for отменил search() → провайдер закрыл браузер в finally.
+            log.warning("provider %s: превышен таймаут %.0fс — площадка прервана", name, timeout_s)
+            return ProviderResult(
+                provider=name, success=False, duration_seconds=timeout_s,
+                search_mode=params.search_mode,
+                error=f"Превышен таймаут {timeout_s:.0f}с — площадка прервана оркестратором")
         except Exception as exc:  # noqa: BLE001 — падение площадки не должно валить прогон
             log.warning("provider %s raised: %s: %s", name, type(exc).__name__, exc)
             return ProviderResult(

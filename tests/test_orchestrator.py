@@ -1,5 +1,7 @@
 """Тесты оркестратора (на фейковых провайдерах, без браузера)."""
 
+import asyncio
+import time
 from datetime import date
 from decimal import Decimal
 
@@ -51,6 +53,25 @@ class _FakeBoom:
         raise RuntimeError("boom")
 
 
+@register_provider("fake_hang")
+class _FakeHang:
+    """Зависает дольше любого таймаута теста; `finally` — стенд-ин закрытия браузера."""
+
+    name = "fake_hang"
+    cleaned = False
+
+    def __init__(self, headless: bool = False) -> None:
+        self.headless = headless
+
+    async def search(self, params: SearchParams) -> ProviderResult:
+        _FakeHang.cleaned = False
+        try:
+            await asyncio.sleep(30)  # дольше provider_timeout_s теста
+            return ProviderResult(provider=self.name, success=True, duration_seconds=30.0)
+        finally:
+            _FakeHang.cleaned = True  # как `finally: await browser.close()` в реальном провайдере
+
+
 def _params() -> SearchParams:
     return SearchParams(
         departure_city="Москва", destination_country="Турция",
@@ -74,4 +95,23 @@ async def test_provider_exception_does_not_break_run():
     assert by["fake_boom"].success is False
     assert "boom" in by["fake_boom"].error
     # сравнение всё ещё работает по выжившему провайдеру
+    assert report.cheapest.provider == "fake_ok"
+
+
+async def test_hung_provider_is_timed_out_and_does_not_hang_run():
+    """Зависшая площадка прерывается по таймауту оркестратора, а не вешает весь прогон;
+    её `finally` (закрытие браузера в реальном провайдере) при этом отрабатывает."""
+    t0 = time.monotonic()
+    report = await run_search(
+        _params(), providers=["fake_ok", "fake_hang"], provider_timeout_s=0.3
+    )
+    elapsed = time.monotonic() - t0
+
+    by = {r.provider: r for r in report.results}
+    assert by["fake_ok"].success is True                 # быстрая площадка не пострадала
+    assert by["fake_hang"].success is False
+    assert "таймаут" in by["fake_hang"].error.lower()    # понятная причина
+    assert _FakeHang.cleaned is True                     # отмена прошла через finally → браузер закрыт
+    assert elapsed < 5                                   # прогон не завис на 30с — это и есть страховка
+    # выживший провайдер по-прежнему даёт сравнение
     assert report.cheapest.provider == "fake_ok"
