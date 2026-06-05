@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import GlassCard from "../components/ui/GlassCard.jsx";
 import { fadeUp } from "../lib/animations.js";
+import { apiFetch } from "../lib/api.js";
 
 // Разделы вкладки по СМЫСЛУ (изначально свёрнуты). У каждого — список бэкенд-категорий
 // (`cats`), которые в него попадают. Health-check объединяет целостность форм + быструю логику.
@@ -63,7 +64,7 @@ export default function TestsPage() {
   const timerRef = useRef(null);
 
   useEffect(() => {
-    fetch("/api/tests/catalog")
+    apiFetch("/api/tests/catalog")
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then(setCatalog)
       .catch((e) => setError(String(e)));
@@ -136,7 +137,7 @@ export default function TestsPage() {
     let passed = 0, failed = 0, done = 0;
     const total = ids.length;
 
-    fetch("/tests/prepare", {
+    apiFetch("/tests/prepare", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids }),

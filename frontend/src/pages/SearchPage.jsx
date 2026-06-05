@@ -7,6 +7,7 @@ import { navigate } from "../lib/router.js";
 import { takeRepeat } from "../lib/repeatStore.js";
 import { PROVIDERS } from "../lib/constants.js";
 import { progressFloorForLog, isSearchStart, parseProviderDone } from "../lib/searchEvents.js";
+import { apiFetch } from "../lib/api.js";
 
 let logSeq = 0;
 const now = () => new Date().toTimeString().slice(0, 8);
@@ -122,7 +123,7 @@ export default function SearchPage() {
     pushLog("⏹ Останавливаю поиск…", "warning");
     if (tokenRef.current) {
       try {
-        await fetch(`/search/cancel?token=${tokenRef.current}`, { method: "POST" });
+        await apiFetch(`/search/cancel?token=${tokenRef.current}`, { method: "POST" });
       } catch {
         /* бэкенд закроет поток сам */
       }
@@ -247,6 +248,8 @@ export default function SearchPage() {
       if (!esRef.current) return; // мы сами закрыли поток — игнорируем
       if (es.readyState === EventSource.CLOSED) {
         // Окончательный отказ (сервер вернул ошибку/недоступен) — не висим молча.
+        // Если причина — протухшая сессия, мягкий /api/me вернёт 401 → покажется вход.
+        apiFetch("/api/me").catch(() => {});
         pushLog("Соединение с потоком закрыто.", "err");
         finish("error");
       } else if (!reconnRef.current) {
@@ -277,7 +280,7 @@ export default function SearchPage() {
 
     let token;
     try {
-      const resp = await fetch("/search/prepare", { method: "POST", body: fd });
+      const resp = await apiFetch("/search/prepare", { method: "POST", body: fd });
       const data = await resp.json();
       if (data.error) {
         pushLog(data.error, "err");

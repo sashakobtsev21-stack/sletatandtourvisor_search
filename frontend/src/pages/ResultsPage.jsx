@@ -6,6 +6,7 @@ import {
 import GlassCard from "../components/ui/GlassCard.jsx";
 import { staggerContainer, fadeUp } from "../lib/animations.js";
 import { formatPrice, formatDate, providerLabel } from "../lib/format.js";
+import { apiFetch } from "../lib/api.js";
 
 /**
  * ResultsPage — отчёт сравнения одного прогона (#/run/{id}).
@@ -23,7 +24,7 @@ export default function ResultsPage({ runId }) {
     let alive = true;
     setData(null);
     setError(null);
-    fetch(`/api/runs/${runId}`)
+    apiFetch(`/api/runs/${runId}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((j) => alive && setData(j))
       .catch((e) => alive && setError(String(e)));
