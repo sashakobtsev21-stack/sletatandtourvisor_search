@@ -155,7 +155,7 @@ async def main() -> None:
               f"→ _dump/travelata/form_map.json")
 
         await page.screenshot(path=str(OUT / "search.png"), full_page=False)
-        print(f"  скриншот     : _dump/travelata/search.png")
+        print("  скриншот     : _dump/travelata/search.png")
 
         await browser.close()
 

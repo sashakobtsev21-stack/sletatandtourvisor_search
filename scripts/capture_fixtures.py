@@ -40,9 +40,14 @@ async def main():
     prov = SletatProvider(headless=False)
     async with async_playwright() as pw:
         b = await pw.chromium.launch(headless=False, args=["--start-maximized"])
-        ctx = await b.new_context(no_viewport=True, permissions=[]); pg = await ctx.new_page(); pg.set_default_timeout(18000)
-        await pg.goto(prov.URL, wait_until="domcontentloaded"); await pg.wait_for_timeout(3500)
-        await prov._close_popups(pg); await prov._fill_form(pg, mk()); await prov._click_search(pg)
+        ctx = await b.new_context(no_viewport=True, permissions=[])
+        pg = await ctx.new_page()
+        pg.set_default_timeout(18000)
+        await pg.goto(prov.URL, wait_until="domcontentloaded")
+        await pg.wait_for_timeout(3500)
+        await prov._close_popups(pg)
+        await prov._fill_form(pg, mk())
+        await prov._click_search(pg)
         await prov._wait_for_completion(pg)
         blinchik = await pg.query_selector(".blinchik")
         if blinchik:
@@ -55,9 +60,13 @@ async def main():
     tv = TourvisorProvider(headless=False)
     async with async_playwright() as pw:
         b = await pw.chromium.launch(headless=False, args=["--start-maximized"])
-        ctx = await b.new_context(no_viewport=True); pg = await ctx.new_page(); pg.set_default_timeout(20000)
-        await pg.goto(tv.HOMEPAGE_URL, wait_until="domcontentloaded"); await pg.wait_for_timeout(2500)
-        await tv._fill_tours_basic(pg, mk()); await tv._click_search(pg)
+        ctx = await b.new_context(no_viewport=True)
+        pg = await ctx.new_page()
+        pg.set_default_timeout(20000)
+        await pg.goto(tv.HOMEPAGE_URL, wait_until="domcontentloaded")
+        await pg.wait_for_timeout(2500)
+        await tv._fill_tours_basic(pg, mk())
+        await tv._click_search(pg)
         try:
             await pg.wait_for_url("**/tours/**", timeout=30000)
         except Exception:

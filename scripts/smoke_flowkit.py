@@ -6,9 +6,9 @@ from __future__ import annotations
 import asyncio
 import logging
 
-logging.basicConfig(level=logging.WARNING, format="%(message)s")
-
 from toursearch.testkit import flowkit as fk
+
+logging.basicConfig(level=logging.WARNING, format="%(message)s")
 
 
 async def _flow(provider: str, mode: str) -> None:

@@ -51,31 +51,36 @@ async def main():
         if await safe(page.click("#ui-select-resort"), "resort open"):
             await page.wait_for_timeout(1000)
             await dump(page, "resort", "div.uis-select__options_resort, [class*='options_resort']")
-            await page.keyboard.press("Escape"); await page.wait_for_timeout(400)
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(400)
 
         # Звёздность отеля
         if await safe(page.click("#hotelCategoryOpenButton"), "stars open"):
             await page.wait_for_timeout(700)
             await dump(page, "stars", "#hotelCategoryContainer")
-            await page.keyboard.press("Escape"); await page.wait_for_timeout(400)
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(400)
 
         # Питание
         if await safe(page.click("#mealsOpenButton"), "meals open"):
             await page.wait_for_timeout(700)
             await dump(page, "meals", "#mealsContainer")
-            await page.keyboard.press("Escape"); await page.wait_for_timeout(400)
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(400)
 
         # Услуги/тип отеля
         await safe(page.click("#hotelServiceContainer [role='button'], #hotelServiceContainer"), "hotelservice open")
         await page.wait_for_timeout(700)
         await dump(page, "hotelservice", "#hotelServiceContainer")
-        await page.keyboard.press("Escape"); await page.wait_for_timeout(400)
+        await page.keyboard.press("Escape")
+        await page.wait_for_timeout(400)
 
         # Конкретный отель
         if await safe(page.click("#ui-select-hotels"), "hotels open"):
             await page.wait_for_timeout(1000)
             await dump(page, "hotels", "div.uis-select__options_hotels, [class*='options_hotels']")
-            await page.keyboard.press("Escape"); await page.wait_for_timeout(400)
+            await page.keyboard.press("Escape")
+            await page.wait_for_timeout(400)
 
         # Рейсы (чартер/прямой/без перелёта) — весь блок flight-info
         await dump(page, "flight_block", "xpath=(//*[contains(@class,'uis-item_flight-info')])[1]/ancestor::*[self::div or self::section][1]")

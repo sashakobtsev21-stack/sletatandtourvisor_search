@@ -4,20 +4,24 @@ import asyncio
 from pathlib import Path
 from playwright.async_api import async_playwright
 
-OUT = Path("_dump"); OUT.mkdir(exist_ok=True)
+OUT = Path("_dump")
+OUT.mkdir(exist_ok=True)
 
 
 async def safe(coro, what=""):
     try:
-        await coro; return True
+        await coro
+        return True
     except Exception as e:
-        print(f"  (skip {what}: {type(e).__name__})"); return False
+        print(f"  (skip {what}: {type(e).__name__})")
+        return False
 
 
 async def main():
     async with async_playwright() as pw:
         b = await pw.chromium.launch(headless=False, args=["--start-maximized"])
-        ctx = await b.new_context(no_viewport=True); page = await ctx.new_page()
+        ctx = await b.new_context(no_viewport=True)
+        page = await ctx.new_page()
         page.set_default_timeout(12000)
         await page.goto("https://tourvisor.ru/search.php", wait_until="domcontentloaded")
         await page.wait_for_timeout(4000)
@@ -36,8 +40,11 @@ async def main():
             const tip = [...document.querySelectorAll("[class*='Budget'],[class*='Tooltip']")].filter(e=>e.offsetParent!==null).pop();
             return {inputs: inps.slice(0,8), tip: tip ? tip.outerHTML.slice(0,1200) : null};
         }""")
-        print("=== BUDGET ==="); print("inputs:", budget["inputs"]); print("tip:", (budget["tip"] or "")[:900])
-        await page.keyboard.press("Escape"); await page.wait_for_timeout(400)
+        print("=== BUDGET ===")
+        print("inputs:", budget["inputs"])
+        print("tip:", (budget["tip"] or "")[:900])
+        await page.keyboard.press("Escape")
+        await page.wait_for_timeout(400)
 
         # КУРОРТ
         await safe(page.click("xpath=//div[contains(@class,'TVResortTreeFilter')]"), "resort open")
@@ -49,10 +56,12 @@ async def main():
                 .map(e => (e.className||'').split(' ')[0]+' :: '+(e.textContent||'').trim()).slice(0,12);
             return {items: [...new Set(items)], tip: tip ? tip.outerHTML.slice(0,1000) : null};
         }""")
-        print("=== RESORT ===");
-        for it in resort["items"]: print("  ", it)
+        print("=== RESORT ===")
+        for it in resort["items"]:
+            print("  ", it)
         print("tip:", (resort["tip"] or "")[:700])
-        await b.close(); print("DONE")
+        await b.close()
+        print("DONE")
 
 
 if __name__ == "__main__":
