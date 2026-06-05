@@ -305,3 +305,35 @@ def test_runs_user_id_migration(tmp_path):
     assert storage.list_reports(owner_id=1) == []   # под owner-фильтром старый прогон не виден
     assert len(storage.list_reports()) == 1         # без фильтра — виден
     storage.close()
+
+
+def test_wal_enabled(tmp_path):
+    storage = Storage(tmp_path / "t.db")
+    mode = storage._conn.execute("PRAGMA journal_mode").fetchone()[0]
+    assert mode.lower() == "wal"  # одновременные читатели + писатель не блокируются
+    storage.close()
+
+
+def test_touch_session_throttle_and_renew(tmp_path):
+    storage = Storage(tmp_path / "t.db")
+    uid = storage.create_user("u", "p", iters=1000)
+    tok = auth.new_session_token()
+    storage.create_session(uid, tok)
+    th = auth.hash_token(tok)
+
+    def _sess():
+        return storage._conn.execute(
+            "SELECT last_seen, expires_at FROM sessions WHERE token_hash = ?", (th,)).fetchone()
+
+    # last_seen «давно» → touch ПРОДЛЕВАЕТ (не дросселируется)
+    storage._conn.execute("UPDATE sessions SET last_seen = ?, expires_at = ? WHERE token_hash = ?",
+                          ("2020-01-01T00:00:00+00:00", "2020-01-02T00:00:00+00:00", th))
+    storage._conn.commit()
+    storage.touch_session(tok)
+    renewed = _sess()
+    assert renewed["last_seen"] > "2020" and renewed["expires_at"] > "2025"  # сдвинуто в «сейчас»
+
+    # сразу повторно → в пределах интервала, НЕ пишет (дросселирование)
+    storage.touch_session(tok)
+    assert _sess()["last_seen"] == renewed["last_seen"]
+    storage.close()

@@ -158,6 +158,14 @@ class Storage:
         self._conn = sqlite3.connect(self.db_path)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
+        # WAL: одновременные читатели + 1 писатель не блокируют друг друга (актуально с auth —
+        # middleware открывает Storage на каждый запрос параллельно с записью save_report).
+        # busy_timeout: ждать освобождения блокировки до 5с, а не падать «database is locked».
+        try:
+            self._conn.execute("PRAGMA journal_mode = WAL")
+            self._conn.execute("PRAGMA busy_timeout = 5000")
+        except sqlite3.Error:  # напр. :memory: не поддерживает WAL — не критично
+            pass
         self._conn.executescript(_SCHEMA)
         self._migrate()
         self._conn.commit()
@@ -472,15 +480,25 @@ class Storage:
             (auth.hash_token(token), auth.utcnow_iso()),
         ).fetchone())
 
-    def touch_session(self, token: str) -> None:
-        """Скользящее продление по собственному флагу `remember` сессии."""
+    def touch_session(self, token: str, *, min_interval_s: float = 300) -> None:
+        """Скользящее продление по флагу `remember` сессии. Дросселирование: реально пишем не
+        чаще раза в `min_interval_s` (по last_seen), чтобы не делать запись на каждый запрос."""
         th = auth.hash_token(token)
-        row = self._conn.execute("SELECT remember FROM sessions WHERE token_hash = ?", (th,)).fetchone()
+        row = self._conn.execute(
+            "SELECT remember, last_seen FROM sessions WHERE token_hash = ?", (th,)).fetchone()
         if row is None:
             return
-        exp = auth.utcnow() + auth.session_ttl(bool(row["remember"]))
+        if min_interval_s > 0:
+            try:
+                last = datetime.fromisoformat(row["last_seen"])
+                if (auth.utcnow() - last).total_seconds() < min_interval_s:
+                    return  # заходили недавно — не дёргаем запись
+            except Exception:
+                pass
+        now = auth.utcnow()
+        exp = now + auth.session_ttl(bool(row["remember"]))
         self._conn.execute("UPDATE sessions SET expires_at = ?, last_seen = ? WHERE token_hash = ?",
-                           (auth.iso(exp), auth.utcnow_iso(), th))
+                           (auth.iso(exp), auth.iso(now), th))
         self._conn.commit()
 
     def delete_session(self, token: str) -> None:
