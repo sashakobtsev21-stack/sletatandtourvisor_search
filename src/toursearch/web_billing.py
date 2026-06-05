@@ -38,7 +38,7 @@ def register_billing(app: FastAPI, *, db_path: str) -> None:
         sub_active = billing.subscription_active(user)
         return {
             "provider": billing.PROVIDER, "local": False, "is_admin": is_admin,
-            "unlimited": is_admin or sub_active,
+            "unlimited": billing.is_unlimited(user),   # admin/vip/активная подписка
             "subscription_active": sub_active,
             "subscription_until": user.get("paid_until"),
             "searches_left": billing.searches_left(user),  # None → безлимит (admin/подписка)

@@ -68,26 +68,29 @@ def subscription_active(user: "dict | None", *, now: "datetime | None" = None) -
     return until > (now or datetime.now(timezone.utc))
 
 
-def has_search_access(user: "dict | None") -> bool:
-    """Может ли запустить анализ: admin / активная подписка / есть кредиты."""
+def is_unlimited(user: "dict | None") -> bool:
+    """Безлимит по поискам: admin, vip (права как у user, но без ограничений) или активная подписка."""
     if not user:
         return False
-    if user.get("role") == "admin" or subscription_active(user):
-        return True
-    return int(user.get("searches_left") or 0) > 0
+    return user.get("role") in ("admin", "vip") or subscription_active(user)
+
+
+def has_search_access(user: "dict | None") -> bool:
+    """Может ли запустить анализ: безлимит (admin/vip/подписка) или есть кредиты."""
+    if not user:
+        return False
+    return is_unlimited(user) or int(user.get("searches_left") or 0) > 0
 
 
 def consumes_credit(user: "dict | None") -> bool:
-    """Списывать ли кредит за поиск: обычный юзер БЕЗ активной подписки (admin/подписка — нет)."""
-    if not user or user.get("role") == "admin":
+    """Списывать ли кредит за поиск: обычный юзер с кредитами (admin/vip/подписка — нет)."""
+    if not user:
         return False
-    return not subscription_active(user)
+    return not is_unlimited(user)
 
 
 def searches_left(user: "dict | None") -> "int | None":
-    """Остаток для показа. None = безлимит (admin или активная подписка)."""
+    """Остаток для показа. None = безлимит (admin/vip/активная подписка)."""
     if not user:
         return 0
-    if user.get("role") == "admin" or subscription_active(user):
-        return None
-    return int(user.get("searches_left") or 0)
+    return None if is_unlimited(user) else int(user.get("searches_left") or 0)

@@ -8,7 +8,7 @@ import { apiFetch } from "../lib/api.js";
  * users.manage). Список + создание + смена роли/блокировка. Все запросы через apiFetch
  * (cookie-сессия + CSRF). Бэкенд сам не даст убрать последнего админа (409).
  */
-const ROLE_LABEL = { admin: "Админ", user: "Пользователь" };
+const ROLE_LABEL = { admin: "Админ", user: "Пользователь", vip: "VIP (безлимит)" };
 
 export default function AdminUsersPage() {
   const [users, setUsers] = useState(null);
@@ -102,6 +102,7 @@ export default function AdminUsersPage() {
               className="rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-sm text-ink outline-none focus:border-brand/60"
             >
               <option value="user">Пользователь</option>
+              <option value="vip">VIP (безлимит)</option>
               <option value="admin">Админ</option>
             </select>
           </label>
@@ -147,6 +148,7 @@ export default function AdminUsersPage() {
                     className="rounded-lg border border-white/10 bg-white/[0.04] px-2 py-1 text-xs text-ink outline-none focus:border-brand/60"
                   >
                     <option value="user">{ROLE_LABEL.user}</option>
+                    <option value="vip">{ROLE_LABEL.vip}</option>
                     <option value="admin">{ROLE_LABEL.admin}</option>
                   </select>
                 </td>

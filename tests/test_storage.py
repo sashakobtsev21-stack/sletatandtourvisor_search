@@ -414,6 +414,41 @@ def test_jobs_create_owner_and_runs(tmp_path):
     storage.close()
 
 
+def test_role_check_migration_allows_vip(tmp_path):
+    # Симуляция старой БД с CHECK (role IN ('admin','user')) — открытие Storage снимает его.
+    db = str(tmp_path / "old.db")
+    c = sqlite3.connect(db)
+    c.executescript(
+        """CREATE TABLE users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin','user')),
+            is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, last_login TEXT, comment TEXT,
+            plan TEXT NOT NULL DEFAULT 'free', paid_until TEXT, searches_left INTEGER NOT NULL DEFAULT 5);
+        CREATE TABLE sessions (token_hash TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at TEXT NOT NULL, expires_at TEXT NOT NULL, last_seen TEXT NOT NULL, remember INTEGER NOT NULL DEFAULT 0);""")
+    c.execute("INSERT INTO users(username,password_hash,role,created_at,searches_left) VALUES('a','h','admin','2026-01-01',5)")
+    c.execute("INSERT INTO users(username,password_hash,role,created_at,searches_left) VALUES('u','h','user','2026-01-01',3)")
+    c.execute("INSERT INTO sessions(token_hash,user_id,created_at,expires_at,last_seen) VALUES('th',2,'2026-01-01','2099-01-01','2026-01-01')")
+    c.commit()
+    c.close()
+
+    with Storage(db) as s:  # открытие → миграция снимает CHECK
+        assert s.get_user_by_username("a")["role"] == "admin"        # данные целы
+        assert s.get_user_by_username("u")["searches_left"] == 3
+        s.set_role(2, "vip")                                          # раньше падало IntegrityError
+        assert s.get_user_by_id(2)["role"] == "vip"
+        # сессия (FK → users) пережила пересоздание таблицы
+        assert s._conn.execute("SELECT user_id FROM sessions WHERE token_hash='th'").fetchone()["user_id"] == 2
+        assert "CHECK" not in s._conn.execute("SELECT sql FROM sqlite_master WHERE name='users'").fetchone()[0]
+
+
+def test_fresh_db_allows_vip(tmp_path):
+    with Storage(tmp_path / "fresh.db") as s:
+        uid = s.create_user("v", "p", role="vip", iters=1000)
+        assert s.get_user_by_id(uid)["role"] == "vip"               # новая схема без CHECK
+
+
 def test_jobs_interrupted_sweep(tmp_path):
     storage = Storage(tmp_path / "t.db")
     uid = storage.create_user("u", "p", iters=1000)

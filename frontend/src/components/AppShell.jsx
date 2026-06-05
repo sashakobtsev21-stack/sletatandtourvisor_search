@@ -20,7 +20,7 @@ const NAV = [
   { label: "Пользователи", href: "#/admin/users", icon: Users, perm: "users.manage", match: (p) => p.startsWith("/admin/users") },
 ];
 
-const ROLE_LABEL = { admin: "админ", user: "пользователь" };
+const ROLE_LABEL = { admin: "админ", user: "пользователь", vip: "VIP" };
 
 export default function AppShell({ route = "/", children }) {
   const { user, can, logout } = useAuth();
