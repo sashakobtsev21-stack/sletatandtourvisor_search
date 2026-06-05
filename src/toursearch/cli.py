@@ -191,19 +191,20 @@ def passwd(
 
 
 @app.command()
-def grant_sub(
+def grant_credits(
     username: str = typer.Option(..., "--username"),
-    days: int = typer.Option(30, "--days", help="На сколько дней выдать/продлить подписку"),
+    count: int = typer.Option(30, "--count", help="Сколько поисков начислить"),
     db: str = typer.Option("toursearch.db", "--db"),
 ) -> None:
-    """Выдать/продлить подписку пользователю (на N дней от сейчас). Ручная выдача до Ф1."""
+    """Начислить пользователю N поисков (комп-аккаунты / ручная выдача до реальной оплаты)."""
     with Storage(db) as storage:
         user = storage.get_user_by_username(username)
         if not user:
             typer.echo(f"Нет пользователя '{username}'.")
             raise typer.Exit(code=1)
-        storage.grant_subscription(user["id"], days=days)
-    typer.echo(f"Подписка для '{username}' активна ещё {days} дн.")
+        storage.add_credits(user["id"], count)
+        left = storage.get_user_by_id(user["id"])["searches_left"]
+    typer.echo(f"Начислено {count} поисков '{username}'. Остаток: {left}.")
 
 
 @app.command()

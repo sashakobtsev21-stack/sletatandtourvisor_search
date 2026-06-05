@@ -93,6 +93,8 @@ class _SearchSession:
     params: SearchParams
     chosen: "list[str] | None"
     user_id: "int | None" = None                     # владелец прогона (для истории по юзеру)
+    consume: bool = False                             # списывать ли поиск (обычный юзер; не admin/локально)
+    consumed: bool = False                            # списали ли (для возврата при сбое)
     events: list = field(default_factory=list)      # все НЕ-кадровые события (для переигровки)
     frames: dict = field(default_factory=dict)       # провайдер → последний кадр трансляции
     subscribers: set = field(default_factory=set)    # очереди активных SSE-соединений
@@ -350,21 +352,42 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
             ctx["error"] = (f"Сейчас выполняется максимум поисков ({max_concurrent_searches}). "
                             "Повторите чуть позже.")
             return _TEMPLATES.TemplateResponse(request, "index.html", ctx)
+        # Списываем поиск (обычный юзер; middleware уже отсёк нулевой остаток 402-м, но
+        # списываем атомарно здесь). Возврат — при гейте/сбое (work не сделана).
+        u = request.state.user if hasattr(request.state, "user") else None
+        uid = current_user_id(request)
+        consumed = False
+        if u and u.get("role") != "admin":
+            with Storage(db_path) as storage:
+                consumed = storage.try_consume_search(uid)
+            if not consumed:
+                ctx = _form_ctx()
+                ctx["error"] = "Закончились поиски — пополните на странице «Подписка»."
+                return _TEMPLATES.TemplateResponse(request, "index.html", ctx)
+
         active_runs["n"] += 1
         try:
             # Жёсткий health-check гейт перед прогоном
             health = await run_health_check(providers=chosen, headless=True)
             if not gate_passed(health):
+                if consumed:
+                    with Storage(db_path) as storage:
+                        storage.refund_search(uid)
                 return _TEMPLATES.TemplateResponse(
                     request, "gate_failed.html", {"health": health}
                 )
 
             report = await run_search(params, providers=chosen, headless=True)
             with Storage(db_path) as storage:
-                run_id = storage.save_report(report, user_id=current_user_id(request))
+                run_id = storage.save_report(report, user_id=uid)
             return _TEMPLATES.TemplateResponse(
                 request, "results.html", {"report": report, "run_id": run_id}
             )
+        except Exception:
+            if consumed:
+                with Storage(db_path) as storage:
+                    storage.refund_search(uid)
+            raise
         finally:
             active_runs["n"] = max(0, active_runs["n"] - 1)
 
@@ -400,12 +423,24 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
         async def on_frame(name: str, data: str) -> None:
             _emit_frame(session, name, data)
 
+        def _refund() -> None:
+            # Вернуть списанный поиск, если работа не была сделана (гейт/сбой/отмена). При
+            # штатном done НЕ зовём: «туров нет» = поиск отработал, попытка израсходована.
+            if session.consumed and session.user_id is not None:
+                try:
+                    with Storage(db_path) as s:
+                        s.refund_search(session.user_id)
+                    session.consumed = False
+                except Exception:
+                    pass
+
         try:
             _emit(session, {"type": "log", "level": "INFO", "msg": "Проверяю формы площадок (health-check)…"})
             health = await run_health_check(providers=session.chosen, headless=True)
             if not gate_passed(health):
                 miss = {k: (v.missing or v.error) for k, v in health.items()}
                 _emit(session, {"type": "gate_failed", "detail": miss})
+                _refund()  # гейт не пустил — поиск не запускался
                 return
             _emit(session, {"type": "log", "level": "INFO", "msg": "Гейт пройден. Запускаю поиск на площадках…"})
             report = await run_search(session.params, providers=session.chosen, headless=True, on_frame=on_frame)
@@ -416,8 +451,10 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
             # Остановка по запросу пользователя — штатный финал. Не пробрасываем дальше:
             # внешнего ожидающего нет, а финал подписчикам уже отправлен.
             _emit(session, {"type": "cancelled", "msg": "Поиск остановлен по запросу."})
+            _refund()  # отменили — результата нет, поиск возвращаем
         except Exception as exc:  # noqa: BLE001
             _emit(session, {"type": "error", "msg": f"{type(exc).__name__}: {exc}"})
+            _refund()  # системный сбой — поиск возвращаем
         finally:
             active_runs["n"] = max(0, active_runs["n"] - 1)  # освободить слот (парно к гейту)
             tlog.removeHandler(handler)
@@ -463,8 +500,11 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
         except ValueError as exc:
             return {"error": f"Некорректные параметры поиска: {exc}"}
         token = uuid.uuid4().hex
-        _searches[token] = _SearchSession(params=params, chosen=chosen,
-                                          user_id=current_user_id(request))
+        # Списываем поиск только у обычного юзера в мультиюзере (не у admin и не локально).
+        u = request.state.user if hasattr(request.state, "user") else None
+        _searches[token] = _SearchSession(
+            params=params, chosen=chosen, user_id=current_user_id(request),
+            consume=bool(u and u.get("role") != "admin"))
         _cap_tokens(_searches)
         return {"token": token}
 
@@ -499,8 +539,19 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
                     session.done = True
                     _schedule_session_cleanup(token)
                 else:
-                    active_runs["n"] += 1
-                    session.task = asyncio.create_task(_run_search_task(token, session))
+                    # Списываем 1 поиск АТОМАРНО (только обычный юзер). Если не осталось — не
+                    # запускаем (страховка от гонки / прямого обращения мимо prepare-проверки).
+                    if session.consume:
+                        with Storage(db_path) as s:
+                            session.consumed = s.try_consume_search(session.user_id)
+                    if session.consume and not session.consumed:
+                        _emit(session, {"type": "error",
+                              "msg": "Закончились поиски — пополните на вкладке «Подписка»."})
+                        session.done = True
+                        _schedule_session_cleanup(token)
+                    else:
+                        active_runs["n"] += 1
+                        session.task = asyncio.create_task(_run_search_task(token, session))
 
             # Подписываемся и АТОМАРНО (между add и снимком нет await/yield — событийный
             # цикл не вклинится) снимаем уже накопленные события: всё до снимка отдадим

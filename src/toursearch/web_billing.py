@@ -22,14 +22,14 @@ def register_billing(app: FastAPI, *, db_path: str) -> None:
     async def billing_status(request: Request):
         user = getattr(request.state, "user", None)
         plans = billing.public_plans()
-        if user is None:  # локальный режим — оплата не нужна, всё открыто
-            return {"provider": billing.PROVIDER, "local": True, "active": True,
-                    "plan": None, "paid_until": None, "plans": plans}
+        if user is None:  # локальный режим — оплата не нужна
+            return {"provider": billing.PROVIDER, "local": True, "unlimited": True,
+                    "searches_left": None, "plans": plans}
+        is_admin = user.get("role") == "admin"
         return {
-            "provider": billing.PROVIDER, "local": False,
-            "active": billing.access_allowed(user),
-            "is_admin": user.get("role") == "admin",
-            "plan": user.get("plan"), "paid_until": user.get("paid_until"),
+            "provider": billing.PROVIDER, "local": False, "is_admin": is_admin,
+            "unlimited": is_admin,
+            "searches_left": billing.searches_left(user),  # None → безлимит (admin)
             "plans": plans,
         }
 
@@ -44,11 +44,11 @@ def register_billing(app: FastAPI, *, db_path: str) -> None:
             return JSONResponse({"error": "Неизвестный тариф."}, status_code=400)
         with Storage(db_path) as s:
             pid = s.create_payment(user["id"], provider=billing.PROVIDER, plan=plan,
-                                   amount=spec["amount"], days=spec["days"])
+                                   amount=spec["amount"], credits=spec["credits"])
         # stub: подтверждение внутри приложения (confirmation_url не нужен).
         # Ф1/ЮKassa: здесь будет внешний confirmation_url, куда фронт сделает redirect.
         return {"payment_id": pid, "provider": billing.PROVIDER, "confirmation_url": None,
-                "amount": spec["amount"], "days": spec["days"]}
+                "amount": spec["amount"], "credits": spec["credits"]}
 
     @app.post("/api/billing/mock/{payment_id}/confirm")
     async def billing_mock_confirm(request: Request, payment_id: int):
@@ -64,5 +64,5 @@ def register_billing(app: FastAPI, *, db_path: str) -> None:
             p = s.get_payment(payment_id)
             if p is None or p["user_id"] != user["id"]:
                 raise HTTPException(status_code=404, detail="Платёж не найден")
-            p = s.complete_payment(payment_id)  # идемпотентно: succeeded + продление
-        return {"ok": True, "status": p["status"], "plan": p["plan"], "days": p["days"]}
+            p = s.complete_payment(payment_id)  # идемпотентно: succeeded + начисление поисков
+        return {"ok": True, "status": p["status"], "credits": p["credits"]}

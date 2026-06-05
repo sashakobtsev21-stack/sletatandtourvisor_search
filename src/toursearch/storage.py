@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -124,8 +124,9 @@ CREATE TABLE IF NOT EXISTS users (
     created_at    TEXT NOT NULL,
     last_login    TEXT,
     comment       TEXT,
-    plan          TEXT NOT NULL DEFAULT 'free',     -- SaaS-подписка: тариф
-    paid_until    TEXT                              -- подписка активна до (UTC ISO); NULL = нет
+    plan          TEXT NOT NULL DEFAULT 'free',     -- (legacy — не используется в кредитной модели)
+    paid_until    TEXT,                             -- (legacy)
+    searches_left INTEGER NOT NULL DEFAULT 5        -- остаток поисков (бесплатные 5 + купленные)
 );
 CREATE TABLE IF NOT EXISTS sessions (
     token_hash  TEXT PRIMARY KEY,                -- sha256(token); сам токен — только в cookie
@@ -139,7 +140,7 @@ CREATE INDEX IF NOT EXISTS idx_users_username   ON users(username);
 CREATE INDEX IF NOT EXISTS idx_sessions_user    ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 
--- Платежи за подписку (SaaS). При успехе продлевают users.paid_until на `days`.
+-- Платежи за пакеты поисков. При успехе добавляют `credits` к users.searches_left.
 -- provider='stub' — имитация; в Ф1 добавится 'yookassa'. provider_payment_id — id у провайдера.
 CREATE TABLE IF NOT EXISTS payments (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -147,7 +148,7 @@ CREATE TABLE IF NOT EXISTS payments (
     provider            TEXT NOT NULL,
     plan                TEXT NOT NULL,
     amount              INTEGER NOT NULL,        -- рубли
-    days                INTEGER NOT NULL,        -- на сколько продлевает подписку
+    credits             INTEGER NOT NULL,        -- сколько поисков добавляет
     status              TEXT NOT NULL DEFAULT 'pending',   -- pending / succeeded / canceled
     created_at          TEXT NOT NULL,
     paid_at             TEXT,
@@ -215,6 +216,11 @@ class Storage:
                 self._conn.execute("ALTER TABLE users ADD COLUMN plan TEXT NOT NULL DEFAULT 'free'")
             if "paid_until" not in user_cols:
                 self._conn.execute("ALTER TABLE users ADD COLUMN paid_until TEXT")
+            if "searches_left" not in user_cols:  # кредитная модель: остаток поисков
+                self._conn.execute("ALTER TABLE users ADD COLUMN searches_left INTEGER NOT NULL DEFAULT 5")
+        pay_cols = {row[1] for row in self._conn.execute("PRAGMA table_info(payments)")}
+        if pay_cols and "credits" not in pay_cols:  # было days (время) → стало credits (поиски)
+            self._conn.execute("ALTER TABLE payments ADD COLUMN credits INTEGER NOT NULL DEFAULT 0")
         self._conn.commit()
 
     def close(self) -> None:
@@ -486,36 +492,34 @@ class Storage:
                            (auth.utcnow_iso(), user_id))
         self._conn.commit()
 
-    def grant_subscription(self, user_id: int, *, days: "int | None" = None,
-                           until: "str | None" = None, plan: str = "paid") -> None:
-        """Выдать/ПРОДЛИТЬ подписку. С `days` продлевает от max(сейчас, текущий paid_until) —
-        повторная оплата стэкается, а не обнуляет остаток. `until` — задать явный срок (UTC ISO)."""
-        if until is None and days is not None:
-            base = auth.utcnow()
-            row = self._conn.execute("SELECT paid_until FROM users WHERE id = ?", (user_id,)).fetchone()
-            if row and row["paid_until"]:
-                try:
-                    cur = datetime.fromisoformat(row["paid_until"])
-                    if cur.tzinfo is None:
-                        cur = cur.replace(tzinfo=timezone.utc)
-                    if cur > base:
-                        base = cur
-                except ValueError:
-                    pass
-            until = auth.iso(base + timedelta(days=days))
-        self._conn.execute("UPDATE users SET plan = ?, paid_until = ? WHERE id = ?",
-                           (plan, until, user_id))
+    def add_credits(self, user_id: int, n: int) -> None:
+        """Добавить n поисков к остатку (покупка / возврат / ручная выдача)."""
+        self._conn.execute("UPDATE users SET searches_left = searches_left + ? WHERE id = ?",
+                           (n, user_id))
         self._conn.commit()
 
-    # --- платежи за подписку ---
+    def try_consume_search(self, user_id: int) -> bool:
+        """АТОМАРНО списать 1 поиск. True — списали (был остаток), False — поисков нет. Условный
+        UPDATE → два параллельных поиска не проскочат по одному последнему остатку."""
+        cur = self._conn.execute(
+            "UPDATE users SET searches_left = searches_left - 1 WHERE id = ? AND searches_left > 0",
+            (user_id,))
+        self._conn.commit()
+        return cur.rowcount == 1
+
+    def refund_search(self, user_id: int) -> None:
+        """Вернуть 1 поиск (системный сбой/отмена — работа не сделана)."""
+        self.add_credits(user_id, 1)
+
+    # --- платежи за пакеты поисков ---
 
     def create_payment(self, user_id: int, *, provider: str, plan: str,
-                       amount: int, days: int) -> int:
+                       amount: int, credits: int) -> int:
         """Создать платёж в статусе pending, вернуть его id."""
         cur = self._conn.execute(
-            "INSERT INTO payments (user_id, provider, plan, amount, days, status, created_at) "
+            "INSERT INTO payments (user_id, provider, plan, amount, credits, status, created_at) "
             "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
-            (user_id, provider, plan, amount, days, auth.utcnow_iso()),
+            (user_id, provider, plan, amount, credits, auth.utcnow_iso()),
         )
         self._conn.commit()
         return int(cur.lastrowid)
@@ -525,8 +529,8 @@ class Storage:
             "SELECT * FROM payments WHERE id = ?", (payment_id,)).fetchone())
 
     def complete_payment(self, payment_id: int) -> "dict | None":
-        """Идемпотентно отметить платёж успешным и ПРОДЛИТЬ подписку на его `days`. Повторный
-        вызов ничего не продлевает (условный UPDATE по статусу). None — если платежа нет."""
+        """Идемпотентно отметить платёж успешным и НАЧИСЛИТЬ его `credits` поисков. Повторный
+        вызов ничего не начисляет (условный UPDATE по статусу). None — если платежа нет."""
         p = self.get_payment(payment_id)
         if p is None:
             return None
@@ -535,8 +539,8 @@ class Storage:
             (auth.utcnow_iso(), payment_id),
         )
         self._conn.commit()
-        if cur.rowcount == 1:  # переход pending→succeeded сделали именно мы → продлеваем один раз
-            self.grant_subscription(p["user_id"], days=p["days"], plan=p["plan"])
+        if cur.rowcount == 1:  # переход pending→succeeded сделали именно мы → начисляем один раз
+            self.add_credits(p["user_id"], int(p["credits"]))
         return self.get_payment(payment_id)
 
     def create_session(self, user_id: int, token: str, *, remember: bool = False) -> None:
