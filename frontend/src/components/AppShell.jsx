@@ -70,6 +70,23 @@ export default function AppShell({ route = "/", children }) {
             })}
           </nav>
 
+          {/* Остаток поисков (мультиюзер, не admin) — кликабельная плашка ведёт на «Подписку» */}
+          {user?.username && typeof user.searches_left === "number" && (
+            <a
+              href="#/billing"
+              title="Осталось поисков — пополнить"
+              className={[
+                "ml-2 hidden items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-sm font-semibold transition-colors sm:flex",
+                user.searches_left > 0
+                  ? "border-white/10 text-muted hover:bg-white/5 hover:text-ink"
+                  : "border-amber-400/30 bg-amber-400/10 text-amber-300",
+              ].join(" ")}
+            >
+              <CreditCard className="size-4" />
+              {user.searches_left} поиск.
+            </a>
+          )}
+
           {/* Кто вошёл + выход (в мультиюзере; в локальном режиме username пуст → скрыто) */}
           {user?.username && (
             <div className="ml-2 flex items-center gap-2 border-l border-white/10 pl-3">

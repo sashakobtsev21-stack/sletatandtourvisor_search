@@ -339,17 +339,18 @@ def test_touch_session_throttle_and_renew(tmp_path):
     storage.close()
 
 
-def test_grant_subscription(tmp_path):
-    from toursearch import billing
-
+def test_credits_consume_refund_add(tmp_path):
     storage = Storage(tmp_path / "t.db")
     uid = storage.create_user("u", "p", iters=1000)
-    u = storage.get_user_by_id(uid)
-    assert u["plan"] == "free" and u["paid_until"] is None       # по умолчанию подписки нет
-    assert billing.subscription_active(u) is False
+    assert storage.get_user_by_id(uid)["searches_left"] == 5      # 5 бесплатных по умолчанию
 
-    storage.grant_subscription(uid, days=30)
-    u = storage.get_user_by_id(uid)
-    assert u["plan"] == "paid" and u["paid_until"] is not None
-    assert billing.subscription_active(u) is True                # активна
+    for _ in range(5):                                           # списываем все 5
+        assert storage.try_consume_search(uid) is True
+    assert storage.try_consume_search(uid) is False              # больше нет — не уходит в минус
+    assert storage.get_user_by_id(uid)["searches_left"] == 0
+
+    storage.refund_search(uid)                                   # возврат при сбое
+    assert storage.get_user_by_id(uid)["searches_left"] == 1
+    storage.add_credits(uid, 30)                                 # покупка стэкается
+    assert storage.get_user_by_id(uid)["searches_left"] == 31
     storage.close()

@@ -151,9 +151,12 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
             perm = _required_permission(path)
             if perm and not auth.has_permission(request.state.user["role"], perm):
                 return JSONResponse({"error": "Недостаточно прав."}, status_code=403)
-            # Платная функция (запуск анализа) требует активной подписки (admin — байпас).
-            if perm == billing.PAID_PERMISSION and not billing.access_allowed(request.state.user):
-                return JSONResponse({"error": "Нужна активная подписка."}, status_code=402)
+            # Запуск анализа требует остатка поисков (admin — без ограничений). Отмену
+            # (/search/cancel) не гейтим: остаток мог обнулиться уже запущенным поиском.
+            if (perm == billing.PAID_PERMISSION and not path.endswith("/cancel")
+                    and not billing.has_search_access(request.state.user)):
+                return JSONResponse({"error": "Закончились поиски — пополните на вкладке «Подписка»."},
+                                    status_code=402)
         # local → открыто (Origin мутирующих уже проверён выше)
 
         response = await call_next(request)
@@ -223,7 +226,8 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
         if user is None:
             raise HTTPException(status_code=401, detail="Требуется вход")
         return {"mode": "multiuser", "username": user["username"], "role": user["role"],
-                "permissions": auth.permissions_for(user["role"])}
+                "permissions": auth.permissions_for(user["role"]),
+                "searches_left": billing.searches_left(user)}  # None → безлимит (admin)
 
     @app.get("/api/users")
     async def api_users_list():

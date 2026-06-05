@@ -1,32 +1,30 @@
-"""Тесты логики подписки billing.py (чистая, без БД)."""
-
-from datetime import datetime, timedelta, timezone
+"""Тесты логики кредитной модели billing.py (чистая, без БД)."""
 
 from toursearch import billing
 
 
-def _u(role="user", paid_until=None):
-    return {"role": role, "paid_until": paid_until}
+def _u(role="user", searches_left=0):
+    return {"role": role, "searches_left": searches_left}
 
 
-def test_subscription_active():
-    now = datetime(2026, 6, 5, tzinfo=timezone.utc)
-    future = (now + timedelta(days=1)).isoformat()
-    past = (now - timedelta(days=1)).isoformat()
-    assert billing.subscription_active(_u(paid_until=future), now=now) is True
-    assert billing.subscription_active(_u(paid_until=past), now=now) is False
-    assert billing.subscription_active(_u(paid_until=None), now=now) is False
-    assert billing.subscription_active(None, now=now) is False
-    assert billing.subscription_active(_u(paid_until="мусор"), now=now) is False
+def test_has_search_access():
+    assert billing.has_search_access(_u(searches_left=3)) is True
+    assert billing.has_search_access(_u(searches_left=0)) is False
+    assert billing.has_search_access(None) is False
+    assert billing.has_search_access(_u(role="admin", searches_left=0)) is True  # admin — безлимит
 
 
-def test_naive_paid_until_treated_as_utc():
-    now = datetime(2026, 6, 5, 12, 0, 0, tzinfo=timezone.utc)
-    assert billing.subscription_active(_u(paid_until="2026-06-06T12:00:00"), now=now) is True
+def test_searches_left():
+    assert billing.searches_left(_u(searches_left=4)) == 4
+    assert billing.searches_left(_u(role="admin", searches_left=0)) is None      # безлимит
+    assert billing.searches_left(None) == 0
 
 
-def test_access_allowed_admin_bypass():
-    assert billing.access_allowed(_u(role="admin", paid_until=None)) is True   # admin — всегда
-    assert billing.access_allowed(_u(role="user", paid_until=None)) is False   # user без подписки
-    future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
-    assert billing.access_allowed(_u(role="user", paid_until=future)) is True  # user с подпиской
+def test_free_constants_and_plans():
+    assert billing.FREE_CREDITS == 5 and billing.ANON_CREDITS == 3
+    p = billing.public_plans()
+    assert set(p) == {"30", "100", "500", "1000"}
+    assert p["500"]["credits"] == 500 and p["500"]["amount"] == 1999
+    # лесенка монотонна по цене за поиск
+    per = [p[k]["amount"] / p[k]["credits"] for k in ("30", "100", "500", "1000")]
+    assert per == sorted(per, reverse=True)

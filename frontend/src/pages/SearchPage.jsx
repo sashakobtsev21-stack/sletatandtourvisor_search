@@ -8,6 +8,7 @@ import { takeRepeat } from "../lib/repeatStore.js";
 import { PROVIDERS } from "../lib/constants.js";
 import { progressFloorForLog, isSearchStart, parseProviderDone } from "../lib/searchEvents.js";
 import { apiFetch } from "../lib/api.js";
+import { useAuth } from "../lib/auth.jsx";
 
 let logSeq = 0;
 const now = () => new Date().toTimeString().slice(0, 8);
@@ -63,6 +64,7 @@ export default function SearchPage() {
   const creepRef = useRef(null); // таймер плавного роста прогресса во время поиска
   // Параметры повтора прогона (из истории) — читаем один раз при монтировании.
   const [repeatInitial] = useState(() => takeRepeat());
+  const { refresh: refreshAuth } = useAuth(); // обновить счётчик поисков в шапке по завершении
 
   useEffect(() => {
     statusRef.current = status;
@@ -161,6 +163,7 @@ export default function SearchPage() {
     activeRun = null; // прогон завершён — нечего восстанавливать
     setStatus(result);
     if (result === "done") setProgress(100);
+    refreshAuth(); // поиск списан/возвращён → обновить остаток в шапке
   }
 
   // Создать (или пересоздать) SSE-поток для токена. Идемпотентно по состоянию: на каждом

@@ -1,51 +1,49 @@
-"""Подписки (SaaS): чистая логика активности доступа. Провайдер оплаты (ЮKassa) и запись
-платежей появятся в Ф1 — здесь только проверка «можно ли пользоваться платной функцией».
+"""Оплата по модели КРЕДИТОВ (поисков): у пользователя счётчик `searches_left`, каждый запуск
+анализа списывает 1; покупка пакета добавляет N. admin — без ограничений. Чистая логика
+доступа здесь; провайдер оплаты (заглушка 'stub', далее ЮKassa) — в web_billing.py.
 См. docs/BILLING_PLAN.md.
 """
 
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
 
-# Право, для которого нужна активная подписка (граница «бесплатно/платно»).
+# Право, которое расходует поиски (граница «бесплатно/платно»).
 PAID_PERMISSION = "search.run"
 
-# Провайдер оплаты: 'stub' — имитация (без денег, для локальной проверки потока);
-# 'yookassa' появится в Ф1. Переключается env TOURSEARCH_PAYMENT_PROVIDER.
+# Бесплатные поиски: 5 на аккаунт (пожизненно) и 3 для гостя (без входа).
+FREE_CREDITS = 5
+ANON_CREDITS = 3
+
+# Провайдер оплаты: 'stub' — имитация (без денег); 'yookassa' появится позже.
 PROVIDER = (os.environ.get("TOURSEARCH_PAYMENT_PROVIDER") or "stub").strip()
 
-# Тарифы: сколько стоит (₽) и на сколько дней продлевает подписку.
+# Тарифы: цена (₽) и сколько поисков добавляет. Лесенка монотонна по цене за поиск.
 PLANS: dict = {
-    "month": {"title": "Подписка на месяц", "amount": 990, "days": 30},
-    "year": {"title": "Подписка на год", "amount": 9900, "days": 365},
+    "30": {"title": "30 поисков", "amount": 499, "credits": 30},
+    "100": {"title": "100 поисков", "amount": 999, "credits": 100},
+    "500": {"title": "500 поисков", "amount": 1999, "credits": 500},
+    "1000": {"title": "1000 поисков", "amount": 2999, "credits": 1000},
 }
 
 
 def public_plans() -> dict:
-    """Тарифы для отдачи на фронт (то же содержимое; отдельная функция — на случай фильтрации)."""
     return {k: dict(v) for k, v in PLANS.items()}
 
 
-def subscription_active(user: "dict | None", *, now: "datetime | None" = None) -> bool:
-    """True, если у пользователя активная подписка (`paid_until` в будущем). UTC-ISO строка;
-    наивную (без зоны) трактуем как UTC."""
+def has_search_access(user: "dict | None") -> bool:
+    """Может ли пользователь запустить анализ: admin — всегда, иначе — есть остаток поисков."""
     if not user:
         return False
-    pu = user.get("paid_until")
-    if not pu:
-        return False
-    try:
-        until = datetime.fromisoformat(pu)
-    except (ValueError, TypeError):
-        return False
-    if until.tzinfo is None:
-        until = until.replace(tzinfo=timezone.utc)
-    return until > (now or datetime.now(timezone.utc))
-
-
-def access_allowed(user: "dict | None") -> bool:
-    """Может ли пользователь пользоваться платной функцией: admin — всегда, иначе — активная подписка."""
-    if user and user.get("role") == "admin":
+    if user.get("role") == "admin":
         return True
-    return subscription_active(user)
+    return int(user.get("searches_left") or 0) > 0
+
+
+def searches_left(user: "dict | None") -> "int | None":
+    """Остаток поисков для показа. None — безлимит (admin)."""
+    if not user:
+        return 0
+    if user.get("role") == "admin":
+        return None
+    return int(user.get("searches_left") or 0)

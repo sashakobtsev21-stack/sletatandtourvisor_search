@@ -104,38 +104,43 @@ def test_admin_sees_tests_and_users(tmp_path):
 # --------------------------- CSRF ---------------------------
 
 def test_csrf_required_for_mutations(tmp_path):
-    db = _seed(tmp_path, [("u", "secret1", "user")])
-    with Storage(db) as s:  # подписка — чтобы тест был про CSRF, а не про гейт оплаты (402)
-        s.grant_subscription(s.get_user_by_username("u")["id"], days=30)
-    client = TestClient(create_app(db_path=db))
+    # у свежего юзера 5 бесплатных поисков по умолчанию → тест именно про CSRF, не про 402
+    client = TestClient(create_app(db_path=_seed(tmp_path, [("u", "secret1", "user")])))
     _login(client, "u", "secret1")
     assert client.post("/search/prepare", data=_FORM).status_code == 403  # нет X-CSRF-Token
     r = client.post("/search/prepare", data=_FORM, headers=_csrf(client))
     assert r.status_code == 200 and "token" in r.json()
 
 
-# --------------------------- подписка (SaaS-гейт на запуск анализа) ---------------------------
+# --------------------------- кредитный гейт на запуск анализа ---------------------------
 
-def test_subscription_gates_search(tmp_path):
+def test_zero_credits_blocks_search(tmp_path):
     db = _seed(tmp_path, [("u", "secret1", "user")])
+    with Storage(db) as s:  # обнулить остаток поисков
+        uid = s.get_user_by_username("u")["id"]
+        s._conn.execute("UPDATE users SET searches_left = 0 WHERE id = ?", (uid,))
+        s._conn.commit()
     client = TestClient(create_app(db_path=db))
     _login(client, "u", "secret1")
     h = _csrf(client)
-    # без подписки запуск анализа → 402 (CSRF корректный — режет именно оплата)
-    assert client.post("/search/prepare", data=_FORM, headers=h).status_code == 402
-    assert client.get("/api/runs").status_code == 200  # история бесплатна — доступна
+    assert client.post("/search/prepare", data=_FORM, headers=h).status_code == 402  # нет поисков
+    assert client.get("/api/runs").status_code == 200  # история бесплатна
 
-    with Storage(db) as s:  # выдать подписку
-        s.grant_subscription(s.get_user_by_username("u")["id"], days=30)
+    with Storage(db) as s:
+        s.add_credits(uid, 1)  # начислили 1
     r = client.post("/search/prepare", data=_FORM, headers=h)
     assert r.status_code == 200 and "token" in r.json()  # теперь пускает
 
 
-def test_admin_bypasses_subscription(tmp_path):
-    client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))
+def test_admin_bypasses_credits(tmp_path):
+    db = _seed(tmp_path, [("admin", "secret1", "admin")])
+    with Storage(db) as s:  # даже с нулём — admin без ограничений
+        s._conn.execute("UPDATE users SET searches_left = 0 WHERE role = 'admin'")
+        s._conn.commit()
+    client = TestClient(create_app(db_path=db))
     _login(client, "admin", "secret1")
     r = client.post("/search/prepare", data=_FORM, headers=_csrf(client))
-    assert r.status_code == 200 and "token" in r.json()  # admin без подписки — пускает
+    assert r.status_code == 200 and "token" in r.json()
 
 
 # --------------------------- управление пользователями ---------------------------
