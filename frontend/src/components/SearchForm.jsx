@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   Plane, Globe2, CalendarDays, MoonStar, Users, Baby,
   Wallet, Building2, Search, ChevronRight, Hotel, Sparkles,
-  ShieldCheck, ChevronDown,
+  ShieldCheck, ChevronDown, Plus, X,
 } from "lucide-react";
 import GlassCard from "./ui/GlassCard.jsx";
 import { Field, Input, Select } from "./ui/Field.jsx";
@@ -37,8 +37,10 @@ const defaultTo = addDays(minDate, 7);
  * props.onSubmit(payload) — вызывается с собранными параметрами при сабмите.
  * props.isSearching — блокирует кнопку, пока идёт поиск.
  * props.initial — параметры для предзаполнения (повтор прогона из истории).
+ * props.batch — режим батч-анализа: «Куда?» становится мультивыбором направлений (чипы),
+ *   кнопка — «Запустить анализ», payload содержит destinations[] вместо destination_country.
  */
-export default function SearchForm({ onSubmit, isSearching = false, initial = null }) {
+export default function SearchForm({ onSubmit, isSearching = false, initial = null, batch = false }) {
   // Справочники с бэкенда (/api/refdata); до ответа — фолбэк-константы.
   const { departureCities, countries, operators: operatorOptions, providers: providerOptions,
           experimentalProviders = [], providerModes = {} } = useRefData();
@@ -53,6 +55,8 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
   const [dateTo, setDateTo] = useState(initial?.date_to ?? defaultTo);
   const [nightsMin, setNightsMin] = useState(initial?.nights_min ?? 7);
   const [nightsMax, setNightsMax] = useState(initial?.nights_max ?? 10);
+  const [destinations, setDestinations] = useState([]); // батч: выбранные направления (чипы)
+  const [destPick, setDestPick] = useState("");          // батч: страна в селекте «добавить»
 
   // Ночи: «от» не больше «до» — при изменении одного подтягиваем второй.
   const onNightsMin = (v) => {
@@ -123,13 +127,19 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
   const toggleOperator = (op) =>
     setOperators((prev) => (prev.includes(op) ? prev.filter((x) => x !== op) : [...prev, op]));
 
+  // Батч: добавить/убрать направление из списка чипов.
+  const addDest = () => {
+    setDestinations((prev) => (destPick && !prev.includes(destPick) ? [...prev, destPick] : prev));
+    setDestPick("");
+  };
+  const removeDest = (c) => setDestinations((prev) => prev.filter((x) => x !== c));
+
   const handleSubmit = (e) => {
     e.preventDefault();
     const data = new FormData(e.currentTarget);
-    onSubmit?.({
+    const shared = {
       mode,
       departure_city: data.get("departure_city"),
-      destination_country: data.get("destination_country"),
       date_from: data.get("date_from"),
       date_to: data.get("date_to"),
       // В отелях контрола ночей нет (ночи = даты проживания) — шлём валидные
@@ -143,7 +153,10 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
       charter_only: data.get("charter_only") === "on",
       direct_only: data.get("direct_only") === "on",
       providers,
-    });
+    };
+    // Батч → много направлений; одиночный поиск → одна страна.
+    if (batch) onSubmit?.({ ...shared, destinations });
+    else onSubmit?.({ ...shared, destination_country: data.get("destination_country") });
   };
 
   return (
@@ -162,8 +175,14 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
           <Sparkles className="size-5 text-white" />
         </span>
         <div>
-          <h2 className="text-xl font-extrabold tracking-tight text-white">Параметры поиска</h2>
-          <p className="text-xs text-muted">Сравним {providerOptions.length} площадки за один прогон</p>
+          <h2 className="text-xl font-extrabold tracking-tight text-white">
+            {batch ? "Батч-анализ" : "Параметры поиска"}
+          </h2>
+          <p className="text-xs text-muted">
+            {batch
+              ? "Один набор параметров — сразу по многим направлениям"
+              : `Сравним ${providerOptions.length} площадки за один прогон`}
+          </p>
         </div>
       </motion.div>
 
@@ -207,12 +226,61 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
           </Field>
         )}
 
-        <Field label="Куда?" icon={Globe2} htmlFor="destination_country">
-          <Select id="destination_country" name="destination_country" icon searchable defaultValue={initial?.destination_country ?? "Турция"}>
-            {countries.map((c) => <option key={c}>{c}</option>)}
-          </Select>
-        </Field>
+        {!batch && (
+          <Field label="Куда?" icon={Globe2} htmlFor="destination_country">
+            <Select id="destination_country" name="destination_country" icon searchable defaultValue={initial?.destination_country ?? "Турция"}>
+              {countries.map((c) => <option key={c}>{c}</option>)}
+            </Select>
+          </Field>
+        )}
       </div>
+
+      {/* Батч: мультивыбор направлений — селект «Добавить» + чипы выбранного с удалением. */}
+      {batch && (
+        <motion.div variants={fadeUp} className="mt-4">
+          <label className="mb-1.5 block text-xs font-medium tracking-wide text-muted">
+            Направления{" "}
+            <span className="text-muted/60">
+              {destinations.length ? `выбрано: ${destinations.length}` : "(минимум 2)"}
+            </span>
+          </label>
+          <div className="flex gap-2">
+            <div className="flex-1">
+              <Select icon searchable value={destPick} onChange={(e) => setDestPick(e.target.value)}>
+                <option value="">— выберите страну —</option>
+                {countries.filter((c) => !destinations.includes(c)).map((c) => <option key={c}>{c}</option>)}
+              </Select>
+            </div>
+            <button
+              type="button"
+              onClick={addDest}
+              disabled={!destPick}
+              className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.05] px-4 text-sm font-semibold text-ink transition-colors hover:bg-white/[0.09] disabled:opacity-40"
+            >
+              <Plus className="size-4" /> Добавить
+            </button>
+          </div>
+          <div className="mt-2 flex min-h-[2.75rem] flex-wrap gap-2 rounded-xl border border-white/5 bg-white/[0.02] p-2.5">
+            {destinations.length === 0 && (
+              <span className="self-center px-1 text-xs text-muted">Пока не выбрано ни одного направления</span>
+            )}
+            {destinations.map((c) => (
+              <span key={c} className="flex items-center gap-1.5 rounded-full border border-brand/40 bg-brand/15 px-3 py-1.5 text-xs font-semibold text-white">
+                <Globe2 className="size-3.5" />
+                {c}
+                <button
+                  type="button"
+                  onClick={() => removeDest(c)}
+                  title="Убрать направление"
+                  className="ml-0.5 rounded-full p-0.5 text-white/70 transition-colors hover:bg-white/15 hover:text-white"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </span>
+            ))}
+          </div>
+        </motion.div>
+      )}
 
       {/* Даты. В отелях это даты проживания (заезд→выезд) — ими же задаются ночи. */}
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -404,7 +472,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
       <motion.button
         variants={fadeUp}
         type="submit"
-        disabled={isSearching || providers.length === 0}
+        disabled={isSearching || providers.length === 0 || (batch && destinations.length < 2)}
         whileHover={{ scale: isSearching ? 1 : 1.02 }}
         whileTap={{ scale: isSearching ? 1 : 0.98 }}
         className={[
@@ -418,12 +486,12 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
         {isSearching ? (
           <>
             <span className="size-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-            Идёт поиск…
+            {batch ? "Запускаю…" : "Идёт поиск…"}
           </>
         ) : (
           <>
             <Search className="size-5" />
-            Сравнить
+            {batch ? `Запустить анализ${destinations.length ? ` (${destinations.length})` : ""}` : "Сравнить"}
             <ChevronRight className="size-4 transition-transform group-hover:translate-x-1" />
           </>
         )}

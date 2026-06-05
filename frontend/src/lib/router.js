@@ -25,3 +25,9 @@ export function matchRun(path) {
   const m = path.match(/^\/run\/(\d+)$/);
   return m ? Number(m[1]) : null;
 }
+
+/** Вернуть id батч-анализа, если маршрут вида /jobs/<id>, иначе null. */
+export function matchJob(path) {
+  const m = path.match(/^\/jobs\/(\d+)$/);
+  return m ? Number(m[1]) : null;
+}

@@ -6,7 +6,10 @@ import ResultsPage from "./pages/ResultsPage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import AdminUsersPage from "./pages/AdminUsersPage.jsx";
 import BillingPage from "./pages/BillingPage.jsx";
-import { useHashRoute, matchRun } from "./lib/router.js";
+import BatchPage from "./pages/BatchPage.jsx";
+import JobsPage from "./pages/JobsPage.jsx";
+import JobPage from "./pages/JobPage.jsx";
+import { useHashRoute, matchRun, matchJob } from "./lib/router.js";
 import { useAuth } from "./lib/auth.jsx";
 
 /**
@@ -38,11 +41,15 @@ export default function App() {
     return <LoginPage />;
 
   const runId = matchRun(route);
+  const jobId = matchJob(route);
   let page;
   if (route.startsWith("/admin/users")) {
     page = can("users.manage") ? <AdminUsersPage /> : <SearchPage />;
   } else if (route.startsWith("/billing")) page = <BillingPage />;
   else if (runId != null) page = <ResultsPage key={route} runId={runId} />;
+  else if (jobId != null) page = <JobPage key={route} jobId={jobId} />;
+  else if (route.startsWith("/batch")) page = <BatchPage />;
+  else if (route.startsWith("/jobs")) page = <JobsPage />;
   else if (route.startsWith("/history")) page = <HistoryPage />;
   else if (route.startsWith("/tests")) page = <TestsPage />;
   else page = <SearchPage />;
