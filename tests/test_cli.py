@@ -270,3 +270,14 @@ def test_grant_credits_unknown_user(tmp_path):
         pass
     r = runner.invoke(app, ["grant-credits", "--username", "ghost", "--db", db])
     assert r.exit_code == 1 and "Нет пользователя" in r.output
+
+
+def test_grant_sub(tmp_path):
+    from toursearch import billing
+    db = str(tmp_path / "a.db")
+    with Storage(db) as s:
+        uid = s.create_user("u", "secret1", role="user", iters=1000)
+    r = runner.invoke(app, ["grant-sub", "--username", "u", "--days", "30", "--db", db])
+    assert r.exit_code == 0 and "активна до" in r.output
+    with Storage(db) as s:
+        assert billing.subscription_active(s.get_user_by_id(uid)) is True

@@ -19,7 +19,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from toursearch import refdata
+from toursearch import billing, refdata
 from toursearch.healthcheck import gate_passed, run_health_check
 from toursearch.models import SearchParams, is_not_applicable_error
 from toursearch.orchestrator import run_search
@@ -357,7 +357,7 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
         u = request.state.user if hasattr(request.state, "user") else None
         uid = current_user_id(request)
         consumed = False
-        if u and u.get("role") != "admin":
+        if billing.consumes_credit(u):  # обычный юзер без активной подписки
             with Storage(db_path) as storage:
                 consumed = storage.try_consume_search(uid)
             if not consumed:
@@ -500,11 +500,11 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
         except ValueError as exc:
             return {"error": f"Некорректные параметры поиска: {exc}"}
         token = uuid.uuid4().hex
-        # Списываем поиск только у обычного юзера в мультиюзере (не у admin и не локально).
+        # Списываем поиск только у обычного юзера БЕЗ активной подписки (admin/подписка/локально — нет).
         u = request.state.user if hasattr(request.state, "user") else None
         _searches[token] = _SearchSession(
             params=params, chosen=chosen, user_id=current_user_id(request),
-            consume=bool(u and u.get("role") != "admin"))
+            consume=billing.consumes_credit(u))
         _cap_tokens(_searches)
         return {"token": token}
 

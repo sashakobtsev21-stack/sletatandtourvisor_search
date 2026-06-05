@@ -354,3 +354,21 @@ def test_credits_consume_refund_add(tmp_path):
     storage.add_credits(uid, 30)                                 # покупка стэкается
     assert storage.get_user_by_id(uid)["searches_left"] == 31
     storage.close()
+
+
+def test_grant_subscription_and_payment(tmp_path):
+    from toursearch import billing
+
+    storage = Storage(tmp_path / "t.db")
+    uid = storage.create_user("u", "p", iters=1000)
+    assert billing.subscription_active(storage.get_user_by_id(uid)) is False
+    storage.grant_subscription(uid, days=30)
+    assert billing.subscription_active(storage.get_user_by_id(uid)) is True   # активна
+
+    # платёж-подписка через complete_payment (kind='subscription' → продлевает, не начисляет кредиты)
+    pid = storage.create_payment(uid, provider="stub", plan="sub_month",
+                                 amount=1490, kind="subscription", days=30)
+    p = storage.complete_payment(pid)
+    assert p["status"] == "succeeded" and p["kind"] == "subscription"
+    assert storage.get_user_by_id(uid)["searches_left"] == 5   # кредиты не тронуты
+    storage.close()
