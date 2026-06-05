@@ -208,6 +208,23 @@ def grant_credits(
 
 
 @app.command()
+def grant_sub(
+    username: str = typer.Option(..., "--username"),
+    days: int = typer.Option(30, "--days", help="На сколько дней выдать/продлить подписку"),
+    db: str = typer.Option("toursearch.db", "--db"),
+) -> None:
+    """Выдать/продлить ПОДПИСКУ (безлимит поисков на N дней) — комп-аккаунты / ручная выдача."""
+    with Storage(db) as storage:
+        user = storage.get_user_by_username(username)
+        if not user:
+            typer.echo(f"Нет пользователя '{username}'.")
+            raise typer.Exit(code=1)
+        storage.grant_subscription(user["id"], days=days)
+        until = storage.get_user_by_id(user["id"])["paid_until"]
+    typer.echo(f"Подписка '{username}' активна до {until}.")
+
+
+@app.command()
 def healthcheck(
     provider: list[str] = typer.Option([], "--provider", help="Ограничить площадки"),
     headless: bool = typer.Option(True, "--headless/--headed"),

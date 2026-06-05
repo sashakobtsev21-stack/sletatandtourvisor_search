@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -147,8 +147,10 @@ CREATE TABLE IF NOT EXISTS payments (
     user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     provider            TEXT NOT NULL,
     plan                TEXT NOT NULL,
+    kind                TEXT NOT NULL DEFAULT 'credits',   -- 'credits' (пакет) / 'subscription' (срок)
     amount              INTEGER NOT NULL,        -- рубли
-    credits             INTEGER NOT NULL,        -- сколько поисков добавляет
+    credits             INTEGER NOT NULL DEFAULT 0,        -- сколько поисков добавляет (пакет)
+    days                INTEGER NOT NULL DEFAULT 0,        -- на сколько дней подписка
     status              TEXT NOT NULL DEFAULT 'pending',   -- pending / succeeded / canceled
     created_at          TEXT NOT NULL,
     paid_at             TEXT,
@@ -219,8 +221,13 @@ class Storage:
             if "searches_left" not in user_cols:  # кредитная модель: остаток поисков
                 self._conn.execute("ALTER TABLE users ADD COLUMN searches_left INTEGER NOT NULL DEFAULT 5")
         pay_cols = {row[1] for row in self._conn.execute("PRAGMA table_info(payments)")}
-        if pay_cols and "credits" not in pay_cols:  # было days (время) → стало credits (поиски)
-            self._conn.execute("ALTER TABLE payments ADD COLUMN credits INTEGER NOT NULL DEFAULT 0")
+        if pay_cols:
+            if "credits" not in pay_cols:                # пакеты поисков
+                self._conn.execute("ALTER TABLE payments ADD COLUMN credits INTEGER NOT NULL DEFAULT 0")
+            if "kind" not in pay_cols:                   # гибрид: тип платежа (кредиты/подписка)
+                self._conn.execute("ALTER TABLE payments ADD COLUMN kind TEXT NOT NULL DEFAULT 'credits'")
+            if "days" not in pay_cols:                   # срок подписки
+                self._conn.execute("ALTER TABLE payments ADD COLUMN days INTEGER NOT NULL DEFAULT 0")
         self._conn.commit()
 
     def close(self) -> None:
@@ -511,15 +518,32 @@ class Storage:
         """Вернуть 1 поиск (системный сбой/отмена — работа не сделана)."""
         self.add_credits(user_id, 1)
 
-    # --- платежи за пакеты поисков ---
+    def grant_subscription(self, user_id: int, *, days: int) -> None:
+        """Выдать/ПРОДЛИТЬ подписку на `days`: paid_until = max(сейчас, текущий) + days (стэк)."""
+        base = auth.utcnow()
+        row = self._conn.execute("SELECT paid_until FROM users WHERE id = ?", (user_id,)).fetchone()
+        if row and row["paid_until"]:
+            try:
+                cur = datetime.fromisoformat(row["paid_until"])
+                if cur.tzinfo is None:
+                    cur = cur.replace(tzinfo=timezone.utc)
+                if cur > base:
+                    base = cur
+            except ValueError:
+                pass
+        self._conn.execute("UPDATE users SET paid_until = ? WHERE id = ?",
+                           (auth.iso(base + timedelta(days=days)), user_id))
+        self._conn.commit()
 
-    def create_payment(self, user_id: int, *, provider: str, plan: str,
-                       amount: int, credits: int) -> int:
+    # --- платежи: пакеты поисков (kind='credits') и подписка (kind='subscription') ---
+
+    def create_payment(self, user_id: int, *, provider: str, plan: str, amount: int,
+                       kind: str = "credits", credits: int = 0, days: int = 0) -> int:
         """Создать платёж в статусе pending, вернуть его id."""
         cur = self._conn.execute(
-            "INSERT INTO payments (user_id, provider, plan, amount, credits, status, created_at) "
-            "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
-            (user_id, provider, plan, amount, credits, auth.utcnow_iso()),
+            "INSERT INTO payments (user_id, provider, plan, kind, amount, credits, days, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+            (user_id, provider, plan, kind, amount, credits, days, auth.utcnow_iso()),
         )
         self._conn.commit()
         return int(cur.lastrowid)
@@ -529,8 +553,8 @@ class Storage:
             "SELECT * FROM payments WHERE id = ?", (payment_id,)).fetchone())
 
     def complete_payment(self, payment_id: int) -> "dict | None":
-        """Идемпотентно отметить платёж успешным и НАЧИСЛИТЬ его `credits` поисков. Повторный
-        вызов ничего не начисляет (условный UPDATE по статусу). None — если платежа нет."""
+        """Идемпотентно отметить платёж успешным и применить его: пакет → начислить поиски,
+        подписка → продлить срок. Повтор ничего не делает (условный UPDATE). None — если нет."""
         p = self.get_payment(payment_id)
         if p is None:
             return None
@@ -539,8 +563,11 @@ class Storage:
             (auth.utcnow_iso(), payment_id),
         )
         self._conn.commit()
-        if cur.rowcount == 1:  # переход pending→succeeded сделали именно мы → начисляем один раз
-            self.add_credits(p["user_id"], int(p["credits"]))
+        if cur.rowcount == 1:  # переход pending→succeeded сделали именно мы → применяем один раз
+            if p["kind"] == "subscription":
+                self.grant_subscription(p["user_id"], days=int(p["days"]))
+            else:
+                self.add_credits(p["user_id"], int(p["credits"]))
         return self.get_payment(payment_id)
 
     def create_session(self, user_id: int, token: str, *, remember: bool = False) -> None:

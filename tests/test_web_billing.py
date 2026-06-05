@@ -124,3 +124,33 @@ def test_search_refunds_on_gate_fail(tmp_path, monkeypatch):
     s = client.get(f"/search/stream?token={token}")
     assert "gate_failed" in s.text
     assert _left(client) == 5  # поиск возвращён (работа не сделана)
+
+
+# --------------------------- подписка (гибрид) ---------------------------
+
+def test_subscription_purchase_grants_unlimited(tmp_path):
+    client = TestClient(create_app(db_path=_seed(tmp_path, [("u", "secret1", "user")])))
+    _login(client, "u", "secret1")
+    h = _csrf(client)
+    co = client.post("/api/billing/checkout", data={"plan": "sub_month"}, headers=h)
+    assert co.status_code == 200 and co.json()["kind"] == "subscription" and co.json()["days"] == 30
+    conf = client.post(f"/api/billing/mock/{co.json()['payment_id']}/confirm", headers=h)
+    assert conf.status_code == 200 and conf.json()["kind"] == "subscription"
+    st = client.get("/api/billing/status").json()
+    assert st["subscription_active"] is True and st["unlimited"] is True and st["searches_left"] is None
+
+
+def test_subscription_search_does_not_consume_credits(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "run_health_check", _gate(True))
+    monkeypatch.setattr(web, "run_search", _fake_search)
+    db = _seed(tmp_path, [("u", "secret1", "user")])
+    client = TestClient(create_app(db_path=db))
+    _login(client, "u", "secret1")
+    h = _csrf(client)
+    pid = client.post("/api/billing/checkout", data={"plan": "sub_month"}, headers=h).json()["payment_id"]
+    client.post(f"/api/billing/mock/{pid}/confirm", headers=h)  # активировали подписку
+
+    token = client.post("/search/prepare", data=_FORM, headers=h).json()["token"]
+    assert '"type": "done"' in client.get(f"/search/stream?token={token}").text
+    with Storage(db) as s:
+        assert s.get_user_by_username("u")["searches_left"] == 5  # кредиты НЕ списаны (подписка)
