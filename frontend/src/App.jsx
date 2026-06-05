@@ -33,6 +33,9 @@ export default function App() {
 
   if (loading) return <Splash />;
   if (!user) return <LoginPage />;
+  // Гость (аноним с 2 поисками) может открыть форму входа/регистрации, не теряя доступ к поиску.
+  if (user.mode === "guest" && (route.startsWith("/login") || route.startsWith("/register")))
+    return <LoginPage />;
 
   const runId = matchRun(route);
   let page;

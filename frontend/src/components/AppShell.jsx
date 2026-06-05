@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Palmtree, Search, History, FlaskConical, Users, CreditCard, LogOut } from "lucide-react";
+import { Palmtree, Search, History, FlaskConical, Users, CreditCard, LogOut, LogIn, UserPlus } from "lucide-react";
 import { fadeUp } from "../lib/animations.js";
 import { useAuth } from "../lib/auth.jsx";
 
@@ -70,11 +70,11 @@ export default function AppShell({ route = "/", children }) {
             })}
           </nav>
 
-          {/* Остаток поисков (мультиюзер, не admin) — кликабельная плашка ведёт на «Подписку» */}
-          {user?.username && typeof user.searches_left === "number" && (
+          {/* Остаток поисков — плашка. Гость: «N бесплатных» → к регистрации; юзер: → «Подписка». */}
+          {typeof user?.searches_left === "number" && (
             <a
-              href="#/billing"
-              title="Осталось поисков — пополнить"
+              href={user.mode === "guest" ? "#/register" : "#/billing"}
+              title={user.mode === "guest" ? "Бесплатные поиски — зарегистрируйтесь для 5" : "Осталось поисков — пополнить"}
               className={[
                 "ml-2 hidden items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-sm font-semibold transition-colors sm:flex",
                 user.searches_left > 0
@@ -83,12 +83,29 @@ export default function AppShell({ route = "/", children }) {
               ].join(" ")}
             >
               <CreditCard className="size-4" />
-              {user.searches_left} поиск.
+              {user.mode === "guest" ? `${user.searches_left} бесплатных` : `${user.searches_left} поиск.`}
             </a>
           )}
 
-          {/* Кто вошёл + выход (в мультиюзере; в локальном режиме username пуст → скрыто) */}
-          {user?.username && (
+          {/* Гость: войти / регистрация. Залогинен: имя + выход. Локальный режим: ничего. */}
+          {user?.mode === "guest" ? (
+            <div className="ml-2 flex items-center gap-2 border-l border-white/10 pl-3">
+              <a
+                href="#/login"
+                className="flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm font-semibold text-muted transition-colors hover:bg-white/5 hover:text-ink"
+              >
+                <LogIn className="size-4" />
+                <span className="hidden sm:inline">Войти</span>
+              </a>
+              <a
+                href="#/register"
+                className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-brand to-ocean px-3 py-2 text-sm font-semibold text-white shadow-glow transition-opacity hover:opacity-95"
+              >
+                <UserPlus className="size-4" />
+                <span className="hidden sm:inline">Регистрация</span>
+              </a>
+            </div>
+          ) : user?.username ? (
             <div className="ml-2 flex items-center gap-2 border-l border-white/10 pl-3">
               <div className="hidden text-right leading-tight sm:block">
                 <div className="text-sm font-semibold text-ink">{user.username}</div>
@@ -103,7 +120,7 @@ export default function AppShell({ route = "/", children }) {
                 <span className="hidden md:inline">Выход</span>
               </button>
             </div>
-          )}
+          ) : null}
         </div>
       </motion.header>
 

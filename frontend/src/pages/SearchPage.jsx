@@ -5,6 +5,7 @@ import SearchTerminal from "../components/SearchTerminal.jsx";
 import LiveViews from "../components/LiveViews.jsx";
 import { navigate } from "../lib/router.js";
 import { takeRepeat } from "../lib/repeatStore.js";
+import { putResult } from "../lib/resultStore.js";
 import { PROVIDERS } from "../lib/constants.js";
 import { progressFloorForLog, isSearchStart, parseProviderDone } from "../lib/searchEvents.js";
 import { apiFetch } from "../lib/api.js";
@@ -223,6 +224,7 @@ export default function SearchPage() {
         }
         case "done":
           pushLog("✓ Готово — открываю результаты…", "ok");
+          if (e.report) putResult(e.run_id, e.report); // гость: отчёт пришёл в событии (нет доступа к /api/runs)
           finish("done");
           navigate(`/run/${e.run_id}`);
           break;
@@ -285,7 +287,9 @@ export default function SearchPage() {
     try {
       const resp = await apiFetch("/search/prepare", { method: "POST", body: fd });
       if (resp.status === 402) {
-        pushLog("Нужна активная подписка — откройте вкладку «Подписка» и оформите доступ.", "err");
+        // Сервер шлёт нужный текст: гостю — «зарегистрируйтесь», юзеру — «пополните на Подписке».
+        const j = await resp.json().catch(() => ({}));
+        pushLog(j.error || "Закончились бесплатные поиски — войдите или оформите доступ.", "err");
         return finish("error");
       }
       const data = await resp.json();
