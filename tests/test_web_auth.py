@@ -145,3 +145,15 @@ def test_history_owner_isolation(tmp_path):
     admin_cli = TestClient(create_app(db_path=db))
     _login(admin_cli, "admin", "secret1")
     assert len(admin_cli.get("/api/runs").json()) == 2  # admin видит все
+
+
+# --------------------------- secure-cookie вне localhost (Ф3) ---------------------------
+
+def test_secure_cookie_on_nonlocal_host(tmp_path):
+    # host != localhost → cookie с флагом Secure (без HTTPS не дойдёт, но наружу без TLS
+    # предохранитель и не пускает). На localhost (по умолчанию) — без Secure, см. остальные тесты.
+    client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")]),
+                                   host="0.0.0.0"))
+    r = _login(client, "admin", "secret1")
+    set_cookies = [v for k, v in r.headers.multi_items() if k.lower() == "set-cookie"]
+    assert set_cookies and all("secure" in v.lower() for v in set_cookies)

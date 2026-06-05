@@ -278,7 +278,10 @@ def _owner_filter(request: Request) -> "int | None":
     return None if auth.has_permission(u["role"], "history.view.all") else u["id"]
 
 
-def create_app(db_path: str = "toursearch.db") -> FastAPI:
+_LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
+
+
+def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastAPI:
     import logging
     logging.basicConfig(
         level=logging.INFO,
@@ -294,7 +297,10 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
     # • Мультиюзер (в БД есть пользователи): серверные сессии (cookie ts_session), роли,
     #   CSRF на мутирующих запросах. Триггер — сам факт наличия пользователей.
     auth_token = (os.environ.get("TOURSEARCH_TOKEN") or "").strip()
-    secure_cookies = os.environ.get("TOURSEARCH_SECURE_COOKIES") == "1"
+    # secure-cookie автоматически вне localhost; за TLS-прокси на 127.0.0.1 можно форсировать
+    # через env. Без HTTPS Secure-cookie не дойдёт — но наружу без TLS и нельзя (предохранитель
+    # в `toursearch web` это не пускает).
+    secure_cookies = (host not in _LOCAL_HOSTS) or os.environ.get("TOURSEARCH_SECURE_COOKIES") == "1"
     app.state.secure_cookies = secure_cookies
 
     @app.middleware("http")
