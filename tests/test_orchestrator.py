@@ -59,17 +59,71 @@ class _FakeHang:
 
     name = "fake_hang"
     cleaned = False
+    calls = 0
 
     def __init__(self, headless: bool = False) -> None:
         self.headless = headless
 
     async def search(self, params: SearchParams) -> ProviderResult:
+        _FakeHang.calls += 1
         _FakeHang.cleaned = False
         try:
             await asyncio.sleep(30)  # дольше provider_timeout_s теста
             return ProviderResult(provider=self.name, success=True, duration_seconds=30.0)
         finally:
             _FakeHang.cleaned = True  # как `finally: await browser.close()` в реальном провайдере
+
+
+@register_provider("fake_flaky_ok")
+class _FakeFlakyOk:
+    """Падает на 1-й попытке (случайный сбой), на 2-й — успех."""
+
+    name = "fake_flaky_ok"
+    calls = 0
+
+    def __init__(self, headless: bool = False) -> None:
+        self.headless = headless
+
+    async def search(self, params: SearchParams) -> ProviderResult:
+        _FakeFlakyOk.calls += 1
+        if _FakeFlakyOk.calls == 1:
+            return ProviderResult(provider=self.name, success=False, duration_seconds=1.0,
+                                  error="TimeoutError: не дождались результатов")
+        return ProviderResult(provider=self.name, success=True, duration_seconds=2.0,
+                              offers=[Offer(provider=self.name, operator="Anex", price=Decimal("50000"))])
+
+
+@register_provider("fake_flaky_always")
+class _FakeFlakyAlways:
+    """Всегда падает случайным сбоем — проверяем, что повтор РОВНО один, не бесконечно."""
+
+    name = "fake_flaky_always"
+    calls = 0
+
+    def __init__(self, headless: bool = False) -> None:
+        self.headless = headless
+
+    async def search(self, params: SearchParams) -> ProviderResult:
+        _FakeFlakyAlways.calls += 1
+        return ProviderResult(provider=self.name, success=False, duration_seconds=1.0,
+                              error="TimeoutError: не дождались результатов")
+
+
+@register_provider("fake_namode")
+class _FakeNotApplicable:
+    """Детерминированный отказ «не поддерживается» — повторять бессмысленно."""
+
+    name = "fake_namode"
+    calls = 0
+
+    def __init__(self, headless: bool = False) -> None:
+        self.headless = headless
+
+    async def search(self, params: SearchParams) -> ProviderResult:
+        _FakeNotApplicable.calls += 1
+        return ProviderResult(provider=self.name, success=False, duration_seconds=0.3,
+                              search_mode=params.search_mode,
+                              error="Режим «Отели» не поддерживается этой площадкой")
 
 
 def _params() -> SearchParams:
@@ -115,3 +169,47 @@ async def test_hung_provider_is_timed_out_and_does_not_hang_run():
     assert elapsed < 5                                   # прогон не завис на 30с — это и есть страховка
     # выживший провайдер по-прежнему даёт сравнение
     assert report.cheapest.provider == "fake_ok"
+
+
+async def test_transient_failure_is_retried_and_succeeds():
+    """Случайный сбой на 1-й попытке → автоповтор → успех со 2-й."""
+    _FakeFlakyOk.calls = 0
+    report = await run_search(_params(), providers=["fake_flaky_ok"], provider_retries=1)
+    r = report.results[0]
+    assert _FakeFlakyOk.calls == 2          # была вторая попытка
+    assert r.success is True                # со 2-й попытки получилось
+    assert r.cheapest.operator == "Anex"
+
+
+async def test_transient_failure_retried_exactly_once_then_gives_up():
+    """Постоянный случайный сбой повторяется РОВНО один раз, а не бесконечно."""
+    _FakeFlakyAlways.calls = 0
+    report = await run_search(_params(), providers=["fake_flaky_always"], provider_retries=1)
+    assert _FakeFlakyAlways.calls == 2      # 1 основная + 1 повтор
+    assert report.results[0].success is False
+
+
+async def test_not_applicable_failure_is_not_retried():
+    """Детерминированный отказ «не поддерживается» НЕ повторяем (повтор дал бы то же)."""
+    _FakeNotApplicable.calls = 0
+    report = await run_search(_params(), providers=["fake_namode"], provider_retries=1)
+    assert _FakeNotApplicable.calls == 1    # повтора не было
+    assert report.results[0].success is False
+
+
+async def test_orchestrator_timeout_is_not_retried():
+    """Верхний таймаут (площадка зависла) НЕ повторяем — иначе ещё столько же впустую."""
+    _FakeHang.calls = 0
+    report = await run_search(
+        _params(), providers=["fake_hang"], provider_timeout_s=0.3, provider_retries=1
+    )
+    assert _FakeHang.calls == 1             # одна попытка, без повтора
+    assert report.results[0].success is False
+
+
+async def test_retries_disabled_does_not_retry():
+    """provider_retries=0 — повторов нет совсем."""
+    _FakeFlakyAlways.calls = 0
+    report = await run_search(_params(), providers=["fake_flaky_always"], provider_retries=0)
+    assert _FakeFlakyAlways.calls == 1
+    assert report.results[0].success is False

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
@@ -140,6 +141,19 @@ class HotelOffer(BaseModel):
 
 
 PricedItem = Offer | HotelOffer
+
+
+# Площадка вернула success=False, но это НЕ сбой, а «не обслуживает ТАКОЙ запрос»:
+# неподходящий режим (Островок в «Турах», Travelata в «Отелях») или направление/город не
+# в её картах. Такой отказ ДЕТЕРМИНИРОВАН — его показывают нейтрально (а не красной
+# ошибкой) и НЕ повторяют (повтор дал бы тот же отказ).
+_NOT_APPLICABLE_RE = re.compile(
+    r"не поддерживается|доступно в режиме|режиме «Отели»|укажите курорт", re.IGNORECASE)
+
+
+def is_not_applicable_error(error: str | None) -> bool:
+    """True, если отказ означает «площадка не обслуживает такой запрос» (а не случайный сбой)."""
+    return bool(error and _NOT_APPLICABLE_RE.search(error))
 
 
 class ProviderResult(BaseModel):

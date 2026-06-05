@@ -22,7 +22,7 @@ from fastapi.templating import Jinja2Templates
 
 from toursearch import refdata
 from toursearch.healthcheck import gate_passed, run_health_check
-from toursearch.models import SearchParams
+from toursearch.models import SearchParams, is_not_applicable_error
 from toursearch.orchestrator import run_search
 from toursearch.providers import (
     get_provider,
@@ -172,22 +172,11 @@ def _operator_dict(o) -> dict:
     }
 
 
-# Площадка вернула success=False, но это НЕ сбой, а «не обслуживает этот запрос»:
-# неподходящий режим (Островок в «Турах», Travelata в «Отелях») или направление/город
-# не в её картах. Такое показываем нейтрально (инфо), а не красной ошибкой.
-_NOT_APPLICABLE_RE = re.compile(
-    r"не поддерживается|доступно в режиме|режиме «Отели»|укажите курорт", re.IGNORECASE)
-
-
-def _is_not_applicable(error: "str | None") -> bool:
-    return bool(error and _NOT_APPLICABLE_RE.search(error))
-
-
 def _result_dict(r) -> dict:
     c = r.cheapest
     return {
         "provider": r.provider, "success": r.success,
-        "not_applicable": _is_not_applicable(r.error),
+        "not_applicable": is_not_applicable_error(r.error),
         "duration_seconds": r.duration_seconds, "search_mode": r.search_mode,
         "error": r.error, "screenshot_path": r.screenshot_path, "search_url": r.search_url,
         "offers": [_offer_dict(o) for o in sorted(r.offers, key=lambda x: x.price)],
