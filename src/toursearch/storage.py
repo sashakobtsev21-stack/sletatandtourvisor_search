@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS users (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     username      TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
-    role          TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin','user')),
+    role          TEXT NOT NULL DEFAULT 'user',     -- роли валидируются в приложении (auth.ROLES): admin/user/vip
     is_active     INTEGER NOT NULL DEFAULT 1,
     created_at    TEXT NOT NULL,
     last_login    TEXT,
@@ -260,6 +260,52 @@ class Storage:
             if "days" not in pay_cols:                   # срок подписки
                 self._conn.execute("ALTER TABLE payments ADD COLUMN days INTEGER NOT NULL DEFAULT 0")
         self._conn.commit()
+        # Роль 'vip': старые БД имеют CHECK (role IN ('admin','user')), который не пускает 'vip'.
+        # Снимаем CHECK безопасным пересозданием users (роли валидируются в приложении, auth.ROLES).
+        urow = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").fetchone()
+        if urow and urow[0] and "role IN ('admin'" in urow[0] and "'vip'" not in urow[0]:
+            self._rebuild_users_drop_role_check()
+
+    def _rebuild_users_drop_role_check(self) -> None:
+        """Снять CHECK с users.role (чтобы хранить роль 'vip') без потери данных.
+
+        Официальная процедура SQLite: создать новую таблицу → скопировать → удалить старую →
+        переименовать новую в users. Именно в таком порядке (а не RENAME старой первой), иначе
+        FK-ссылки детей (sessions/payments/jobs → users) были бы переписаны на временное имя.
+        FK на время отключены, всё в одной транзакции (атомарно), id сохраняются."""
+        self._conn.commit()                              # закрыть текущую транзакцию перед PRAGMA
+        self._conn.execute("PRAGMA foreign_keys = OFF")
+        try:
+            self._conn.execute("BEGIN")
+            self._conn.execute(
+                """CREATE TABLE users_new (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username      TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    role          TEXT NOT NULL DEFAULT 'user',
+                    is_active     INTEGER NOT NULL DEFAULT 1,
+                    created_at    TEXT NOT NULL,
+                    last_login    TEXT,
+                    comment       TEXT,
+                    plan          TEXT NOT NULL DEFAULT 'free',
+                    paid_until    TEXT,
+                    searches_left INTEGER NOT NULL DEFAULT 5
+                )""")
+            self._conn.execute(
+                """INSERT INTO users_new (id, username, password_hash, role, is_active, created_at,
+                                          last_login, comment, plan, paid_until, searches_left)
+                   SELECT id, username, password_hash, role, is_active, created_at,
+                          last_login, comment, plan, paid_until, searches_left FROM users""")
+            self._conn.execute("DROP TABLE users")
+            self._conn.execute("ALTER TABLE users_new RENAME TO users")
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+        finally:
+            self._conn.execute("PRAGMA foreign_keys = ON")
 
     def close(self) -> None:
         self._conn.close()

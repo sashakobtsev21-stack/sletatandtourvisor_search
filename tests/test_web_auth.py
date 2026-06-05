@@ -217,6 +217,29 @@ def test_admin_bypasses_credits(tmp_path):
     assert r.status_code == 200 and "token" in r.json()
 
 
+def test_vip_unlimited_search(tmp_path):
+    # vip: права как у user, но поиски без ограничений (даже с нулём кредитов)
+    db = _seed(tmp_path, [("vip", "secret1", "vip")])
+    with Storage(db) as s:
+        s._conn.execute("UPDATE users SET searches_left = 0 WHERE role = 'vip'")
+        s._conn.commit()
+    client = TestClient(create_app(db_path=db))
+    _login(client, "vip", "secret1")
+    assert client.post("/search/prepare", data=_FORM, headers=_csrf(client)).status_code == 200
+    assert client.get("/api/me").json()["searches_left"] is None      # безлимит → счётчик скрыт
+    assert client.get("/api/tests/catalog").status_code == 403         # прав как у user — тесты закрыты
+
+
+def test_admin_assigns_vip_role(tmp_path):
+    db = _seed(tmp_path, [("admin", "secret1", "admin"), ("u", "secret1", "user")])
+    client = TestClient(create_app(db_path=db))
+    _login(client, "admin", "secret1")
+    h = _csrf(client)
+    uid = next(x["id"] for x in client.get("/api/users").json() if x["username"] == "u")
+    r = client.patch(f"/api/users/{uid}", json={"role": "vip"}, headers=h)
+    assert r.status_code == 200 and r.json()["role"] == "vip"
+
+
 # --------------------------- управление пользователями ---------------------------
 
 def test_admin_creates_user_and_last_admin_guard(tmp_path):

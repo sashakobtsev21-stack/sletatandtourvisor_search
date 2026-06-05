@@ -81,8 +81,8 @@ def session_ttl(remember: bool) -> timedelta:
     return SESSION_TTL_REMEMBER if remember else SESSION_TTL_DEFAULT
 
 
-# --- Роли и права (2 роли; абстракция прав сохранена — 3-я роль = строка + запись здесь) ---
-ROLES = ("admin", "user")
+# --- Роли и права (3 роли; абстракция прав сохранена — новая роль = строка + запись здесь) ---
+ROLES = ("admin", "user", "vip")
 PERMISSIONS = (
     "search.run",            # запускать анализ
     "history.view.own",      # своя история
@@ -92,9 +92,11 @@ PERMISSIONS = (
     "users.manage",          # управление пользователями
     "system.health",         # health / настройки
 )
+_USER_PERMS = {"search.run", "history.view.own"}    # запуск анализа + своя история
 ROLE_PERMISSIONS = {
     "admin": set(PERMISSIONS),                      # всё
-    "user": {"search.run", "history.view.own"},     # запуск анализа + своя история
+    "user": set(_USER_PERMS),                        # обычный пользователь
+    "vip": set(_USER_PERMS),                         # как user, но поиски без ограничений (биллинг, не права)
 }
 
 
