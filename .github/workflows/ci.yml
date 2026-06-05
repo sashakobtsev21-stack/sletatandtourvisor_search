@@ -18,7 +18,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[browser,web,dev]"
       - name: Lint (ruff)
-        run: ruff check src/ tests/
+        run: ruff check src/ tests/ scripts/
       - name: Unit & integration tests (e2e excluded)
         run: pytest -q --cov=toursearch --cov-report=term-missing --cov-report=xml --junitxml=junit.xml
       - name: Upload test & coverage reports
