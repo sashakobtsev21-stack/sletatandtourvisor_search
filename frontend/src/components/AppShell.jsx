@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Palmtree, Search, History, FlaskConical, Users, CreditCard, LogOut, LogIn, UserPlus } from "lucide-react";
+import { Palmtree, Search, Layers, History, FlaskConical, Users, CreditCard, LogOut, LogIn, UserPlus } from "lucide-react";
 import { fadeUp } from "../lib/animations.js";
 import { useAuth } from "../lib/auth.jsx";
 
@@ -11,6 +11,8 @@ import { useAuth } from "../lib/auth.jsx";
  */
 const NAV = [
   { label: "Поиск", href: "#/", icon: Search, perm: "search.run", match: (p) => p === "/" || p.startsWith("/run") },
+  // «Анализы» (батч) — только залогиненным (гость mode≠multiuser → скрыт).
+  { label: "Анализы", href: "#/batch", icon: Layers, perm: "search.run", mode: "multiuser", match: (p) => p.startsWith("/batch") || p.startsWith("/jobs") },
   { label: "История", href: "#/history", icon: History, perm: "history.view.own", match: (p) => p.startsWith("/history") },
   { label: "Автотесты", href: "#/tests", icon: FlaskConical, perm: "tests.view", match: (p) => p.startsWith("/tests") },
   // «Подписка» — только в мультиюзере (в локальном режиме оплата не нужна).

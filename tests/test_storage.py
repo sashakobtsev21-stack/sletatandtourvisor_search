@@ -395,3 +395,36 @@ def test_anon_ip_cap(tmp_path):
     assert storage.try_consume_anon("d9", "9.9.9.9", device_limit=1, ip_limit=3) is False  # IP-cap режет
     assert storage.try_consume_anon("d9", "8.8.8.8", device_limit=1, ip_limit=3) is True   # другой IP — ок
     storage.close()
+
+
+def test_jobs_create_owner_and_runs(tmp_path):
+    storage = Storage(tmp_path / "t.db")
+    uid = storage.create_user("u", "p", iters=1000)
+    other = storage.create_user("v", "p", iters=1000)
+    jid = storage.create_job(uid, '{"x":1}', ["Турция", "Египет"])
+    assert storage.get_job(jid)["progress_total"] == 2
+    assert storage.get_job(jid, owner_id=other) is None              # чужой не виден
+    assert len(storage.list_jobs(owner_id=uid)) == 1
+    assert storage.list_jobs(owner_id=other) == []
+    assert len(storage.list_jobs(owner_id=None)) == 1                # admin/local — все
+
+    storage.save_report(_report(), user_id=uid, job_id=jid)          # прогон привязан к батчу
+    runs = storage.list_job_runs(jid)
+    assert len(runs) == 1 and runs[0][0] == "Турция"                 # (страна, run_id, отчёт)
+    storage.close()
+
+
+def test_jobs_interrupted_sweep(tmp_path):
+    storage = Storage(tmp_path / "t.db")
+    uid = storage.create_user("u", "p", iters=1000)
+    a = storage.create_job(uid, "{}", ["A", "B"])
+    storage.update_job(a, status="running")
+    b = storage.create_job(uid, "{}", ["C", "D"])           # остаётся pending
+    done = storage.create_job(uid, "{}", ["E", "F"])
+    storage.update_job(done, status="done")
+
+    assert storage.mark_running_jobs_interrupted() == 2     # running + pending
+    assert storage.get_job(a)["status"] == "interrupted"
+    assert storage.get_job(b)["status"] == "interrupted"
+    assert storage.get_job(done)["status"] == "done"        # завершённый не трогаем
+    storage.close()

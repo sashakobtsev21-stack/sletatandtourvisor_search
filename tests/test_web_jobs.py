@@ -1,0 +1,149 @@
+"""Тесты батч-анализа (Ф1): создание задания, кредитный гейт, изоляция владельца, гость;
+плюс детерминированный прогон воркера с мокнутым поиском (без реальных браузеров)."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from datetime import date
+from decimal import Decimal
+
+import pytest
+
+pytest.importorskip("fastapi")
+pytest.importorskip("playwright")
+from starlette.testclient import TestClient
+
+from toursearch.models import ComparisonReport, Offer, ProviderResult, SearchParams
+from toursearch.storage import Storage
+from toursearch.web import create_app
+
+_BATCH_FORM = {
+    "mode": "tours", "departure_city": "Москва",
+    "destination": ["Турция", "Египет"],          # мультивыбор направлений
+    "date_from": "2026-07-01", "date_to": "2026-07-08",
+    "nights_min": "7", "nights_max": "10", "adults": "2",
+    "provider": ["sletat"],
+}
+
+
+def _seed(tmp_path, users) -> str:
+    db = str(tmp_path / "j.db")
+    with Storage(db) as s:
+        for username, password, role in users:
+            s.create_user(username, password, role=role, iters=1000)
+    return db
+
+
+def _login(client, username, password):
+    return client.post("/api/login", data={"username": username, "password": password})
+
+
+def _csrf(client) -> dict:
+    return {"X-CSRF-Token": client.cookies.get("ts_csrf")}
+
+
+def _report(country: str) -> ComparisonReport:
+    return ComparisonReport(
+        params=SearchParams(departure_city="Москва", destination_country=country,
+                            date_from=date(2026, 7, 1), date_to=date(2026, 7, 8),
+                            nights_min=7, nights_max=10, adults=2),
+        results=[ProviderResult(provider="sletat", success=True, duration_seconds=1.0,
+                 offers=[Offer(provider="sletat", operator="Anex", price=Decimal("80000"))])],
+    )
+
+
+def _patch_search(monkeypatch):
+    """Подменить тяжёлые вызовы воркера — чтобы фоновая задача не лезла на сайты/в браузеры."""
+    async def fake_health(providers=None, headless=True):
+        return {}
+
+    async def fake_run(params, providers=None, headless=True, on_frame=None):
+        return _report(params.destination_country)
+
+    monkeypatch.setattr("toursearch.web_jobs.run_health_check", fake_health)
+    monkeypatch.setattr("toursearch.web_jobs.gate_passed", lambda h: True)
+    monkeypatch.setattr("toursearch.web_jobs.run_search", fake_run)
+
+
+# --------------------------- HTTP-контракт ---------------------------
+
+def test_batch_blocked_for_guest(tmp_path, monkeypatch):
+    _patch_search(monkeypatch)
+    client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))
+    client.get("/api/me")  # гость
+    assert client.get("/api/jobs").status_code == 401             # список закрыт гостю
+    assert client.post("/api/jobs", data=_BATCH_FORM, headers=_csrf(client)).status_code == 401
+
+
+def test_batch_create_and_owner_isolation(tmp_path, monkeypatch):
+    _patch_search(monkeypatch)
+    db = _seed(tmp_path, [("u", "secret1", "user"), ("v", "secret1", "user")])
+    cli = TestClient(create_app(db_path=db))
+    _login(cli, "u", "secret1")
+    r = cli.post("/api/jobs", data=_BATCH_FORM, headers=_csrf(cli))
+    assert r.status_code == 200 and r.json()["total"] == 2
+    job_id = r.json()["job_id"]
+    assert any(j["id"] == job_id for j in cli.get("/api/jobs").json())  # видит своё
+    assert cli.get(f"/api/jobs/{job_id}").status_code == 200
+
+    other = TestClient(create_app(db_path=db))
+    _login(other, "v", "secret1")
+    assert all(j["id"] != job_id for j in other.get("/api/jobs").json())  # чужое не видит
+    assert other.get(f"/api/jobs/{job_id}").status_code == 404
+
+
+def test_batch_min_two_destinations(tmp_path, monkeypatch):
+    _patch_search(monkeypatch)
+    client = TestClient(create_app(db_path=_seed(tmp_path, [("u", "secret1", "user")])))
+    _login(client, "u", "secret1")
+    one = {**_BATCH_FORM, "destination": ["Турция"]}
+    assert client.post("/api/jobs", data=one, headers=_csrf(client)).status_code == 400
+
+
+def test_batch_insufficient_credits_402(tmp_path, monkeypatch):
+    _patch_search(monkeypatch)
+    db = _seed(tmp_path, [("u", "secret1", "user")])
+    with Storage(db) as s:  # 1 кредит, а направлений 2 → не хватает
+        uid = s.get_user_by_username("u")["id"]
+        s._conn.execute("UPDATE users SET searches_left = 1 WHERE id = ?", (uid,))
+        s._conn.commit()
+    client = TestClient(create_app(db_path=db))
+    _login(client, "u", "secret1")
+    assert client.post("/api/jobs", data=_BATCH_FORM, headers=_csrf(client)).status_code == 402
+
+
+def test_admin_batch_no_credit_gate(tmp_path, monkeypatch):
+    _patch_search(monkeypatch)
+    db = _seed(tmp_path, [("admin", "secret1", "admin")])
+    with Storage(db) as s:  # даже с нулём — admin без ограничений
+        s._conn.execute("UPDATE users SET searches_left = 0 WHERE role = 'admin'")
+        s._conn.commit()
+    client = TestClient(create_app(db_path=db))
+    _login(client, "admin", "secret1")
+    assert client.post("/api/jobs", data=_BATCH_FORM, headers=_csrf(client)).status_code == 200
+
+
+# --------------------------- воркер (детерминированно) ---------------------------
+
+def test_worker_runs_all_directions_and_consumes_credits(tmp_path, monkeypatch):
+    _patch_search(monkeypatch)
+    db = _seed(tmp_path, [("u", "secret1", "user")])
+    app = create_app(db_path=db)
+    base = SearchParams(departure_city="Москва", destination_country="X",
+                        date_from=date(2026, 7, 1), date_to=date(2026, 7, 8),
+                        nights_min=7, nights_max=10, adults=2)
+    params_json = json.dumps({"search_params": base.model_dump(mode="json"),
+                              "providers": ["sletat"]}, ensure_ascii=False)
+    with Storage(db) as s:
+        uid = s.get_user_by_username("u")["id"]
+        job_id = s.create_job(uid, params_json, ["Турция", "Египет"])
+
+    asyncio.run(app.state.run_job(job_id))  # прогон воркера с мокнутым поиском
+
+    with Storage(db) as s:
+        job = s.get_job(job_id)
+        assert job["status"] == "done" and job["progress_done"] == 2
+        runs = s.list_job_runs(job_id)
+        assert sorted(c for c, _, _ in runs) == ["Египет", "Турция"]
+        assert s.get_user_by_id(uid)["searches_left"] == 3  # 5 − 2 направления

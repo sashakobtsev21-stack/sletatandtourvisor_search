@@ -33,6 +33,7 @@ from toursearch.providers.base import prune_screenshots
 from toursearch.storage import Storage
 from toursearch.web_auth import LOCAL_HOSTS, current_user_id, owner_filter, register_auth
 from toursearch.web_billing import register_billing
+from toursearch.web_jobs import register_jobs
 from toursearch.testkit import REGISTRY, run_selected
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -240,6 +241,10 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
     active_runs = {"n": 0}  # сколько поисков сейчас реально крутят браузеры
     app.state.active_runs = active_runs
     app.state.max_concurrent_searches = max_concurrent_searches
+
+    # Батч-анализ (Ф1): мульти-направления фоновой задачей. Регистрируем после active_runs —
+    # воркер занимает общий слот одновременных поисков (app.state.active_runs).
+    register_jobs(app, db_path=db_path, app_state=app.state)
 
     Path("screenshots").mkdir(exist_ok=True)
     prune_screenshots()  # на старте подчистить накопившиеся скриншоты прогонов
