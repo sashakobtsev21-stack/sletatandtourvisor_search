@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -123,7 +123,9 @@ CREATE TABLE IF NOT EXISTS users (
     is_active     INTEGER NOT NULL DEFAULT 1,
     created_at    TEXT NOT NULL,
     last_login    TEXT,
-    comment       TEXT
+    comment       TEXT,
+    plan          TEXT NOT NULL DEFAULT 'free',     -- SaaS-подписка: тариф
+    paid_until    TEXT                              -- подписка активна до (UTC ISO); NULL = нет
 );
 CREATE TABLE IF NOT EXISTS sessions (
     token_hash  TEXT PRIMARY KEY,                -- sha256(token); сам токен — только в cookie
@@ -190,6 +192,13 @@ class Storage:
         if "user_id" not in run_cols:
             self._conn.execute("ALTER TABLE runs ADD COLUMN user_id INTEGER")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_user ON runs(user_id)")
+        # подписка (SaaS): тариф + срок у пользователя
+        user_cols = {row[1] for row in self._conn.execute("PRAGMA table_info(users)")}
+        if user_cols:  # таблица users могла ещё не существовать на самых старых БД — её создаст _SCHEMA
+            if "plan" not in user_cols:
+                self._conn.execute("ALTER TABLE users ADD COLUMN plan TEXT NOT NULL DEFAULT 'free'")
+            if "paid_until" not in user_cols:
+                self._conn.execute("ALTER TABLE users ADD COLUMN paid_until TEXT")
         self._conn.commit()
 
     def close(self) -> None:
@@ -459,6 +468,16 @@ class Storage:
     def touch_last_login(self, user_id: int) -> None:
         self._conn.execute("UPDATE users SET last_login = ? WHERE id = ?",
                            (auth.utcnow_iso(), user_id))
+        self._conn.commit()
+
+    def grant_subscription(self, user_id: int, *, days: "int | None" = None,
+                           until: "str | None" = None, plan: str = "paid") -> None:
+        """Выдать/продлить подписку: `paid_until = сейчас + days` (или явный `until` — UTC ISO).
+        В Ф1 это же делает вебхук провайдера после успешной оплаты."""
+        if until is None and days is not None:
+            until = auth.iso(auth.utcnow() + timedelta(days=days))
+        self._conn.execute("UPDATE users SET plan = ?, paid_until = ? WHERE id = ?",
+                           (plan, until, user_id))
         self._conn.commit()
 
     def create_session(self, user_id: int, token: str, *, remember: bool = False) -> None:

@@ -191,6 +191,22 @@ def passwd(
 
 
 @app.command()
+def grant_sub(
+    username: str = typer.Option(..., "--username"),
+    days: int = typer.Option(30, "--days", help="На сколько дней выдать/продлить подписку"),
+    db: str = typer.Option("toursearch.db", "--db"),
+) -> None:
+    """Выдать/продлить подписку пользователю (на N дней от сейчас). Ручная выдача до Ф1."""
+    with Storage(db) as storage:
+        user = storage.get_user_by_username(username)
+        if not user:
+            typer.echo(f"Нет пользователя '{username}'.")
+            raise typer.Exit(code=1)
+        storage.grant_subscription(user["id"], days=days)
+    typer.echo(f"Подписка для '{username}' активна ещё {days} дн.")
+
+
+@app.command()
 def healthcheck(
     provider: list[str] = typer.Option([], "--provider", help="Ограничить площадки"),
     headless: bool = typer.Option(True, "--headless/--headed"),
