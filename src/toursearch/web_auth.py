@@ -8,14 +8,25 @@
 from __future__ import annotations
 
 import hmac
-import time
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from toursearch import auth, billing
+from toursearch.ratelimit import SlidingWindow
 from toursearch.storage import Storage
+
+# Анти-enumeration: на неизвестном логине всё равно гоняем PBKDF2 против фиктивного хеша,
+# чтобы время ответа не выдавало существование аккаунта. Хеш считаем лениво один раз.
+_dummy_hash: "str | None" = None
+
+
+def _dummy_verify(password: str) -> None:
+    global _dummy_hash
+    if _dummy_hash is None:
+        _dummy_hash = auth.hash_password("timing-equalizer")
+    auth.verify_password(password, _dummy_hash)
 
 # Хосты, считающиеся локальными (secure-cookie выкл, предохранитель не нужен).
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
@@ -230,17 +241,36 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
         resp.set_cookie("ts_csrf", csrf, httponly=False, samesite="lax",  # JS читает → X-CSRF-Token
                         secure=secure_cookies, max_age=max_age)
 
+    # Анти-брутфорс/абьюз входа и регистрации (in-memory, одно-процессный uvicorn → при масштабе Redis).
+    _login_rate = SlidingWindow(limit=20, window=300.0)   # попыток входа с одного IP / 5 мин
+    _login_fails = SlidingWindow(limit=5, window=900.0)   # неудач на (username|ip) / 15 мин → лок
+    _reg_rate = SlidingWindow(limit=3, window=600.0)      # регистраций с одного IP / 10 мин
+
     @app.post("/api/login")
-    async def api_login(username: str = Form(...), password: str = Form(...),
+    async def api_login(request: Request, username: str = Form(...), password: str = Form(...),
                         remember: bool = Form(False)):
+        ip = request.client.host if request.client else "?"
+        if not _login_rate.hit(ip):  # шквал попыток с IP → притормозить
+            return JSONResponse({"error": "Слишком много попыток входа — подождите немного."},
+                                status_code=429)
+        uname = (username or "").strip()
+        fail_key = f"{uname}|{ip}"
+        if _login_fails.count(fail_key) >= 5:  # серия неудач по этому логину с этого IP → лок
+            return JSONResponse({"error": "Слишком много неудачных попыток. Попробуйте позже."},
+                                status_code=429)
         with Storage(db_path) as storage:
             if not storage.has_any_user():
                 return JSONResponse({"error": "Вход не настроен (нет пользователей)."}, status_code=400)
-            user = storage.get_user_by_username(username)
-            if not (user and bool(user["is_active"])
-                    and auth.verify_password(password, user["password_hash"])):
+            user = storage.get_user_by_username(uname)
+            ok = bool(user and bool(user["is_active"])
+                      and auth.verify_password(password, user["password_hash"]))
+            if not ok:
+                if user is None:
+                    _dummy_verify(password)  # равное время ответа → не выдаём существование логина
+                _login_fails.add(fail_key)
                 return JSONResponse({"error": "Неверный логин или пароль."}, status_code=401)
-            token = auth.new_session_token()  # новый токен на каждый вход → нет session fixation
+            _login_fails.clear(fail_key)       # успех → сбрасываем счётчик неудач
+            token = auth.new_session_token()   # новый токен на каждый вход → нет session fixation
             storage.create_session(user["id"], token, remember=bool(remember))
             storage.touch_last_login(user["id"])
             if auth.needs_rehash(user["password_hash"]):
@@ -249,21 +279,6 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
                              "permissions": auth.permissions_for(user["role"])})
         _set_session_cookies(resp, token, auth.new_session_token(), remember=bool(remember))
         return resp
-
-    _reg_log: dict = {}  # ip → [моменты регистраций], in-memory rate-limit (одно-процессный uvicorn)
-
-    def _reg_allowed(ip: str, *, limit: int = 3, window: float = 600.0) -> bool:
-        """Не более `limit` регистраций с IP за `window` секунд (анти-абьюз бесплатных 5)."""
-        now = time.monotonic()
-        times = [t for t in _reg_log.get(ip, []) if now - t < window]
-        if len(times) >= limit:
-            _reg_log[ip] = times
-            return False
-        times.append(now)
-        _reg_log[ip] = times
-        if len(_reg_log) > 5000:  # страховка от роста словаря
-            _reg_log.clear()
-        return True
 
     @app.post("/api/register")
     async def api_register(request: Request, username: str = Form(...), password: str = Form(...)):
@@ -275,7 +290,7 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
         if len(password) < 6:
             return JSONResponse({"error": "Пароль слишком короткий (мин. 6 символов)."}, status_code=400)
         ip = request.client.host if request.client else "?"
-        if not _reg_allowed(ip):  # лимит считаем после валидации формата
+        if not _reg_rate.hit(ip):  # лимит считаем после валидации формата
             return JSONResponse({"error": "Слишком много регистраций — подождите немного."},
                                 status_code=429)
         with Storage(db_path) as storage:
