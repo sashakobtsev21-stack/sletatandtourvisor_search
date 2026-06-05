@@ -75,6 +75,30 @@ def test_login_bad_credentials(tmp_path):
     assert _login(client, "ghost", "secret1").status_code == 401
 
 
+def test_register_creates_user_and_logs_in(tmp_path):
+    # мультиюзер (есть админ) → регистрация открыта; новый юзер сразу залогинен, 5 поисков
+    client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))
+    r = client.post("/api/register", data={"username": "newbie", "password": "secret1"})
+    assert r.status_code == 200 and r.json()["role"] == "user"
+    me = client.get("/api/me").json()  # авто-вход
+    assert me["username"] == "newbie" and me["searches_left"] == 5
+
+
+def test_register_validations(tmp_path):
+    client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))
+    assert client.post("/api/register", data={"username": "ab", "password": "secret1"}).status_code == 400
+    assert client.post("/api/register", data={"username": "okname", "password": "123"}).status_code == 400
+    client.post("/api/register", data={"username": "dup", "password": "secret1"})
+    assert client.post("/api/register", data={"username": "dup", "password": "secret1"}).status_code == 409
+
+
+def test_register_rate_limited(tmp_path):
+    client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))
+    for i in range(3):  # лимит 3/IP
+        assert client.post("/api/register", data={"username": f"user{i}", "password": "secret1"}).status_code == 200
+    assert client.post("/api/register", data={"username": "user9", "password": "secret1"}).status_code == 429
+
+
 def test_logout_invalidates_session(tmp_path):
     client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))
     _login(client, "admin", "secret1")

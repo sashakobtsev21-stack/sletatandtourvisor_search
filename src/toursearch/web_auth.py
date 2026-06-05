@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import hmac
+import time
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -24,8 +25,8 @@ LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
 # гейтит вход (<img> шлёт cookie сам). В локальном режиме они по-прежнему открыты.
 _AUTH_SKIP_PREFIXES = ("/app", "/assets")
 _AUTH_SKIP_EXACT = ("/", "/favicon.ico", "/openapi.json", "/docs", "/redoc")
-# Пути, где creds резолвятся, но доступ НЕ требуется (вход / выход / «кто я»).
-_AUTH_EXEMPT_EXACT = ("/api/login", "/api/logout", "/api/me")
+# Пути, где creds резолвятся, но доступ НЕ требуется (вход / регистрация / выход / «кто я»).
+_AUTH_EXEMPT_EXACT = ("/api/login", "/api/register", "/api/logout", "/api/me")
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
@@ -198,6 +199,47 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
         resp = JSONResponse({"username": user["username"], "role": user["role"],
                              "permissions": auth.permissions_for(user["role"])})
         _set_session_cookies(resp, token, auth.new_session_token(), remember=bool(remember))
+        return resp
+
+    _reg_log: dict = {}  # ip → [моменты регистраций], in-memory rate-limit (одно-процессный uvicorn)
+
+    def _reg_allowed(ip: str, *, limit: int = 3, window: float = 600.0) -> bool:
+        """Не более `limit` регистраций с IP за `window` секунд (анти-абьюз бесплатных 5)."""
+        now = time.monotonic()
+        times = [t for t in _reg_log.get(ip, []) if now - t < window]
+        if len(times) >= limit:
+            _reg_log[ip] = times
+            return False
+        times.append(now)
+        _reg_log[ip] = times
+        if len(_reg_log) > 5000:  # страховка от роста словаря
+            _reg_log.clear()
+        return True
+
+    @app.post("/api/register")
+    async def api_register(request: Request, username: str = Form(...), password: str = Form(...)):
+        """Само-регистрация (открытая, с rate-limit). Создаёт юзера (5 бесплатных поисков) и
+        сразу логинит. Включается в мультиюзере; в локальном режиме регистрация не нужна."""
+        username = (username or "").strip()
+        if len(username) < 3:
+            return JSONResponse({"error": "Логин слишком короткий (мин. 3 символа)."}, status_code=400)
+        if len(password) < 6:
+            return JSONResponse({"error": "Пароль слишком короткий (мин. 6 символов)."}, status_code=400)
+        ip = request.client.host if request.client else "?"
+        if not _reg_allowed(ip):  # лимит считаем после валидации формата
+            return JSONResponse({"error": "Слишком много регистраций — подождите немного."},
+                                status_code=429)
+        with Storage(db_path) as storage:
+            if storage.get_user_by_username(username):
+                return JSONResponse({"error": "Такой логин уже занят."}, status_code=409)
+            uid = storage.create_user(username, password, role="user")  # роль user, 5 бесплатных
+            token = auth.new_session_token()
+            storage.create_session(uid, token)
+            storage.touch_last_login(uid)
+            user = storage.get_user_by_id(uid)
+        resp = JSONResponse({"username": user["username"], "role": user["role"],
+                             "permissions": auth.permissions_for(user["role"])})
+        _set_session_cookies(resp, token, auth.new_session_token(), remember=False)
         return resp
 
     @app.post("/api/logout")
