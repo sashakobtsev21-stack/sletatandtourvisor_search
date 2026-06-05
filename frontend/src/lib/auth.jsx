@@ -44,6 +44,21 @@ export function AuthProvider({ children }) {
     [refresh]
   );
 
+  const register = useCallback(
+    async (username, password) => {
+      const r = await apiFetch("/api/register", {
+        method: "POST",
+        body: new URLSearchParams({ username, password }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || "Не удалось зарегистрироваться");
+      }
+      await refresh(); // авто-вход после регистрации
+    },
+    [refresh]
+  );
+
   const logout = useCallback(async () => {
     await apiFetch("/api/logout", { method: "POST" }).catch(() => {});
     setUser(null);
@@ -55,7 +70,7 @@ export function AuthProvider({ children }) {
   );
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout, can, refresh }}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, can, refresh }}>
       {children}
     </AuthContext.Provider>
   );

@@ -14,9 +14,9 @@ from datetime import datetime, timezone
 # Право, которое расходует поиски (граница «бесплатно/платно»).
 PAID_PERMISSION = "search.run"
 
-# Бесплатные поиски: 5 на аккаунт (пожизненно) и 3 для гостя (Фаза B).
+# Бесплатные поиски: 5 на аккаунт (пожизненно) и 2 для гостя без входа (Фаза B).
 FREE_CREDITS = 5
-ANON_CREDITS = 3
+ANON_CREDITS = 2
 
 PROVIDER = (os.environ.get("TOURSEARCH_PAYMENT_PROVIDER") or "stub").strip()
 
