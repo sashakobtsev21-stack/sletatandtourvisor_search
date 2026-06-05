@@ -7,6 +7,7 @@ import GlassCard from "../components/ui/GlassCard.jsx";
 import { staggerContainer, fadeUp } from "../lib/animations.js";
 import { formatPrice, formatDate, providerLabel } from "../lib/format.js";
 import { apiFetch } from "../lib/api.js";
+import { takeResult } from "../lib/resultStore.js";
 
 /**
  * ResultsPage — отчёт сравнения одного прогона (#/run/{id}).
@@ -24,6 +25,11 @@ export default function ResultsPage({ runId }) {
     let alive = true;
     setData(null);
     setError(null);
+    const stashed = takeResult(runId); // гость: отчёт уже у нас (минуя защищённый /api/runs)
+    if (stashed) {
+      setData(stashed);
+      return () => { alive = false; };
+    }
     apiFetch(`/api/runs/${runId}`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((j) => alive && setData(j))

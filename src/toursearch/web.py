@@ -95,6 +95,8 @@ class _SearchSession:
     user_id: "int | None" = None                     # владелец прогона (для истории по юзеру)
     consume: bool = False                             # списывать ли поиск (обычный юзер; не admin/локально)
     consumed: bool = False                            # списали ли (для возврата при сбое)
+    device: "str | None" = None                       # id устройства гостя → анонимный расход (не по юзеру)
+    ip: "str | None" = None                           # ip гостя (мягкий анти-абьюз очистки cookie)
     events: list = field(default_factory=list)      # все НЕ-кадровые события (для переигровки)
     frames: dict = field(default_factory=dict)       # провайдер → последний кадр трансляции
     subscribers: set = field(default_factory=set)    # очереди активных SSE-соединений
@@ -426,13 +428,17 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
         def _refund() -> None:
             # Вернуть списанный поиск, если работа не была сделана (гейт/сбой/отмена). При
             # штатном done НЕ зовём: «туров нет» = поиск отработал, попытка израсходована.
-            if session.consumed and session.user_id is not None:
-                try:
-                    with Storage(db_path) as s:
+            if not session.consumed:
+                return
+            try:
+                with Storage(db_path) as s:
+                    if session.device is not None:      # гость — возврат по устройству
+                        s.refund_anon(session.device)
+                    elif session.user_id is not None:   # обычный юзер — кредит
                         s.refund_search(session.user_id)
-                    session.consumed = False
-                except Exception:
-                    pass
+                session.consumed = False
+            except Exception:
+                pass
 
         try:
             _emit(session, {"type": "log", "level": "INFO", "msg": "Проверяю формы площадок (health-check)…"})
@@ -446,7 +452,10 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
             report = await run_search(session.params, providers=session.chosen, headless=True, on_frame=on_frame)
             with Storage(db_path) as storage:
                 run_id = storage.save_report(report, user_id=session.user_id)
-            _emit(session, {"type": "done", "run_id": run_id})
+            done_ev = {"type": "done", "run_id": run_id}
+            if session.device is not None:  # гостю нет доступа к /api/runs — отдаём отчёт прямо в событии
+                done_ev["report"] = _report_dict(report, run_id)
+            _emit(session, done_ev)
         except asyncio.CancelledError:
             # Остановка по запросу пользователя — штатный финал. Не пробрасываем дальше:
             # внешнего ожидающего нет, а финал подписчикам уже отправлен.
@@ -500,11 +509,19 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
         except ValueError as exc:
             return {"error": f"Некорректные параметры поиска: {exc}"}
         token = uuid.uuid4().hex
-        # Списываем поиск только у обычного юзера БЕЗ активной подписки (admin/подписка/локально — нет).
         u = request.state.user if hasattr(request.state, "user") else None
-        _searches[token] = _SearchSession(
-            params=params, chosen=chosen, user_id=current_user_id(request),
-            consume=billing.consumes_credit(u))
+        mode = getattr(request.state, "auth_mode", "local")
+        if mode == "multiuser" and u is None:  # анонимный гость — расход по устройству (cookie), не по юзеру
+            session = _SearchSession(
+                params=params, chosen=chosen, user_id=None, consume=True,
+                device=getattr(request.state, "device", None),
+                ip=(request.client.host if request.client else None))
+        else:
+            # Списываем только у обычного юзера БЕЗ активной подписки (admin/подписка/локально — нет).
+            session = _SearchSession(
+                params=params, chosen=chosen, user_id=current_user_id(request),
+                consume=billing.consumes_credit(u))
+        _searches[token] = session
         _cap_tokens(_searches)
         return {"token": token}
 
@@ -543,7 +560,10 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
                     # запускаем (страховка от гонки / прямого обращения мимо prepare-проверки).
                     if session.consume:
                         with Storage(db_path) as s:
-                            session.consumed = s.try_consume_search(session.user_id)
+                            if session.device is not None:        # гость — расход по устройству (анонимно)
+                                session.consumed = s.try_consume_anon(session.device, session.ip or "")
+                            else:                                  # обычный юзер — кредит из остатка
+                                session.consumed = s.try_consume_search(session.user_id)
                     if session.consume and not session.consumed:
                         _emit(session, {"type": "error",
                               "msg": "Закончились поиски — пополните на вкладке «Подписка»."})

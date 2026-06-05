@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { Palmtree, User, Lock, LogIn, UserPlus } from "lucide-react";
 import GlassCard from "../components/ui/GlassCard.jsx";
 import { useAuth } from "../lib/auth.jsx";
+import { navigate } from "../lib/router.js";
 
 /**
  * LoginPage — вход ИЛИ регистрация (переключатель). Режим всего приложения, показывается
@@ -15,7 +16,9 @@ const control =
 
 export default function LoginPage() {
   const { login, register } = useAuth();
-  const [mode, setMode] = useState("login"); // 'login' | 'register'
+  // Гость открывает форму по #/register или #/login — стартуем с нужной вкладки.
+  const [mode, setMode] = useState(() =>
+    (typeof window !== "undefined" && window.location.hash.includes("register") ? "register" : "login"));
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [remember, setRemember] = useState(false);
@@ -30,6 +33,7 @@ export default function LoginPage() {
     try {
       if (isReg) await register(username, password);
       else await login(username, password, remember);
+      navigate("/"); // из гостевого #/login|#/register — на дашборд (в форс-режиме без эффекта)
     } catch (err) {
       setError(err.message || "Ошибка");
     } finally {

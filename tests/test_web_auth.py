@@ -55,10 +55,13 @@ def _csrf(client) -> dict:
 
 # --------------------------- вход / профиль ---------------------------
 
-def test_multiuser_requires_login(tmp_path):
+def test_multiuser_private_endpoints_require_login(tmp_path):
+    # Без входа приватные эндпоинты (история/тесты/пользователи) закрыты. Справочники и
+    # поиск открыты гостю с лимитом (см. тесты гостя ниже) — это намеренная воронка.
     client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))
-    assert client.get("/api/refdata").status_code == 401  # без сессии — защищено
-    assert client.get("/api/me").status_code == 401
+    assert client.get("/api/users").status_code == 401
+    assert client.get("/api/runs").status_code == 401
+    assert client.get("/api/tests/catalog").status_code == 401
 
     r = _login(client, "admin", "secret1")
     assert r.status_code == 200
@@ -99,12 +102,59 @@ def test_register_rate_limited(tmp_path):
     assert client.post("/api/register", data={"username": "user9", "password": "secret1"}).status_code == 429
 
 
+# --------------------------- анонимный гость (Фаза 2: 2 поиска без входа) ---------------------------
+
+def test_guest_me_and_cookies(tmp_path):
+    # мультиюзер (есть админ), но без входа → гостевое состояние с 2 бесплатными поисками
+    client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))
+    me = client.get("/api/me")
+    assert me.status_code == 200
+    j = me.json()
+    assert j["mode"] == "guest" and j["username"] is None and j["searches_left"] == 2
+    assert "search.run" in j["permissions"]
+    assert client.cookies.get("ts_device") and client.cookies.get("ts_csrf")  # выданы id+CSRF
+
+
+def test_guest_can_prepare_search(tmp_path):
+    client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))
+    client.get("/api/me")                                   # получить ts_device + ts_csrf
+    assert client.get("/api/refdata").status_code == 200    # справочники открыты гостю
+    r = client.post("/search/prepare", data=_FORM, headers=_csrf(client))
+    assert r.status_code == 200 and "token" in r.json()
+
+
+def test_guest_search_limit_402(tmp_path):
+    db = _seed(tmp_path, [("admin", "secret1", "admin")])
+    client = TestClient(create_app(db_path=db))
+    client.get("/api/me")                                   # завести устройство
+    device = client.cookies.get("ts_device")
+    with Storage(db) as s:                                  # исчерпать 2 анонимных поиска
+        assert s.try_consume_anon(device, "testclient") is True
+        assert s.try_consume_anon(device, "testclient") is True
+    assert client.post("/search/prepare", data=_FORM, headers=_csrf(client)).status_code == 402
+    assert client.get("/api/me").json()["searches_left"] == 0
+
+
+def test_guest_needs_csrf(tmp_path):
+    client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))
+    client.get("/api/me")                                   # есть cookie, но заголовок не шлём
+    assert client.post("/search/prepare", data=_FORM).status_code == 403  # нет X-CSRF-Token
+
+
+def test_guest_billing_status(tmp_path):
+    client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))
+    client.get("/api/me")
+    st = client.get("/api/billing/status").json()
+    assert st["is_guest"] is True and st["unlimited"] is False and st["searches_left"] == 2
+    assert "plans" in st
+
+
 def test_logout_invalidates_session(tmp_path):
     client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))
     _login(client, "admin", "secret1")
-    assert client.get("/api/refdata").status_code == 200
+    assert client.get("/api/users").status_code == 200
     assert client.post("/api/logout").status_code == 200  # logout — exempt (Origin-проверка)
-    assert client.get("/api/refdata").status_code == 401  # сессия снята
+    assert client.get("/api/users").status_code == 401  # сессия снята → приватное закрыто (гость не видит)
 
 
 # --------------------------- права по ролям ---------------------------

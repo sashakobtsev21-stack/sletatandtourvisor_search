@@ -157,6 +157,18 @@ CREATE TABLE IF NOT EXISTS payments (
     provider_payment_id TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_id);
+
+-- Анонимный (гостевой) расход бесплатных поисков. Ключ — id устройства из cookie
+-- ts_device; ip — для мягкого анти-абьюза очистки cookie (cap по IP за окно).
+-- Воронка: гость 2 поиска → регистрация 5 → оплата по тарифу.
+CREATE TABLE IF NOT EXISTS anon_usage (
+    device     TEXT PRIMARY KEY,
+    ip         TEXT,
+    used       INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_anon_usage_ip ON anon_usage(ip);
 """
 
 
@@ -517,6 +529,46 @@ class Storage:
     def refund_search(self, user_id: int) -> None:
         """Вернуть 1 поиск (системный сбой/отмена — работа не сделана)."""
         self.add_credits(user_id, 1)
+
+    # --- анонимные (гостевые) поиски: учёт по устройству (cookie ts_device) ---
+
+    def anon_used(self, device: str) -> int:
+        """Сколько бесплатных поисков израсходовало устройство (0, если строки нет)."""
+        row = self._conn.execute(
+            "SELECT used FROM anon_usage WHERE device = ?", (device,)).fetchone()
+        return int(row["used"]) if row else 0
+
+    def try_consume_anon(self, device: str, ip: str, *, device_limit: int = 2,
+                         ip_limit: int = 6, ip_window_hours: int = 24) -> bool:
+        """АТОМАРНО списать 1 анонимный поиск. True — списали, False — лимит исчерпан.
+
+        Двухуровневый лимит: на устройство (device_limit, основной) и мягкий cap на IP за
+        окно (анти-абьюз очистки cookie). Списание устройства — условный upsert; успех
+        определяем по дельте total_changes (надёжнее rowcount для ON CONFLICT…WHERE)."""
+        now = auth.utcnow()
+        now_iso = auth.iso(now)
+        cutoff = auth.iso(now - timedelta(hours=ip_window_hours))
+        ip_used = self._conn.execute(
+            "SELECT COALESCE(SUM(used), 0) FROM anon_usage WHERE ip = ? AND updated_at >= ?",
+            (ip, cutoff)).fetchone()[0]
+        if int(ip_used) >= ip_limit:
+            return False
+        before = self._conn.total_changes
+        self._conn.execute(
+            """INSERT INTO anon_usage (device, ip, used, created_at, updated_at)
+               VALUES (?, ?, 1, ?, ?)
+               ON CONFLICT(device) DO UPDATE SET
+                   used = used + 1, ip = excluded.ip, updated_at = excluded.updated_at
+               WHERE anon_usage.used < ?""",
+            (device, ip, now_iso, now_iso, device_limit))
+        self._conn.commit()
+        return self._conn.total_changes - before == 1
+
+    def refund_anon(self, device: str) -> None:
+        """Вернуть 1 анонимный поиск (системный сбой/отмена)."""
+        self._conn.execute(
+            "UPDATE anon_usage SET used = max(0, used - 1) WHERE device = ?", (device,))
+        self._conn.commit()
 
     def grant_subscription(self, user_id: int, *, days: int) -> None:
         """Выдать/ПРОДЛИТЬ подписку на `days`: paid_until = max(сейчас, текущий) + days (стэк)."""
