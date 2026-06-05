@@ -2,6 +2,7 @@ import { motion } from "framer-motion";
 import { Palmtree, Search, Layers, History, FlaskConical, Users, CreditCard, LogOut, LogIn, UserPlus } from "lucide-react";
 import { fadeUp } from "../lib/animations.js";
 import { useAuth } from "../lib/auth.jsx";
+import NotificationsBell from "./NotificationsBell.jsx";
 
 /**
  * AppShell — общий каркас всех экранов дашборда: анимированный фон (световые
@@ -88,6 +89,9 @@ export default function AppShell({ route = "/", children }) {
               {user.mode === "guest" ? `${user.searches_left} бесплатных` : `${user.searches_left} поиск.`}
             </a>
           )}
+
+          {/* Колокольчик уведомлений — только залогиненным (гость/локальный режим — без). */}
+          {user?.mode === "multiuser" && <NotificationsBell />}
 
           {/* Гость: войти / регистрация. Залогинен: имя + выход. Локальный режим: ничего. */}
           {user?.mode === "guest" ? (
