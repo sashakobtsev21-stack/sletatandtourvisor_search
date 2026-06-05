@@ -250,3 +250,24 @@ def test_web_refuses_insecure_exposure(tmp_path, monkeypatch):
     db = str(tmp_path / "x.db")
     r = runner.invoke(app, ["web", "--host", "0.0.0.0", "--db", db])
     assert r.exit_code == 1 and "Отказ старта" in r.output  # uvicorn не стартует
+
+
+# --------------------------- grant-sub (подписка) ---------------------------
+
+def test_grant_sub_extends(tmp_path):
+    from toursearch import billing
+    db = str(tmp_path / "a.db")
+    with Storage(db) as s:
+        uid = s.create_user("u", "secret1", role="user", iters=1000)
+    r = runner.invoke(app, ["grant-sub", "--username", "u", "--days", "10", "--db", db])
+    assert r.exit_code == 0 and "активна" in r.output
+    with Storage(db) as s:
+        assert billing.subscription_active(s.get_user_by_id(uid)) is True
+
+
+def test_grant_sub_unknown_user(tmp_path):
+    db = str(tmp_path / "a.db")
+    with Storage(db):
+        pass
+    r = runner.invoke(app, ["grant-sub", "--username", "ghost", "--db", db])
+    assert r.exit_code == 1 and "Нет пользователя" in r.output

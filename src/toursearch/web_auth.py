@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from toursearch import auth
+from toursearch import auth, billing
 from toursearch.storage import Storage
 
 # Хосты, считающиеся локальными (secure-cookie выкл, предохранитель не нужен).
@@ -151,6 +151,9 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
             perm = _required_permission(path)
             if perm and not auth.has_permission(request.state.user["role"], perm):
                 return JSONResponse({"error": "Недостаточно прав."}, status_code=403)
+            # Платная функция (запуск анализа) требует активной подписки (admin — байпас).
+            if perm == billing.PAID_PERMISSION and not billing.access_allowed(request.state.user):
+                return JSONResponse({"error": "Нужна активная подписка."}, status_code=402)
         # local → открыто (Origin мутирующих уже проверён выше)
 
         response = await call_next(request)

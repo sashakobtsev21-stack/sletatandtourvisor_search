@@ -104,11 +104,38 @@ def test_admin_sees_tests_and_users(tmp_path):
 # --------------------------- CSRF ---------------------------
 
 def test_csrf_required_for_mutations(tmp_path):
-    client = TestClient(create_app(db_path=_seed(tmp_path, [("u", "secret1", "user")])))
+    db = _seed(tmp_path, [("u", "secret1", "user")])
+    with Storage(db) as s:  # подписка — чтобы тест был про CSRF, а не про гейт оплаты (402)
+        s.grant_subscription(s.get_user_by_username("u")["id"], days=30)
+    client = TestClient(create_app(db_path=db))
     _login(client, "u", "secret1")
     assert client.post("/search/prepare", data=_FORM).status_code == 403  # нет X-CSRF-Token
     r = client.post("/search/prepare", data=_FORM, headers=_csrf(client))
     assert r.status_code == 200 and "token" in r.json()
+
+
+# --------------------------- подписка (SaaS-гейт на запуск анализа) ---------------------------
+
+def test_subscription_gates_search(tmp_path):
+    db = _seed(tmp_path, [("u", "secret1", "user")])
+    client = TestClient(create_app(db_path=db))
+    _login(client, "u", "secret1")
+    h = _csrf(client)
+    # без подписки запуск анализа → 402 (CSRF корректный — режет именно оплата)
+    assert client.post("/search/prepare", data=_FORM, headers=h).status_code == 402
+    assert client.get("/api/runs").status_code == 200  # история бесплатна — доступна
+
+    with Storage(db) as s:  # выдать подписку
+        s.grant_subscription(s.get_user_by_username("u")["id"], days=30)
+    r = client.post("/search/prepare", data=_FORM, headers=h)
+    assert r.status_code == 200 and "token" in r.json()  # теперь пускает
+
+
+def test_admin_bypasses_subscription(tmp_path):
+    client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))
+    _login(client, "admin", "secret1")
+    r = client.post("/search/prepare", data=_FORM, headers=_csrf(client))
+    assert r.status_code == 200 and "token" in r.json()  # admin без подписки — пускает
 
 
 # --------------------------- управление пользователями ---------------------------

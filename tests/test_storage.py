@@ -337,3 +337,19 @@ def test_touch_session_throttle_and_renew(tmp_path):
     storage.touch_session(tok)
     assert _sess()["last_seen"] == renewed["last_seen"]
     storage.close()
+
+
+def test_grant_subscription(tmp_path):
+    from toursearch import billing
+
+    storage = Storage(tmp_path / "t.db")
+    uid = storage.create_user("u", "p", iters=1000)
+    u = storage.get_user_by_id(uid)
+    assert u["plan"] == "free" and u["paid_until"] is None       # по умолчанию подписки нет
+    assert billing.subscription_active(u) is False
+
+    storage.grant_subscription(uid, days=30)
+    u = storage.get_user_by_id(uid)
+    assert u["plan"] == "paid" and u["paid_until"] is not None
+    assert billing.subscription_active(u) is True                # активна
+    storage.close()
