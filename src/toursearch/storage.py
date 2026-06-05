@@ -169,6 +169,22 @@ CREATE TABLE IF NOT EXISTS anon_usage (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_anon_usage_ip ON anon_usage(ip);
+
+-- Батч-анализ: фоновое задание на много направлений (одни параметры, разные страны).
+-- Каждое направление → отдельный прогон (runs.job_id). N направлений = N кредитов.
+CREATE TABLE IF NOT EXISTS jobs (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id           INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    status            TEXT NOT NULL DEFAULT 'pending',  -- pending/running/done/failed/interrupted
+    params_json       TEXT NOT NULL,                    -- общие параметры (без страны)
+    destinations_json TEXT NOT NULL,                    -- список стран (JSON-массив)
+    progress_done     INTEGER NOT NULL DEFAULT 0,
+    progress_total    INTEGER NOT NULL DEFAULT 0,
+    created_at        TEXT NOT NULL,
+    finished_at       TEXT,
+    error             TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_user ON jobs(user_id);
 """
 
 
@@ -223,6 +239,9 @@ class Storage:
         if "user_id" not in run_cols:
             self._conn.execute("ALTER TABLE runs ADD COLUMN user_id INTEGER")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_user ON runs(user_id)")
+        if "job_id" not in run_cols:  # привязка прогона к батч-заданию (Ф1 батч-анализа)
+            self._conn.execute("ALTER TABLE runs ADD COLUMN job_id INTEGER")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_job ON runs(job_id)")
         # подписка (SaaS): тариф + срок у пользователя
         user_cols = {row[1] for row in self._conn.execute("PRAGMA table_info(users)")}
         if user_cols:  # таблица users могла ещё не существовать на самых старых БД — её создаст _SCHEMA
@@ -251,12 +270,13 @@ class Storage:
     def __exit__(self, *exc) -> None:
         self.close()
 
-    def save_report(self, report: ComparisonReport, user_id: int | None = None) -> int:
+    def save_report(self, report: ComparisonReport, user_id: int | None = None,
+                    job_id: int | None = None) -> int:
         """Сохранить отчёт целиком и вернуть id прогона. `user_id` — владелец прогона
-        (None для CLI/системных прогонов)."""
+        (None для CLI/системных), `job_id` — батч-задание, если прогон его часть."""
         cur = self._conn.execute(
-            "INSERT INTO runs (run_at, params_json, user_id) VALUES (?, ?, ?)",
-            (report.run_at.isoformat(), report.params.model_dump_json(), user_id),
+            "INSERT INTO runs (run_at, params_json, user_id, job_id) VALUES (?, ?, ?, ?)",
+            (report.run_at.isoformat(), report.params.model_dump_json(), user_id, job_id),
         )
         run_id = int(cur.lastrowid)
         for result in report.results:
@@ -569,6 +589,68 @@ class Storage:
         self._conn.execute(
             "UPDATE anon_usage SET used = max(0, used - 1) WHERE device = ?", (device,))
         self._conn.commit()
+
+    # ------------------------- Батч-анализ (jobs) -------------------------
+
+    def create_job(self, user_id: "int | None", params_json: str,
+                   destinations: list[str]) -> int:
+        """Создать батч-задание (status=pending, total=число направлений). Вернёт id."""
+        cur = self._conn.execute(
+            "INSERT INTO jobs (user_id, status, params_json, destinations_json, "
+            "progress_done, progress_total, created_at) VALUES (?, 'pending', ?, ?, 0, ?, ?)",
+            (user_id, params_json, json.dumps(destinations, ensure_ascii=False),
+             len(destinations), auth.utcnow_iso()),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def get_job(self, job_id: int, owner_id: "int | None" = None) -> "dict | None":
+        """Задание по id. Если задан owner_id — чужое считается ненайденным."""
+        row = self._conn.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        if row is None or (owner_id is not None and row["user_id"] != owner_id):
+            return None
+        return _row(row)
+
+    def list_jobs(self, owner_id: "int | None" = None, limit: int = 50) -> list[dict]:
+        """Список батч-заданий (свежие сверху). owner_id (если задан) — только свои."""
+        if owner_id is None:
+            rows = self._conn.execute(
+                "SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM jobs WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+                (owner_id, limit)).fetchall()
+        return [_row(r) for r in rows]
+
+    def update_job(self, job_id: int, *, status: "str | None" = None,
+                   progress_done: "int | None" = None, finished_at: "str | None" = None,
+                   error: "str | None" = None) -> None:
+        """Точечно обновить поля задания (только переданные)."""
+        fields = {"status": status, "progress_done": progress_done,
+                  "finished_at": finished_at, "error": error}
+        sets = {k: v for k, v in fields.items() if v is not None}
+        if not sets:
+            return
+        clause = ", ".join(f"{k} = ?" for k in sets)  # ключи — внутренние литералы (не ввод)
+        self._conn.execute(f"UPDATE jobs SET {clause} WHERE id = ?",  # noqa: S608
+                           (*sets.values(), job_id))
+        self._conn.commit()
+
+    def list_job_runs(self, job_id: int) -> list[tuple[str, int, ComparisonReport]]:
+        """Прогоны батча: (страна, run_id, отчёт) в порядке создания (пакетная сборка)."""
+        rows = self._conn.execute(
+            "SELECT * FROM runs WHERE job_id = ? ORDER BY id", (job_id,)).fetchall()
+        reports = self._assemble(rows)
+        return [(reports[int(r["id"])].params.destination_country, int(r["id"]),
+                 reports[int(r["id"])]) for r in rows]
+
+    def mark_running_jobs_interrupted(self) -> int:
+        """Старт сервера: незавершённые задания (воркер умер с процессом) → interrupted."""
+        cur = self._conn.execute(
+            "UPDATE jobs SET status = 'interrupted', finished_at = ? "
+            "WHERE status IN ('pending', 'running')", (auth.utcnow_iso(),))
+        self._conn.commit()
+        return cur.rowcount
 
     def grant_subscription(self, user_id: int, *, days: int) -> None:
         """Выдать/ПРОДЛИТЬ подписку на `days`: paid_until = max(сейчас, текущий) + days (стэк)."""
