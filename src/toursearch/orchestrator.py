@@ -6,7 +6,12 @@ import asyncio
 import logging
 import os
 
-from toursearch.models import ComparisonReport, ProviderResult, SearchParams
+from toursearch.models import (
+    ComparisonReport,
+    ProviderResult,
+    SearchParams,
+    is_not_applicable_error,
+)
 from toursearch.providers import default_providers, get_provider, load_browser_providers
 
 log = logging.getLogger("toursearch.orchestrator")
@@ -18,6 +23,7 @@ async def run_search(
     headless: bool = False,
     on_frame=None,
     provider_timeout_s: float | None = None,
+    provider_retries: int | None = None,
 ) -> ComparisonReport:
     """Запустить поиск на всех (или указанных) площадках параллельно.
 
@@ -29,9 +35,18 @@ async def run_search(
     env `TOURSEARCH_PROVIDER_TIMEOUT_S` или 180с): если внутренние таймауты площадки не
     сработали (зависший браузер/цикл), её `search()` отменяется (провайдер закрывает
     браузер в `finally`) и не подвешивает всё сравнение.
+
+    При СЛУЧАЙНОМ сбое площадки — до `provider_retries` автоповторов (по умолчанию env
+    `TOURSEARCH_PROVIDER_RETRIES` или 1): сетевая икота / не успел прогрузиться элемент
+    обычно проходят со второй попытки. НЕ повторяем успех, верхний таймаут (площадка
+    зависла — второй такой же впустую) и детерминированные отказы («не обслуживает такой
+    запрос/режим/направление»).
     """
     timeout_s = (provider_timeout_s if provider_timeout_s is not None
                  else float(os.environ.get("TOURSEARCH_PROVIDER_TIMEOUT_S") or 180))
+    retries = (provider_retries if provider_retries is not None
+               else int(os.environ.get("TOURSEARCH_PROVIDER_RETRIES") or 1))
+    retries = max(0, retries)
     load_browser_providers()
     # providers=None → набор по умолчанию (без экспериментальных/opt-in площадок).
     names = providers or default_providers()
@@ -48,12 +63,12 @@ async def run_search(
                 inst.on_frame = on_frame
             except Exception:
                 pass
-    async def _run_one(name: str, inst) -> ProviderResult:
-        # Логируем завершение КАЖДОЙ площадки сразу, как она закончила (а не общим списком
-        # после gather): тогда веб-прогресс растёт по мере готовности площадок в реальном
-        # времени, а не скачком в самом конце.
+    async def _attempt(name: str, inst) -> tuple[ProviderResult, bool]:
+        """Одна попытка площадки под жёстким таймаутом. Возвращает (результат, был_таймаут).
+        Любой сбой превращается в ProviderResult(success=False), чтобы не валить прогон."""
         try:
             res = await asyncio.wait_for(inst.search(params), timeout=timeout_s)
+            return res, False
         except TimeoutError:
             # Внешняя страховка: внутренние таймауты площадки не сработали (зависший
             # браузер/цикл). wait_for отменил search() → провайдер закрыл браузер в finally.
@@ -61,12 +76,27 @@ async def run_search(
             return ProviderResult(
                 provider=name, success=False, duration_seconds=timeout_s,
                 search_mode=params.search_mode,
-                error=f"Превышен таймаут {timeout_s:.0f}с — площадка прервана оркестратором")
+                error=f"Превышен таймаут {timeout_s:.0f}с — площадка прервана оркестратором"), True
         except Exception as exc:  # noqa: BLE001 — падение площадки не должно валить прогон
             log.warning("provider %s raised: %s: %s", name, type(exc).__name__, exc)
             return ProviderResult(
                 provider=name, success=False, duration_seconds=0.0,
-                search_mode=params.search_mode, error=f"{type(exc).__name__}: {exc}")
+                search_mode=params.search_mode, error=f"{type(exc).__name__}: {exc}"), False
+
+    async def _run_one(name: str, inst) -> ProviderResult:
+        # Логируем завершение КАЖДОЙ площадки сразу, как она закончила (а не общим списком
+        # после gather): тогда веб-прогресс растёт по мере готовности площадок в реальном
+        # времени, а не скачком в самом конце.
+        res, timed_out = await _attempt(name, inst)
+        # Автоповтор ТОЛЬКО на случайном сбое: пропускаем успех, верхний таймаут (площадка
+        # зависла — второй такой же впустую) и детерминированные «не обслуживает запрос».
+        left = retries
+        while (left > 0 and not res.success and not timed_out
+               and not is_not_applicable_error(res.error)):
+            left -= 1
+            log.info("provider %s: случайный сбой (%s) — повтор (осталось %d)",
+                     name, res.error, left)
+            res, timed_out = await _attempt(name, inst)
         n = len(res.offers) + len(res.hotel_offers)
         if res.success:
             log.info("provider %s: OK %.1fs, %d результатов", name, res.duration_seconds, n)
