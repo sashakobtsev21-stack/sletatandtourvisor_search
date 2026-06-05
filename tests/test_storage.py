@@ -1,8 +1,10 @@
 """Тесты слоя хранения (Фаза 1)."""
 
+import sqlite3
 from datetime import date, datetime
 from decimal import Decimal
 
+from toursearch import auth
 from toursearch.models import (
     ComparisonReport,
     Offer,
@@ -174,4 +176,132 @@ def test_failed_provider_persisted(tmp_path):
     assert broken.success is False
     assert broken.error == "timeout"
     assert broken.offers == []
+    storage.close()
+
+
+# --------------------------- Пользователи и сессии (auth) ---------------------------
+
+def test_users_crud_and_password(tmp_path):
+    storage = Storage(tmp_path / "t.db")
+    assert storage.has_any_user() is False
+    uid = storage.create_user("admin", "pw1", role="admin", iters=1000)
+    assert storage.has_any_user() is True
+
+    u = storage.get_user_by_username("admin")
+    assert u["id"] == uid and u["role"] == "admin" and u["is_active"] == 1
+    assert auth.verify_password("pw1", u["password_hash"])
+
+    storage.update_password(uid, "pw2", iters=1000)
+    fresh = storage.get_user_by_id(uid)["password_hash"]
+    assert auth.verify_password("pw2", fresh) and not auth.verify_password("pw1", fresh)
+
+    rows = storage.list_users()
+    assert rows[0]["username"] == "admin" and "password_hash" not in rows[0]  # без хеша наружу
+    storage.close()
+
+
+def test_count_admins_tracks_active(tmp_path):
+    storage = Storage(tmp_path / "t.db")
+    a = storage.create_user("a", "p", role="admin", iters=1000)
+    storage.create_user("u", "p", role="user", iters=1000)
+    assert storage.count_admins() == 1
+    storage.create_user("a2", "p", role="admin", iters=1000)
+    assert storage.count_admins() == 2
+    storage.set_user_active(a, False)  # заблокировали одного админа
+    assert storage.count_admins() == 1
+    storage.close()
+
+
+def test_session_resolves_only_when_valid(tmp_path):
+    storage = Storage(tmp_path / "t.db")
+    uid = storage.create_user("u", "p", role="user", iters=1000)
+    token = auth.new_session_token()
+    storage.create_session(uid, token)
+
+    u = storage.get_session_user(token)
+    assert u and u["id"] == uid and u["role"] == "user"
+    assert storage.get_session_user(auth.new_session_token()) is None  # неизвестный токен
+    storage.delete_session(token)
+    assert storage.get_session_user(token) is None  # после logout
+    storage.close()
+
+
+def test_session_rejected_when_expired_or_user_disabled(tmp_path):
+    storage = Storage(tmp_path / "t.db")
+    uid = storage.create_user("u", "p", iters=1000)
+
+    # истёкшая сессия (выставим expires_at в прошлое)
+    expired = auth.new_session_token()
+    storage.create_session(uid, expired)
+    storage._conn.execute("UPDATE sessions SET expires_at = ? WHERE token_hash = ?",
+                          ("2000-01-01T00:00:00+00:00", auth.hash_token(expired)))
+    storage._conn.commit()
+    assert storage.get_session_user(expired) is None
+
+    # заблокированный юзер: свежая сессия, но is_active=0 (прямой UPDATE — проверяем фильтр JOIN)
+    blocked = auth.new_session_token()
+    storage.create_session(uid, blocked)
+    storage._conn.execute("UPDATE users SET is_active = 0 WHERE id = ?", (uid,))
+    storage._conn.commit()
+    assert storage.get_session_user(blocked) is None
+    storage.close()
+
+
+def test_block_user_drops_sessions_and_purge(tmp_path):
+    storage = Storage(tmp_path / "t.db")
+    uid = storage.create_user("u", "p", iters=1000)
+    token = auth.new_session_token()
+    storage.create_session(uid, token)
+    storage.set_user_active(uid, False)  # блокировка сносит сессии немедленно
+    assert storage.get_session_user(token) is None
+
+    # purge_expired_sessions удаляет только истёкшие
+    storage.set_user_active(uid, True)
+    live, stale = auth.new_session_token(), auth.new_session_token()
+    storage.create_session(uid, live)
+    storage.create_session(uid, stale)
+    storage._conn.execute("UPDATE sessions SET expires_at = ? WHERE token_hash = ?",
+                          ("2000-01-01T00:00:00+00:00", auth.hash_token(stale)))
+    storage._conn.commit()
+    assert storage.purge_expired_sessions() == 1
+    assert storage.get_session_user(live) is not None
+    storage.close()
+
+
+def test_report_owner_filter(tmp_path):
+    storage = Storage(tmp_path / "t.db")
+    rid_a = storage.save_report(_report(), user_id=1)
+    rid_b = storage.save_report(_report(), user_id=2)
+    rid_sys = storage.save_report(_report(), user_id=None)
+
+    assert [r for r, _ in storage.list_reports(owner_id=1)] == [rid_a]  # своя история
+    assert {r for r, _ in storage.list_reports()} == {rid_a, rid_b, rid_sys}  # вся (admin)
+
+    storage.get_report(rid_a, owner_id=1)  # свой — ок
+    for foreign in (rid_b, rid_sys):
+        try:
+            storage.get_report(foreign, owner_id=1)
+            raise AssertionError("ожидали KeyError для чужого прогона")
+        except KeyError:
+            pass
+    storage.close()
+
+
+def test_runs_user_id_migration(tmp_path):
+    """Старая БД без runs.user_id мигрируется: колонка добавляется, старые прогоны живы (NULL)."""
+    db = tmp_path / "old.db"
+    con = sqlite3.connect(db)  # эмулируем СТАРУЮ схему runs (без user_id) + один прогон
+    con.execute("CREATE TABLE runs (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "run_at TEXT NOT NULL, params_json TEXT NOT NULL)")
+    con.execute("INSERT INTO runs (run_at, params_json) VALUES (?, ?)",
+                ("2026-03-26T12:00:00", _report().params.model_dump_json()))
+    con.commit()
+    con.close()
+
+    storage = Storage(db)  # _migrate добавит user_id
+    cols = {row[1] for row in storage._conn.execute("PRAGMA table_info(runs)")}
+    assert "user_id" in cols
+    assert storage._conn.execute("SELECT user_id FROM runs WHERE id = 1").fetchone()["user_id"] is None
+    assert storage.list_reports(owner_id=1) == []   # под owner-фильтром старый прогон не виден
+    assert len(storage.list_reports()) == 1         # без фильтра — виден
     storage.close()
