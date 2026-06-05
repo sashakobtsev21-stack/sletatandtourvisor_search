@@ -131,6 +131,36 @@ def test_operator_statuses_roundtrip(tmp_path):
     storage.close()
 
 
+def test_list_reports_batched_no_nplus1(tmp_path):
+    """История читается ПАКЕТНО: число SELECT-ов не растёт с числом прогонов (анти-N+1)."""
+    storage = Storage(tmp_path / "t.db")
+
+    def _selects_during_list() -> int:
+        n = {"q": 0}
+
+        def trace(sql: str) -> None:
+            if sql.lstrip().upper().startswith("SELECT"):
+                n["q"] += 1
+
+        storage._conn.set_trace_callback(trace)
+        try:
+            assert storage.list_reports(limit=50)  # сборка реально произошла
+        finally:
+            storage._conn.set_trace_callback(None)
+        return n["q"]
+
+    storage.save_report(_report())
+    storage.save_report(_report())
+    q2 = _selects_during_list()
+    for _ in range(4):  # ещё прогоны — запросов должно быть СТОЛЬКО ЖЕ
+        storage.save_report(_report())
+    q6 = _selects_during_list()
+
+    assert q2 == q6, f"число запросов выросло с числом прогонов: {q2}→{q6} (это N+1)"
+    assert q6 <= 8, f"ожидали пакетное чтение (~5 запросов), получили {q6}"
+    storage.close()
+
+
 def test_failed_provider_persisted(tmp_path):
     storage = Storage(tmp_path / "t.db")
     report = _report()

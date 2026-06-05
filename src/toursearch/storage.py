@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections import defaultdict
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
@@ -24,6 +25,24 @@ from toursearch.models import (
     ProviderResult,
     SearchParams,
 )
+
+def _group_by_pr(rows: list[sqlite3.Row]) -> dict[int, list[sqlite3.Row]]:
+    """Сгруппировать строки-дети по их provider_result_id (для пакетной сборки отчётов)."""
+    out: dict[int, list[sqlite3.Row]] = defaultdict(list)
+    for r in rows:
+        out[int(r["provider_result_id"])].append(r)
+    return out
+
+
+def _jlist(row: sqlite3.Row, key: str) -> list[str]:
+    """JSON-массив из TEXT-колонки прогона; отсутствует/пусто/битое → []."""
+    if key not in row.keys() or not row[key]:
+        return []
+    try:
+        return json.loads(row[key])
+    except Exception:
+        return []
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
@@ -216,102 +235,97 @@ class Storage:
         self._conn.commit()
         return run_id
 
+    def _fetch_in(self, table: str, col: str, ids: list[int]) -> list[sqlite3.Row]:
+        """`SELECT * FROM <table> WHERE <col> IN (ids) ORDER BY id` чанками по 900 (лимит
+        числа подстановок в одном запросе SQLite — 999). `table`/`col` — внутренние
+        литералы (не пользовательский ввод), поэтому их подстановка в SQL безопасна."""
+        if not ids:
+            return []
+        rows: list[sqlite3.Row] = []
+        for i in range(0, len(ids), 900):
+            chunk = ids[i : i + 900]
+            placeholders = ",".join("?" * len(chunk))
+            rows += self._conn.execute(
+                f"SELECT * FROM {table} WHERE {col} IN ({placeholders}) ORDER BY id", chunk  # noqa: S608
+            ).fetchall()
+        return rows
+
+    def _assemble(self, run_rows: list[sqlite3.Row]) -> dict[int, ComparisonReport]:
+        """Собрать отчёты для набора прогонов ПАКЕТНО: все provider_results и их дети
+        (offers/hotel_offers/operator_offers) читаются несколькими запросами через
+        `WHERE ... IN (...)`, а не по запросу на каждого родителя. История на N прогонов
+        → ~5 запросов вместо ~16·N (раньше `get_report` звался в цикле — классический N+1).
+        Возвращает {run_id: отчёт}; порядок прогонов выбирает вызывающий."""
+        if not run_rows:
+            return {}
+        pr_rows = self._fetch_in("provider_results", "run_id", [int(r["id"]) for r in run_rows])
+        pr_ids = [int(pr["id"]) for pr in pr_rows]
+        offers_by_pr = _group_by_pr(self._fetch_in("offers", "provider_result_id", pr_ids))
+        hotels_by_pr = _group_by_pr(self._fetch_in("hotel_offers", "provider_result_id", pr_ids))
+        ops_by_pr = _group_by_pr(self._fetch_in("operator_offers", "provider_result_id", pr_ids))
+
+        pr_by_run: dict[int, list[sqlite3.Row]] = defaultdict(list)
+        for pr in pr_rows:
+            pr_by_run[int(pr["run_id"])].append(pr)
+
+        reports: dict[int, ComparisonReport] = {}
+        for run in run_rows:
+            results: list[ProviderResult] = []
+            for pr in pr_by_run.get(int(run["id"]), []):
+                pid = int(pr["id"])
+                offers = [
+                    Offer(provider=o["provider"], operator=o["operator"],
+                          price=Decimal(o["price"]), currency=o["currency"], raw_label=o["raw_label"])
+                    for o in offers_by_pr.get(pid, [])
+                ]
+                hotel_offers = [
+                    HotelOffer(provider=h["provider"], hotel_name=h["hotel_name"],
+                               price=Decimal(h["price"]), currency=h["currency"], stars=h["stars"],
+                               rating=h["rating"], destination=h["destination"],
+                               operators_count=h["operators_count"], raw_label=h["raw_label"])
+                    for h in hotels_by_pr.get(pid, [])
+                ]
+                operator_offers = [
+                    OperatorOffer(provider=o["provider"], operator=o["operator"],
+                                  price=Decimal(o["price"]), currency=o["currency"],
+                                  hotel_name=o["hotel_name"], load_seconds=o["load_seconds"],
+                                  raw_label=o["raw_label"] if "raw_label" in o.keys() else "")
+                    for o in ops_by_pr.get(pid, [])
+                ]
+                results.append(ProviderResult(
+                    provider=pr["provider"], success=bool(pr["success"]),
+                    duration_seconds=pr["duration_seconds"], search_mode=pr["search_mode"],
+                    offers=offers, hotel_offers=hotel_offers, operator_offers=operator_offers,
+                    operators_no_tours=_jlist(pr, "operators_no_tours"),
+                    operators_not_responding=_jlist(pr, "operators_not_responding"),
+                    operators_available=_jlist(pr, "operators_available"),
+                    error=pr["error"], screenshot_path=pr["screenshot_path"],
+                    search_url=pr["search_url"] if "search_url" in pr.keys() else None,
+                ))
+            reports[int(run["id"])] = ComparisonReport(
+                params=SearchParams.model_validate_json(run["params_json"]),
+                run_at=datetime.fromisoformat(run["run_at"]),
+                results=results,
+            )
+        return reports
+
     def get_report(self, run_id: int) -> ComparisonReport:
         """Восстановить отчёт по id прогона."""
         run = self._conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
         if run is None:
             raise KeyError(f"Прогон #{run_id} не найден")
-        results: list[ProviderResult] = []
-        pr_rows = self._conn.execute(
-            "SELECT * FROM provider_results WHERE run_id = ? ORDER BY id", (run_id,)
-        ).fetchall()
-        for pr in pr_rows:
-            offer_rows = self._conn.execute(
-                "SELECT * FROM offers WHERE provider_result_id = ? ORDER BY id", (pr["id"],)
-            ).fetchall()
-            offers = [
-                Offer(
-                    provider=o["provider"],
-                    operator=o["operator"],
-                    price=Decimal(o["price"]),
-                    currency=o["currency"],
-                    raw_label=o["raw_label"],
-                )
-                for o in offer_rows
-            ]
-            ho_rows = self._conn.execute(
-                "SELECT * FROM hotel_offers WHERE provider_result_id = ? ORDER BY id", (pr["id"],)
-            ).fetchall()
-            hotel_offers = [
-                HotelOffer(
-                    provider=h["provider"],
-                    hotel_name=h["hotel_name"],
-                    price=Decimal(h["price"]),
-                    currency=h["currency"],
-                    stars=h["stars"],
-                    rating=h["rating"],
-                    destination=h["destination"],
-                    operators_count=h["operators_count"],
-                    raw_label=h["raw_label"],
-                )
-                for h in ho_rows
-            ]
-            oo_rows = self._conn.execute(
-                "SELECT * FROM operator_offers WHERE provider_result_id = ? ORDER BY id", (pr["id"],)
-            ).fetchall()
-            operator_offers = [
-                OperatorOffer(
-                    provider=o["provider"],
-                    operator=o["operator"],
-                    price=Decimal(o["price"]),
-                    currency=o["currency"],
-                    hotel_name=o["hotel_name"],
-                    load_seconds=o["load_seconds"],
-                    raw_label=o["raw_label"] if "raw_label" in o.keys() else "",
-                )
-                for o in oo_rows
-            ]
-            def _jlist(key: str) -> list[str]:
-                if key not in pr.keys() or not pr[key]:
-                    return []
-                try:
-                    return json.loads(pr[key])
-                except Exception:
-                    return []
-
-            results.append(
-                ProviderResult(
-                    provider=pr["provider"],
-                    success=bool(pr["success"]),
-                    duration_seconds=pr["duration_seconds"],
-                    search_mode=pr["search_mode"],
-                    offers=offers,
-                    hotel_offers=hotel_offers,
-                    operator_offers=operator_offers,
-                    operators_no_tours=_jlist("operators_no_tours"),
-                    operators_not_responding=_jlist("operators_not_responding"),
-                    operators_available=_jlist("operators_available"),
-                    error=pr["error"],
-                    screenshot_path=pr["screenshot_path"],
-                    search_url=pr["search_url"] if "search_url" in pr.keys() else None,
-                )
-            )
-        return ComparisonReport(
-            params=SearchParams.model_validate_json(run["params_json"]),
-            run_at=datetime.fromisoformat(run["run_at"]),
-            results=results,
-        )
+        return self._assemble([run])[run_id]
 
     def list_reports(self, limit: int = 50) -> list[tuple[int, ComparisonReport]]:
         """Последние прогоны (свежие сверху) как (run_id, полный отчёт).
 
-        Единый проход чтения: и краткая история, и JSON для дашборда строятся из
-        этого, чтобы не реконструировать один и тот же прогон по нескольку раз.
-        """
+        Пакетное чтение: все прогоны и их дети берутся несколькими запросами `WHERE IN`,
+        без повторной реконструкции одного и того же прогона (без N+1)."""
         rows = self._conn.execute(
-            "SELECT id FROM runs ORDER BY datetime(run_at) DESC, id DESC LIMIT ?", (limit,)
+            "SELECT * FROM runs ORDER BY datetime(run_at) DESC, id DESC LIMIT ?", (limit,)
         ).fetchall()
-        return [(row["id"], self.get_report(row["id"])) for row in rows]
+        reports = self._assemble(rows)
+        return [(int(r["id"]), reports[int(r["id"])]) for r in rows]
 
     def list_runs(self, limit: int = 50) -> list[RunSummary]:
         """Список последних прогонов (свежие сверху) с краткой сводкой."""
