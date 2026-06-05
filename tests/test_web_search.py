@@ -149,3 +149,71 @@ def test_cancel_unknown_token_is_noop(tmp_path):
     r = _client(tmp_path).post("/search/cancel", params={"token": "nope"})
     assert r.status_code == 200
     assert r.json() == {"cancelled": False}
+
+
+# --------------------------- Опциональная авторизация (TOURSEARCH_TOKEN) ---------------------------
+
+def test_auth_disabled_by_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("TOURSEARCH_TOKEN", raising=False)
+    assert _client(tmp_path).get("/api/refdata").status_code == 200  # локальный режим — открыто
+
+
+def test_auth_blocks_without_credentials(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOURSEARCH_TOKEN", "s3cret")
+    assert _client(tmp_path).get("/api/refdata").status_code == 401
+
+
+def test_auth_passes_with_bearer_header(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOURSEARCH_TOKEN", "s3cret")
+    r = _client(tmp_path).get("/api/refdata", headers={"Authorization": "Bearer s3cret"})
+    assert r.status_code == 200
+
+
+def test_auth_query_sets_cookie_then_passes(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOURSEARCH_TOKEN", "s3cret")
+    client = _client(tmp_path)
+    r = client.get("/api/refdata?auth=s3cret")
+    assert r.status_code == 200
+    assert "ts_auth" in (r.headers.get("set-cookie") or "")  # cookie выставлена
+    # cookie в jar клиента → следующий запрос без креды проходит (как EventSource same-origin)
+    assert client.get("/api/refdata").status_code == 200
+
+
+def test_auth_wrong_token_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOURSEARCH_TOKEN", "s3cret")
+    r = _client(tmp_path).get("/api/refdata", headers={"Authorization": "Bearer nope"})
+    assert r.status_code == 401
+
+
+# --------------------------- Предел одновременных поисков ---------------------------
+
+def test_stream_rejects_when_at_capacity(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOURSEARCH_MAX_CONCURRENT_SEARCHES", "2")
+    ran = {"search": False}
+
+    async def _search(*a, **k):
+        ran["search"] = True
+        return ComparisonReport(params=_PARAMS)
+
+    monkeypatch.setattr(web, "run_health_check", _gate(True))
+    monkeypatch.setattr(web, "run_search", _search)
+    app = create_app(db_path=str(tmp_path / "w.db"))
+    client = TestClient(app)
+    app.state.active_runs["n"] = 2  # как будто уже идёт предел поисков
+    token = client.post("/search/prepare", data=_FORM).json()["token"]
+    s = client.get(f"/search/stream?token={token}")
+    assert s.status_code == 200
+    assert "предел" in s.text and '"type": "error"' in s.text  # понятный отказ
+    assert not ran["search"]                  # реальный поиск (и браузеры) не стартовали
+    assert app.state.active_runs["n"] == 2    # слот не занят и не утёк
+
+
+def test_stream_reclaims_slot_after_run(tmp_path, monkeypatch):
+    monkeypatch.setattr(web, "run_health_check", _gate(True))
+    monkeypatch.setattr(web, "run_search", _fake_search)
+    app = create_app(db_path=str(tmp_path / "w.db"))
+    client = TestClient(app)
+    token = client.post("/search/prepare", data=_FORM).json()["token"]
+    s = client.get(f"/search/stream?token={token}")
+    assert '"type": "done"' in s.text
+    assert app.state.active_runs["n"] == 0  # слот освобождён после завершения прогона

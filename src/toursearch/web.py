@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import hmac
 import json
 import logging
+import os
 import re
 import uuid
 from dataclasses import dataclass, field
@@ -14,7 +16,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -218,6 +220,13 @@ def _report_dict(report, run_id: int | None = None) -> dict:
     }
 
 
+def _bearer(header: "str | None") -> str:
+    """Достать токен из заголовка `Authorization: Bearer <token>` (иначе '')."""
+    if header and header.lower().startswith("bearer "):
+        return header[7:].strip()
+    return ""
+
+
 def create_app(db_path: str = "toursearch.db") -> FastAPI:
     import logging
     logging.basicConfig(
@@ -226,6 +235,36 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
         datefmt="%H:%M:%S",
     )
     app = FastAPI(title="Tour Search")
+
+    # --- Опциональная авторизация (по умолчанию инструмент локальный, host=127.0.0.1) ---
+    # Включается, ТОЛЬКО если задан TOURSEARCH_TOKEN — тогда нужен он во всех запросах.
+    # Это страховка на случай, когда сервис выставляют наружу (--host 0.0.0.0 / туннель).
+    # fetch шлёт токен заголовком `Authorization: Bearer …`; EventSource (которому нельзя
+    # задать заголовок) — через `?auth=…` ОДИН раз: ответ ставит cookie, дальше и fetch,
+    # и SSE проходят сами (cookie летит на тот же origin автоматически).
+    auth_token = (os.environ.get("TOURSEARCH_TOKEN") or "").strip()
+    if auth_token:
+        @app.middleware("http")
+        async def _require_token(request: Request, call_next):
+            supplied = (request.cookies.get("ts_auth")
+                        or _bearer(request.headers.get("authorization"))
+                        or request.query_params.get("auth") or "")
+            if not hmac.compare_digest(supplied, auth_token):
+                return JSONResponse({"error": "Требуется авторизация (TOURSEARCH_TOKEN)."}, status_code=401)
+            response = await call_next(request)
+            if request.query_params.get("auth") and request.cookies.get("ts_auth") != auth_token:
+                response.set_cookie("ts_auth", auth_token, httponly=True, samesite="lax",
+                                    max_age=7 * 24 * 3600)
+            return response
+
+    # --- Предел одновременных поисков (каждый поднимает ~5 браузеров) ---
+    # Защита машины от лавины браузеров (двойной клик, баг-ретрай, лёгкое выставление
+    # наружу). Сверх предела новый поиск получает понятный отказ, а не подвешивает ОС.
+    max_concurrent_searches = max(1, int(os.environ.get("TOURSEARCH_MAX_CONCURRENT_SEARCHES") or 3))
+    active_runs = {"n": 0}  # сколько поисков сейчас реально крутят браузеры
+    app.state.active_runs = active_runs
+    app.state.max_concurrent_searches = max_concurrent_searches
+
     Path("screenshots").mkdir(exist_ok=True)
     prune_screenshots()  # на старте подчистить накопившиеся скриншоты прогонов
     app.mount("/screenshots", StaticFiles(directory="screenshots"), name="screenshots")
@@ -333,19 +372,29 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
             ctx["error"] = str(exc)
             return _TEMPLATES.TemplateResponse(request, "index.html", ctx)
 
-        # Жёсткий health-check гейт перед прогоном
-        health = await run_health_check(providers=chosen, headless=True)
-        if not gate_passed(health):
-            return _TEMPLATES.TemplateResponse(
-                request, "gate_failed.html", {"health": health}
-            )
+        # Предел одновременных поисков (тот же, что и для SSE-пути)
+        if active_runs["n"] >= max_concurrent_searches:
+            ctx = _form_ctx()
+            ctx["error"] = (f"Сейчас выполняется максимум поисков ({max_concurrent_searches}). "
+                            "Повторите чуть позже.")
+            return _TEMPLATES.TemplateResponse(request, "index.html", ctx)
+        active_runs["n"] += 1
+        try:
+            # Жёсткий health-check гейт перед прогоном
+            health = await run_health_check(providers=chosen, headless=True)
+            if not gate_passed(health):
+                return _TEMPLATES.TemplateResponse(
+                    request, "gate_failed.html", {"health": health}
+                )
 
-        report = await run_search(params, providers=chosen, headless=True)
-        with Storage(db_path) as storage:
-            run_id = storage.save_report(report)
-        return _TEMPLATES.TemplateResponse(
-            request, "results.html", {"report": report, "run_id": run_id}
-        )
+            report = await run_search(params, providers=chosen, headless=True)
+            with Storage(db_path) as storage:
+                run_id = storage.save_report(report)
+            return _TEMPLATES.TemplateResponse(
+                request, "results.html", {"report": report, "run_id": run_id}
+            )
+        finally:
+            active_runs["n"] = max(0, active_runs["n"] - 1)
 
     # --- поиск с живым логом (SSE), устойчивый к обрыву соединения (смена вкладки) ---
     # Прогон идёт ФОНОВОЙ задачей и не привязан к SSE-соединению: увели вкладку / сеть
@@ -398,6 +447,7 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             _emit(session, {"type": "error", "msg": f"{type(exc).__name__}: {exc}"})
         finally:
+            active_runs["n"] = max(0, active_runs["n"] - 1)  # освободить слот (парно к гейту)
             tlog.removeHandler(handler)
             session.done = True
             # Разбудить активных подписчиков, чтобы их соединения штатно закрылись.
@@ -466,7 +516,18 @@ def create_app(db_path: str = "toursearch.db") -> FastAPI:
             # Дальше она живёт сама по себе и не зависит от наличия соединения.
             if not session.started:
                 session.started = True
-                session.task = asyncio.create_task(_run_search_task(token, session))
+                # Предел одновременных поисков: занимаем слот СИНХРОННО (до await/create_task,
+                # чтобы два стрима не проскочили проверку разом), задача освободит его в finally.
+                if active_runs["n"] >= max_concurrent_searches:
+                    _emit(session, {"type": "error", "msg":
+                          f"Сейчас уже выполняется {active_runs['n']} поиск(ов) — это предел "
+                          f"(TOURSEARCH_MAX_CONCURRENT_SEARCHES={max_concurrent_searches}). "
+                          "Дождитесь завершения и повторите."})
+                    session.done = True
+                    _schedule_session_cleanup(token)
+                else:
+                    active_runs["n"] += 1
+                    session.task = asyncio.create_task(_run_search_task(token, session))
 
             # Подписываемся и АТОМАРНО (между add и снимком нет await/yield — событийный
             # цикл не вклинится) снимаем уже накопленные события: всё до снимка отдадим
