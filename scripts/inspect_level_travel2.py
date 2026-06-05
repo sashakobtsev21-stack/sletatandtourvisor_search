@@ -68,7 +68,8 @@ async def main():
                 p = OUT / f"{resp.status}_{_slug(u)}.json"
                 i = 1
                 while p.exists():
-                    p = OUT / f"{resp.status}_{_slug(u)}__{i}.json"; i += 1
+                    p = OUT / f"{resp.status}_{_slug(u)}__{i}.json"
+                    i += 1
                 p.write_text(body[:4000000], encoding="utf-8")
                 saved.append(p.name)
                 if HINTS.search(body):

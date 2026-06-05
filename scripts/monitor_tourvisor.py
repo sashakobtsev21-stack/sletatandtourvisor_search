@@ -6,15 +6,18 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-OUT = Path("_dump"); OUT.mkdir(exist_ok=True)
+OUT = Path("_dump")
+OUT.mkdir(exist_ok=True)
 URL = "https://tourvisor.ru/search.php"
 
 
 async def safe(coro, what=""):
     try:
-        await coro; return True
+        await coro
+        return True
     except Exception as e:
-        print(f"  (skip {what}: {type(e).__name__})"); return False
+        print(f"  (skip {what}: {type(e).__name__})")
+        return False
 
 
 async def main():
@@ -40,7 +43,8 @@ async def main():
             }"""
         )
         print("=== Tourvisor: элементы с 'отел' ===")
-        for h in hotel_links: print("  ", h)
+        for h in hotel_links:
+            print("  ", h)
 
         # 2. Запустить поиск туров (страна Турция), мониторить загрузку
         await safe(page.click("div.TVCountryFilter"), "country open")
@@ -53,15 +57,20 @@ async def main():
         t0=time.monotonic()
         await safe(page.click("xpath=//div[contains(@class,'TVSearchButton') and contains(text(),'Найти')]"), "search")
 
-        last=None; stable=0
+        last=None
+        stable=0
         for i in range(60):
             await page.wait_for_timeout(2000)
             async def cnt(sel):
-                try: return await page.locator(sel).count()
-                except: return -1
+                try:
+                    return await page.locator(sel).count()
+                except Exception:
+                    return -1
             async def vis(sel):
-                try: return await page.locator(sel).first.is_visible()
-                except: return False
+                try:
+                    return await page.locator(sel).first.is_visible()
+                except Exception:
+                    return False
             results = await cnt(".TVResultItem")
             progress = await cnt(".TVProgressBar")
             progress_vis = await vis(".TVProgressBar")
@@ -71,14 +80,18 @@ async def main():
             for sel in [".TVResultToolbarProgress",".TVResultStatus","[class*='ResultToolbar']"]:
                 try:
                     if await page.locator(sel).count():
-                        status=(await page.locator(sel).first.inner_text()).replace("\n"," ").strip()[:50]; break
-                except: pass
+                        status=(await page.locator(sel).first.inner_text()).replace("\n"," ").strip()[:50]
+                        break
+                except Exception:
+                    pass
             t=round(time.monotonic()-t0,1)
             print(f"[{t:6.1f}s] results={results:>3} progressBars={progress:>2} progVisible={progress_vis} spinners={spinner:>3} status={status!r}")
             key=(results, progress_vis, spinner)
             stable = stable+1 if key==last else 0
             last=key
-            if stable>=4 and results>0: print(f">>> STABILIZED {t}s"); break
+            if stable>=4 and results>0:
+                print(f">>> STABILIZED {t}s")
+                break
 
         item = await page.query_selector(".TVResultItem")
         if item:

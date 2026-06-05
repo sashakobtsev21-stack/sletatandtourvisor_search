@@ -7,15 +7,18 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-OUT = Path("_dump"); OUT.mkdir(exist_ok=True)
+OUT = Path("_dump")
+OUT.mkdir(exist_ok=True)
 URL = "https://sletat.ru/b2b/"
 
 
 async def safe(coro, what=""):
     try:
-        await coro; return True
+        await coro
+        return True
     except Exception as e:
-        print(f"  (skip {what}: {type(e).__name__})"); return False
+        print(f"  (skip {what}: {type(e).__name__})")
+        return False
 
 
 async def texts(page, sel, n=15):
@@ -46,7 +49,7 @@ async def main():
             opts = await texts(page, "div.city-selector-list ul li button")
             print("  опции:", opts)
             # выбрать точное совпадение
-            picked = await safe(page.click("xpath=//div[contains(@class,'city-selector-list')]//li//button[contains(.,'Екатеринбург')][1]"), "pick city")
+            await safe(page.click("xpath=//div[contains(@class,'city-selector-list')]//li//button[contains(.,'Екатеринбург')][1]"), "pick city")
             await page.wait_for_timeout(800)
 
         # === 2. СТРАНА текстом: Мальдивы ===
@@ -65,17 +68,25 @@ async def main():
         print(">>> SEARCH")
         t0 = time.monotonic()
         await safe(page.click("[data-testid='b2b.search-form.search-btn']"), "search")
-        last=None; stable=0
+        last=None
+        stable=0
         for i in range(70):
             await page.wait_for_timeout(2000)
-            try: items = await page.locator(".search-result__list-item").count()
-            except: items=-1
-            try: status=(await page.locator(".search-status__tours-count").first.inner_text()).replace("\n"," ").strip()[:55]
-            except: status=""
+            try:
+                items = await page.locator(".search-result__list-item").count()
+            except Exception:
+                items=-1
+            try:
+                status=(await page.locator(".search-status__tours-count").first.inner_text()).replace("\n"," ").strip()[:55]
+            except Exception:
+                status=""
             t=round(time.monotonic()-t0,1)
             print(f"[{t:6.1f}s] items={items:>3} status={status!r}")
-            key=(items,status); stable=stable+1 if key==last else 0; last=key
-            if stable>=4 and (items>0 or 'не найден' in status.lower()): break
+            key=(items,status)
+            stable=stable+1 if key==last else 0
+            last=key
+            if stable>=4 and (items>0 or 'не найден' in status.lower()):
+                break
 
         # === 4. СОРТИРОВКА: найти и переключить на 'Цена' ===
         print("=== Сортировка ===")
@@ -119,7 +130,8 @@ async def main():
             }"""
         )
         print("  операторы с ценами:")
-        for o in ops: print("    ", o)
+        for o in ops:
+            print("    ", o)
 
         await browser.close()
         print("DONE")

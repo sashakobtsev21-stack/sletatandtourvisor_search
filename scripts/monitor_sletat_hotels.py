@@ -6,15 +6,18 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-OUT = Path("_dump"); OUT.mkdir(exist_ok=True)
+OUT = Path("_dump")
+OUT.mkdir(exist_ok=True)
 URL = "https://sletat.ru/b2b/"
 
 
 async def safe(coro, what=""):
     try:
-        await coro; return True
+        await coro
+        return True
     except Exception as e:
-        print(f"  (skip {what}: {type(e).__name__})"); return False
+        print(f"  (skip {what}: {type(e).__name__})")
+        return False
 
 
 async def snapshot(page, t0):
@@ -24,8 +27,10 @@ async def snapshot(page, t0):
         "loader": "[class*='loader'],[class*='loading'],[class*='preloader']",
         "pagination": ".uis-pagination__item",
     }.items():
-        try: out[name] = await page.locator(sel).count()
-        except Exception: out[name] = -1
+        try:
+            out[name] = await page.locator(sel).count()
+        except Exception:
+            out[name] = -1
     try:
         out["status"] = (await page.locator(".search-status__tours-count").first.inner_text()).replace("\n"," ").strip()[:55]
     except Exception:
@@ -66,7 +71,8 @@ async def main():
         t0 = time.monotonic()
         await safe(page.click("[data-testid='b2b.search-form.search-btn']"), "search")
 
-        last=None; stable=0
+        last=None
+        stable=0
         for i in range(70):
             await page.wait_for_timeout(2000)
             s = await snapshot(page, t0)
@@ -74,7 +80,9 @@ async def main():
             key=(s["list_items"], s["status"])
             stable = stable+1 if key==last else 0
             last=key
-            if stable>=4 and s["list_items"]>0: print(f">>> STABILIZED {s['t']}s"); break
+            if stable>=4 and s["list_items"]>0:
+                print(f">>> STABILIZED {s['t']}s")
+                break
 
         res = await page.query_selector(".search-result")
         if res:

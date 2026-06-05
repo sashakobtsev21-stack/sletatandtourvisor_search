@@ -99,7 +99,8 @@ async def main() -> None:
                     # не перетираем одинаковые слаги — добавляем индекс
                     i = 1
                     while p.exists():
-                        p = NET / f"{resp.status}_{_slug(url)}__{i}.json"; i += 1
+                        p = NET / f"{resp.status}_{_slug(url)}__{i}.json"
+                        i += 1
                     p.write_text(body[:200000], encoding="utf-8")
                     saved.append(p.name)
             except Exception:

@@ -10,11 +10,11 @@ import logging
 import sys
 from datetime import date, timedelta
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-                    datefmt="%H:%M:%S")
-
 from toursearch.models import SearchParams
 from toursearch.orchestrator import run_search
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+                    datefmt="%H:%M:%S")
 
 ALL = ["sletat", "tourvisor", "travelata", "level", "ostrovok"]
 

@@ -4,20 +4,24 @@ import asyncio
 from pathlib import Path
 from playwright.async_api import async_playwright
 
-OUT = Path("_dump"); OUT.mkdir(exist_ok=True)
+OUT = Path("_dump")
+OUT.mkdir(exist_ok=True)
 
 
 async def safe(coro, what=""):
     try:
-        await coro; return True
+        await coro
+        return True
     except Exception as e:
-        print(f"  (skip {what}: {type(e).__name__})"); return False
+        print(f"  (skip {what}: {type(e).__name__})")
+        return False
 
 
 async def main():
     async with async_playwright() as pw:
         b = await pw.chromium.launch(headless=False, args=["--start-maximized"])
-        ctx = await b.new_context(no_viewport=True); page = await ctx.new_page()
+        ctx = await b.new_context(no_viewport=True)
+        page = await ctx.new_page()
         page.set_default_timeout(12000)
         await page.goto("https://tourvisor.ru/poisk-otelej", wait_until="domcontentloaded")
         await page.wait_for_timeout(4000)
@@ -52,7 +56,8 @@ async def main():
         (OUT/"tv_dest_options.txt").write_text(str(opts), encoding="utf-8")
         print("OPTIONS saved, len", len(opts))
         print(opts[:900])
-        await b.close(); print("DONE")
+        await b.close()
+        print("DONE")
 
 
 if __name__ == "__main__":

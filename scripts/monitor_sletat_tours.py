@@ -6,7 +6,8 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-OUT = Path("_dump"); OUT.mkdir(exist_ok=True)
+OUT = Path("_dump")
+OUT.mkdir(exist_ok=True)
 URL = "https://sletat.ru/b2b/"
 
 PROBES = {
@@ -21,9 +22,11 @@ PROBES = {
 
 async def safe(coro, what=""):
     try:
-        await coro; return True
+        await coro
+        return True
     except Exception as e:
-        print(f"  (skip {what}: {type(e).__name__})"); return False
+        print(f"  (skip {what}: {type(e).__name__})")
+        return False
 
 
 async def counts(page):
@@ -64,7 +67,9 @@ async def main():
         await safe(page.click("[data-testid='b2b.search-form.search-btn']"), "search")
 
         # Мониторинг до стабилизации (одинаковые показатели N раз подряд)
-        last = None; stable = 0; timeline = []
+        last = None
+        stable = 0
+        timeline = []
         for i in range(70):  # ~140с максимум
             await page.wait_for_timeout(2000)
             c = await counts(page)
@@ -75,7 +80,8 @@ async def main():
             stable = stable + 1 if key == last else 0
             last = key
             if stable >= 4 and (c["tour_cards"] > 0 or c["operator_items"] > 0 or c["not_found"] > 0):
-                print(f">>> STABILIZED after {t}s"); break
+                print(f">>> STABILIZED after {t}s")
+                break
 
         # Снимок выдачи
         for label, sel in [("results_area", "[class*='search-result'],[class*='results'],main"),
