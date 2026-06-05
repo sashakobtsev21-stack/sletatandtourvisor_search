@@ -118,6 +118,51 @@ def web(
 
 
 @app.command()
+def init_auth(
+    username: str = typer.Option(..., "--username", help="Имя первого пользователя"),
+    role: str = typer.Option("admin", "--role", help="Роль (admin/user)"),
+    db: str = typer.Option("toursearch.db", "--db"),
+) -> None:
+    """Создать первого пользователя (включает обязательный вход для всех)."""
+    from toursearch import auth
+
+    if role not in auth.ROLES:
+        typer.echo(f"Неизвестная роль: {role}. Доступно: {', '.join(auth.ROLES)}")
+        raise typer.Exit(code=1)
+    # Пароль — интерактивно (НЕ через argv: утечёт в историю shell / список процессов)
+    password = typer.prompt("Пароль", hide_input=True, confirmation_prompt=True)
+    if len(password) < 6:
+        typer.echo("Пароль слишком короткий (мин. 6 символов).")
+        raise typer.Exit(code=1)
+    with Storage(db) as storage:
+        if storage.get_user_by_username(username):
+            typer.echo(f"Пользователь '{username}' уже существует.")
+            raise typer.Exit(code=1)
+        uid = storage.create_user(username, password, role=role)
+    typer.echo(f"Создан пользователь #{uid} '{username}' ({role}). Вход теперь обязателен.")
+
+
+@app.command()
+def passwd(
+    username: str = typer.Option(..., "--username"),
+    db: str = typer.Option("toursearch.db", "--db"),
+) -> None:
+    """Сменить пароль пользователя и завершить все его сессии."""
+    password = typer.prompt("Новый пароль", hide_input=True, confirmation_prompt=True)
+    if len(password) < 6:
+        typer.echo("Пароль слишком короткий (мин. 6 символов).")
+        raise typer.Exit(code=1)
+    with Storage(db) as storage:
+        user = storage.get_user_by_username(username)
+        if not user:
+            typer.echo(f"Нет пользователя '{username}'.")
+            raise typer.Exit(code=1)
+        storage.update_password(user["id"], password)
+        storage.delete_user_sessions(user["id"])
+    typer.echo("Пароль изменён, активные сессии сброшены.")
+
+
+@app.command()
 def healthcheck(
     provider: list[str] = typer.Option([], "--provider", help="Ограничить площадки"),
     headless: bool = typer.Option(True, "--headless/--headed"),
