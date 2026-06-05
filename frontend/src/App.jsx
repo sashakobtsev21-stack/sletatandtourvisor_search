@@ -5,6 +5,7 @@ import TestsPage from "./pages/TestsPage.jsx";
 import ResultsPage from "./pages/ResultsPage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import AdminUsersPage from "./pages/AdminUsersPage.jsx";
+import BillingPage from "./pages/BillingPage.jsx";
 import { useHashRoute, matchRun } from "./lib/router.js";
 import { useAuth } from "./lib/auth.jsx";
 
@@ -37,7 +38,8 @@ export default function App() {
   let page;
   if (route.startsWith("/admin/users")) {
     page = can("users.manage") ? <AdminUsersPage /> : <SearchPage />;
-  } else if (runId != null) page = <ResultsPage key={route} runId={runId} />;
+  } else if (route.startsWith("/billing")) page = <BillingPage />;
+  else if (runId != null) page = <ResultsPage key={route} runId={runId} />;
   else if (route.startsWith("/history")) page = <HistoryPage />;
   else if (route.startsWith("/tests")) page = <TestsPage />;
   else page = <SearchPage />;

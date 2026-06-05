@@ -281,6 +281,10 @@ export default function SearchPage() {
     let token;
     try {
       const resp = await apiFetch("/search/prepare", { method: "POST", body: fd });
+      if (resp.status === 402) {
+        pushLog("Нужна активная подписка — откройте вкладку «Подписка» и оформите доступ.", "err");
+        return finish("error");
+      }
       const data = await resp.json();
       if (data.error) {
         pushLog(data.error, "err");
