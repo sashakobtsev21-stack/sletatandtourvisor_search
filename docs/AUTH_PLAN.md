@@ -10,7 +10,7 @@
 
 | Развилка | Решение |
 |---|---|
-| Набор ролей | **4 роли**: admin / operator / analyst / viewer (enum в коде, без таблиц прав) |
+| Набор ролей | **2 роли**: admin (всё) / user (запуск анализа + своя история); enum в коде, без таблиц прав |
 | История прогонов | **Привязать к владельцу** (`runs.user_id`): право `history.view.own` / `history.view.all` |
 | Регистрация | **Только админ** (первый — через `toursearch init-auth`, остальных заводит админ) |
 | Выставление наружу | **Жёсткий предохранитель**: host≠127.0.0.1 без аккаунтов/токена → отказ старта |
@@ -92,16 +92,14 @@ def needs_rehash(stored: str) -> bool:          # тихо усилить хеш
 def new_session_token() -> str: return secrets.token_urlsafe(32)
 def hash_token(token: str) -> str: return hashlib.sha256(token.encode()).hexdigest()
 
-# Роли и КОДОВАЯ матрица прав
-ROLES = ("admin", "operator", "analyst", "viewer")
+# Роли и КОДОВАЯ матрица прав (2 роли; абстракция прав сохранена —
+# добавить роль позже = строка в users.role + запись здесь, без миграции схемы)
+ROLES = ("admin", "user")
 PERMISSIONS = ("search.run", "history.view.own", "history.view.all",
                "tests.run", "tests.view", "users.manage", "system.health")
 ROLE_PERMISSIONS = {
-    "admin":    {"search.run", "history.view.own", "history.view.all",
-                 "tests.run", "tests.view", "users.manage", "system.health"},
-    "operator": {"search.run", "history.view.own", "tests.run", "tests.view"},
-    "analyst":  {"history.view.own", "history.view.all", "tests.view", "system.health"},
-    "viewer":   {"history.view.own", "tests.view"},
+    "admin": set(PERMISSIONS),                       # всё
+    "user":  {"search.run", "history.view.own"},     # запуск анализа + своя история
 }
 def has_permission(role: str, perm: str) -> bool:
     return perm in ROLE_PERMISSIONS.get(role, frozenset())
@@ -114,8 +112,8 @@ CREATE TABLE IF NOT EXISTS users (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     username      TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,                 -- 'pbkdf2_sha256$...'
-    role          TEXT NOT NULL DEFAULT 'viewer'
-                  CHECK (role IN ('admin','operator','analyst','viewer')),
+    role          TEXT NOT NULL DEFAULT 'user'
+                  CHECK (role IN ('admin','user')),
     is_active     INTEGER NOT NULL DEFAULT 1,    -- 0 = заблокирован (soft-disable)
     created_at    TEXT NOT NULL,
     last_login    TEXT,
@@ -173,20 +171,21 @@ CLI `toursearch init-auth` — идемпотентно создаёт перв�
 
 ## 3. Матрица прав (роли × функции)
 
-| Функция | admin | operator | analyst | viewer |
-|---|:---:|:---:|:---:|:---:|
-| Запуск поиска (`/search/prepare`, `/cancel`, `/stream`) | ✓ | ✓ | — | — |
-| Своя история (`/api/runs`, `/api/runs/{id}`) | ✓ | ✓ | ✓ | ✓ |
-| Вся история (чужие прогоны) | ✓ | — | ✓ | — |
-| Каталог автотестов (`/api/tests/catalog`) | ✓ | ✓ | ✓ | ✓ |
-| Запуск автотестов (`/tests/prepare`, `/stream`) | ✓ | ✓ | — | — |
-| Управление пользователями (`/api/users*`) | ✓ | — | — | — |
-| Health / настройки | ✓ | — | ✓ | — |
-| Справочники (`/api/refdata`) | ✓ | ✓ | ✓ | ✓ (гейтит только вход) |
+| Функция | admin | user |
+|---|:---:|:---:|
+| Запуск поиска (`/search/prepare`, `/cancel`, `/stream`) | ✓ | ✓ |
+| Своя история (`/api/runs`, `/api/runs/{id}`) | ✓ | ✓ |
+| Вся история (чужие прогоны) | ✓ | — |
+| Каталог автотестов (`/api/tests/catalog`) | ✓ | — |
+| Запуск автотестов (`/tests/prepare`, `/stream`) | ✓ | — |
+| Управление пользователями (`/api/users*`) | ✓ | — |
+| Health / настройки | ✓ | — |
+| Справочники (`/api/refdata`) | ✓ | ✓ (нужны для формы поиска; гейтит только вход) |
 
-Семантика: `admin` — полный доступ + единственный с управлением людьми; `operator` —
-рабочая лошадка (гоняет поиски/тесты, видит свои); `analyst` — наблюдатель (вся история +
-health, ничего не запускает); `viewer` — минимум. Роль `analyst` убирается без миграции.
+Семантика: `admin` — всё (поиск, вся история, автотесты, управление пользователями, health);
+`user` — запуск анализа и своя история, больше ничего. Абстракция прав (permission-строки)
+сохранена в коде — добавить третью роль позже = одна строка в `users.role` + запись в
+`ROLE_PERMISSIONS`, без миграции схемы.
 
 ---
 
@@ -296,13 +295,13 @@ users/sessions + `save_report(user_id=)`). Тесты: `hash/verify_password` (�
 **Ф1 — бэкенд-аутентификация и три режима (MVP).** `web.py` (middleware, `/api/login|logout|me`,
 Depends, `/search/cancel` на тело); `cli.py` (`init-auth`, `passwd`). Тесты (httpx): локальный
 режим открыт; legacy `?auth=TOKEN` всё ещё ставит cookie (регрессия SSE); мультиюзер — login
-ставит `ts_session`, без cookie → 401, `viewer` на `/tests/prepare` → 403, `operator` видит
-только свои; CSRF — POST без `X-CSRF-Token` → 403, GET-стрим проходит; logout/блокировка →
+ставит `ts_session`, без cookie → 401, `user` на `/tests/prepare` → 403, `user` видит только
+свои прогоны; CSRF — POST без `X-CSRF-Token` → 403, GET-стрим проходит; logout/блокировка →
 сессия немедленно невалидна.
 
 **Ф2 — фронтенд: логин, гард, роли (MVP).** Новые `lib/api.js`, `lib/auth.jsx`, `LoginPage`,
 `AdminUsersPage`; правки `main.jsx`, `App.jsx`, `AppShell.jsx`, 5 страниц, `refdata.js`. Тесты
-(вручную/preview): незалогиненный → LoginPage без мелькания; вход → SearchPage; `viewer` без
+(вручную/preview): незалогиненный → LoginPage без мелькания; вход → SearchPage; `user` без
 вкладок «Автотесты»/«Пользователи»; протухание сессии в SSE → авто-логин; `activeRun`
 переживает 401; FormData в `/search/prepare` доходит (boundary цел).
 
