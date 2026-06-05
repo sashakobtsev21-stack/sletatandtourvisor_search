@@ -215,3 +215,38 @@ def test_passwd_changes_and_clears_sessions(tmp_path):
         assert auth.verify_password("newpass1", s.get_user_by_id(uid)["password_hash"])
         sess = s._conn.execute("SELECT COUNT(*) FROM sessions WHERE user_id=?", (uid,)).fetchone()[0]
         assert sess == 0  # сессии сброшены при смене пароля
+
+
+# --------------------------- предохранитель выставления наружу (Ф3) ---------------------------
+
+def test_insecure_exposure_logic(tmp_path, monkeypatch):
+    monkeypatch.delenv("TOURSEARCH_ALLOW_INSECURE", raising=False)
+    monkeypatch.delenv("TOURSEARCH_TOKEN", raising=False)
+    db = str(tmp_path / "x.db")
+    with Storage(db):  # пустая БД (без пользователей)
+        pass
+
+    assert cli._insecure_exposure("127.0.0.1", db) is False   # localhost — всегда ок
+    assert cli._insecure_exposure("localhost", db) is False
+    assert cli._insecure_exposure("0.0.0.0", db) is True       # наружу без авторизации → блок
+    assert cli._insecure_exposure("192.168.1.5", db) is True
+
+    monkeypatch.setenv("TOURSEARCH_TOKEN", "tok")              # обход токеном
+    assert cli._insecure_exposure("0.0.0.0", db) is False
+    monkeypatch.delenv("TOURSEARCH_TOKEN")
+
+    monkeypatch.setenv("TOURSEARCH_ALLOW_INSECURE", "1")       # явный обход
+    assert cli._insecure_exposure("0.0.0.0", db) is False
+    monkeypatch.delenv("TOURSEARCH_ALLOW_INSECURE")
+
+    with Storage(db) as s:                                     # обход наличием аккаунтов
+        s.create_user("admin", "secret1", role="admin", iters=1000)
+    assert cli._insecure_exposure("0.0.0.0", db) is False
+
+
+def test_web_refuses_insecure_exposure(tmp_path, monkeypatch):
+    monkeypatch.delenv("TOURSEARCH_ALLOW_INSECURE", raising=False)
+    monkeypatch.delenv("TOURSEARCH_TOKEN", raising=False)
+    db = str(tmp_path / "x.db")
+    r = runner.invoke(app, ["web", "--host", "0.0.0.0", "--db", db])
+    assert r.exit_code == 1 and "Отказ старта" in r.output  # uvicorn не стартует

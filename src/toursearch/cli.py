@@ -102,6 +102,23 @@ def search(
         typer.echo(f"\nПрогон сохранён в {db} (id={run_id}).")
 
 
+_LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
+
+
+def _insecure_exposure(host: str, db: str) -> bool:
+    """True, если запуск на НЕлокальном host без какой-либо авторизации — пароли и данные
+    пошли бы по открытой сети. Обходы: TOURSEARCH_ALLOW_INSECURE=1, TOURSEARCH_TOKEN или
+    наличие учётных записей в БД."""
+    import os
+
+    if host in _LOCAL_HOSTS or os.environ.get("TOURSEARCH_ALLOW_INSECURE") == "1":
+        return False
+    if (os.environ.get("TOURSEARCH_TOKEN") or "").strip():
+        return False
+    with Storage(db) as storage:
+        return not storage.has_any_user()
+
+
 @app.command()
 def web(
     host: str = typer.Option("127.0.0.1", "--host"),
@@ -109,12 +126,23 @@ def web(
     db: str = typer.Option("toursearch.db", "--db"),
 ) -> None:
     """Запустить веб-интерфейс (FastAPI)."""
+    # Предохранитель: наружу (не localhost) без авторизации — отказ (пароли по открытой сети).
+    if _insecure_exposure(host, db):
+        typer.echo(
+            f"Отказ старта: host={host} (не localhost), но авторизация не настроена —\n"
+            "пароли и данные пошли бы по открытой сети. Сделайте одно из:\n"
+            "  • создайте аккаунт:        toursearch init-auth --username admin\n"
+            "  • или задайте общий токен: TOURSEARCH_TOKEN=…\n"
+            "  • или явно разрешите:      TOURSEARCH_ALLOW_INSECURE=1 (TLS — на reverse-proxy)"
+        )
+        raise typer.Exit(code=1)
+
     import uvicorn
 
     from toursearch.web import create_app
 
     typer.echo(f"Веб-интерфейс: http://{host}:{port}")
-    uvicorn.run(create_app(db_path=db), host=host, port=port)
+    uvicorn.run(create_app(db_path=db, host=host), host=host, port=port)
 
 
 @app.command()
