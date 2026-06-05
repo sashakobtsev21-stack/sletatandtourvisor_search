@@ -17,6 +17,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from toursearch import auth
 from toursearch.models import (
     ComparisonReport,
     HotelOffer,
@@ -25,6 +26,12 @@ from toursearch.models import (
     ProviderResult,
     SearchParams,
 )
+
+
+def _row(row: sqlite3.Row | None) -> dict | None:
+    """sqlite3.Row → обычный dict (или None)."""
+    return {k: row[k] for k in row.keys()} if row is not None else None
+
 
 def _group_by_pr(rows: list[sqlite3.Row]) -> dict[int, list[sqlite3.Row]]:
     """Сгруппировать строки-дети по их provider_result_id (для пакетной сборки отчётов)."""
@@ -48,7 +55,8 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     run_at      TEXT NOT NULL,
-    params_json TEXT NOT NULL
+    params_json TEXT NOT NULL,
+    user_id     INTEGER        -- владелец прогона; NULL = системный/CLI (или до миграции)
 );
 CREATE TABLE IF NOT EXISTS provider_results (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,6 +112,30 @@ CREATE INDEX IF NOT EXISTS idx_offers_pr ON offers(provider_result_id);
 CREATE INDEX IF NOT EXISTS idx_hotel_offers_pr ON hotel_offers(provider_result_id);
 CREATE INDEX IF NOT EXISTS idx_operator_offers_pr ON operator_offers(provider_result_id);
 CREATE INDEX IF NOT EXISTS idx_runs_run_at ON runs(run_at);
+
+-- Аутентификация: учётные записи и серверные сессии (крипто/роли — в auth.py,
+-- проект-решение — docs/AUTH_PLAN.md). В сессии хранится только sha256(токена).
+CREATE TABLE IF NOT EXISTS users (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    username      TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    role          TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin','user')),
+    is_active     INTEGER NOT NULL DEFAULT 1,
+    created_at    TEXT NOT NULL,
+    last_login    TEXT,
+    comment       TEXT
+);
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash  TEXT PRIMARY KEY,                -- sha256(token); сам токен — только в cookie
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL,
+    last_seen   TEXT NOT NULL,
+    remember    INTEGER NOT NULL DEFAULT 0        -- 1 → длинный TTL при скользящем продлении
+);
+CREATE INDEX IF NOT EXISTS idx_users_username   ON users(username);
+CREATE INDEX IF NOT EXISTS idx_sessions_user    ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 """
 
 
@@ -143,6 +175,13 @@ class Storage:
             self._conn.execute("ALTER TABLE provider_results ADD COLUMN operators_not_responding TEXT")
         if "operators_available" not in cols:
             self._conn.execute("ALTER TABLE provider_results ADD COLUMN operators_available TEXT")
+        # история ← владелец (права history.view.own/all). Колонка nullable: старые и
+        # CLI-прогоны остаются user_id IS NULL («системные»). Индекс — здесь, а не в
+        # _SCHEMA: на старой БД колонки ещё нет в момент выполнения _SCHEMA.
+        run_cols = {row[1] for row in self._conn.execute("PRAGMA table_info(runs)")}
+        if "user_id" not in run_cols:
+            self._conn.execute("ALTER TABLE runs ADD COLUMN user_id INTEGER")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_user ON runs(user_id)")
         self._conn.commit()
 
     def close(self) -> None:
@@ -154,11 +193,12 @@ class Storage:
     def __exit__(self, *exc) -> None:
         self.close()
 
-    def save_report(self, report: ComparisonReport) -> int:
-        """Сохранить отчёт целиком и вернуть id прогона."""
+    def save_report(self, report: ComparisonReport, user_id: int | None = None) -> int:
+        """Сохранить отчёт целиком и вернуть id прогона. `user_id` — владелец прогона
+        (None для CLI/системных прогонов)."""
         cur = self._conn.execute(
-            "INSERT INTO runs (run_at, params_json) VALUES (?, ?)",
-            (report.run_at.isoformat(), report.params.model_dump_json()),
+            "INSERT INTO runs (run_at, params_json, user_id) VALUES (?, ?, ?)",
+            (report.run_at.isoformat(), report.params.model_dump_json(), user_id),
         )
         run_id = int(cur.lastrowid)
         for result in report.results:
@@ -309,28 +349,38 @@ class Storage:
             )
         return reports
 
-    def get_report(self, run_id: int) -> ComparisonReport:
-        """Восстановить отчёт по id прогона."""
+    def get_report(self, run_id: int, owner_id: int | None = None) -> ComparisonReport:
+        """Восстановить отчёт по id прогона. Если задан `owner_id`, прогон чужого владельца
+        считается ненайденным (доступ к деталям — только к своим)."""
         run = self._conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
-        if run is None:
+        if run is None or (owner_id is not None and run["user_id"] != owner_id):
             raise KeyError(f"Прогон #{run_id} не найден")
         return self._assemble([run])[run_id]
 
-    def list_reports(self, limit: int = 50) -> list[tuple[int, ComparisonReport]]:
+    def list_reports(self, limit: int = 50,
+                     owner_id: int | None = None) -> list[tuple[int, ComparisonReport]]:
         """Последние прогоны (свежие сверху) как (run_id, полный отчёт).
 
         Пакетное чтение: все прогоны и их дети берутся несколькими запросами `WHERE IN`,
-        без повторной реконструкции одного и того же прогона (без N+1)."""
-        rows = self._conn.execute(
-            "SELECT * FROM runs ORDER BY datetime(run_at) DESC, id DESC LIMIT ?", (limit,)
-        ).fetchall()
+        без повторной реконструкции одного и того же прогона (без N+1). Если задан
+        `owner_id` — только прогоны этого владельца (право history.view.own)."""
+        if owner_id is None:
+            rows = self._conn.execute(
+                "SELECT * FROM runs ORDER BY datetime(run_at) DESC, id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT * FROM runs WHERE user_id = ? ORDER BY datetime(run_at) DESC, id DESC LIMIT ?",
+                (owner_id, limit),
+            ).fetchall()
         reports = self._assemble(rows)
         return [(int(r["id"]), reports[int(r["id"])]) for r in rows]
 
-    def list_runs(self, limit: int = 50) -> list[RunSummary]:
-        """Список последних прогонов (свежие сверху) с краткой сводкой."""
+    def list_runs(self, limit: int = 50, owner_id: int | None = None) -> list[RunSummary]:
+        """Список последних прогонов (свежие сверху) с краткой сводкой.
+        `owner_id` (если задан) ограничивает выборку прогонами этого владельца."""
         summaries: list[RunSummary] = []
-        for run_id, report in self.list_reports(limit=limit):
+        for run_id, report in self.list_reports(limit=limit, owner_id=owner_id):
             cheapest = report.cheapest
             summaries.append(
                 RunSummary(
@@ -343,3 +393,106 @@ class Storage:
                 )
             )
         return summaries
+
+    # ------------------------- Пользователи и сессии (auth) -------------------------
+
+    def has_any_user(self) -> bool:
+        """Есть ли хоть один пользователь — триггер мультиюзер-режима."""
+        return self._conn.execute("SELECT 1 FROM users LIMIT 1").fetchone() is not None
+
+    def count_admins(self) -> int:
+        """Активные админы — для гварда «нельзя убрать последнего админа»."""
+        return int(self._conn.execute(
+            "SELECT COUNT(*) FROM users WHERE role = 'admin' AND is_active = 1").fetchone()[0])
+
+    def create_user(self, username: str, password: str, role: str = "user",
+                    *, comment: str | None = None, iters: int | None = None) -> int:
+        """Создать пользователя (пароль хешируется). Вернёт id. `iters` — для ускорения тестов."""
+        cur = self._conn.execute(
+            "INSERT INTO users (username, password_hash, role, is_active, created_at, comment) "
+            "VALUES (?, ?, ?, 1, ?, ?)",
+            (username, auth.hash_password(password, iters=iters), role, auth.utcnow_iso(), comment),
+        )
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def get_user_by_username(self, username: str) -> dict | None:
+        return _row(self._conn.execute(
+            "SELECT * FROM users WHERE username = ?", (username,)).fetchone())
+
+    def get_user_by_id(self, user_id: int) -> dict | None:
+        return _row(self._conn.execute(
+            "SELECT * FROM users WHERE id = ?", (user_id,)).fetchone())
+
+    def list_users(self) -> list[dict]:
+        """Без password_hash — для экрана управления."""
+        rows = self._conn.execute(
+            "SELECT id, username, role, is_active, created_at, last_login, comment "
+            "FROM users ORDER BY username"
+        ).fetchall()
+        return [_row(r) for r in rows]
+
+    def set_user_active(self, user_id: int, active: bool) -> None:
+        self._conn.execute(
+            "UPDATE users SET is_active = ? WHERE id = ?", (1 if active else 0, user_id))
+        if not active:  # заблокировали → разлогинить везде немедленно
+            self._conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        self._conn.commit()
+
+    def set_role(self, user_id: int, role: str) -> None:
+        self._conn.execute("UPDATE users SET role = ? WHERE id = ?", (role, user_id))
+        self._conn.commit()
+
+    def update_password(self, user_id: int, password: str, *, iters: int | None = None) -> None:
+        self._conn.execute("UPDATE users SET password_hash = ? WHERE id = ?",
+                           (auth.hash_password(password, iters=iters), user_id))
+        self._conn.commit()
+
+    def touch_last_login(self, user_id: int) -> None:
+        self._conn.execute("UPDATE users SET last_login = ? WHERE id = ?",
+                           (auth.utcnow_iso(), user_id))
+        self._conn.commit()
+
+    def create_session(self, user_id: int, token: str, *, remember: bool = False) -> None:
+        now = auth.utcnow()
+        exp = now + auth.session_ttl(remember)
+        self._conn.execute(
+            "INSERT INTO sessions (token_hash, user_id, created_at, expires_at, last_seen, remember) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (auth.hash_token(token), user_id, auth.iso(now), auth.iso(exp), auth.iso(now), int(remember)),
+        )
+        self._conn.commit()
+
+    def get_session_user(self, token: str) -> dict | None:
+        """Активный пользователь по токену сессии, если сессия не истекла и юзер не заблокирован.
+        Сравнение `expires_at > now` лексикографическое — корректно для UTC-ISO строк."""
+        return _row(self._conn.execute(
+            "SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id "
+            "WHERE s.token_hash = ? AND s.expires_at > ? AND u.is_active = 1",
+            (auth.hash_token(token), auth.utcnow_iso()),
+        ).fetchone())
+
+    def touch_session(self, token: str) -> None:
+        """Скользящее продление по собственному флагу `remember` сессии."""
+        th = auth.hash_token(token)
+        row = self._conn.execute("SELECT remember FROM sessions WHERE token_hash = ?", (th,)).fetchone()
+        if row is None:
+            return
+        exp = auth.utcnow() + auth.session_ttl(bool(row["remember"]))
+        self._conn.execute("UPDATE sessions SET expires_at = ?, last_seen = ? WHERE token_hash = ?",
+                           (auth.iso(exp), auth.utcnow_iso(), th))
+        self._conn.commit()
+
+    def delete_session(self, token: str) -> None:
+        self._conn.execute("DELETE FROM sessions WHERE token_hash = ?", (auth.hash_token(token),))
+        self._conn.commit()
+
+    def delete_user_sessions(self, user_id: int) -> None:
+        self._conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        self._conn.commit()
+
+    def purge_expired_sessions(self) -> int:
+        cur = self._conn.execute(
+            "DELETE FROM sessions WHERE expires_at <= ?", (auth.utcnow_iso(),))
+        self._conn.commit()
+        return cur.rowcount
