@@ -449,6 +449,26 @@ def test_fresh_db_allows_vip(tmp_path):
         assert s.get_user_by_id(uid)["role"] == "vip"               # новая схема без CHECK
 
 
+def test_notifications_crud_and_owner(tmp_path):
+    storage = Storage(tmp_path / "t.db")
+    uid = storage.create_user("u", "p", iters=1000)
+    other = storage.create_user("v", "p", iters=1000)
+    n1 = storage.add_notification(uid, "batch_done", "Готов #1", job_id=1)
+    storage.add_notification(uid, "batch_failed", "Ошибка #2", job_id=2)
+    assert storage.count_unread_notifications(uid) == 2
+    assert storage.count_unread_notifications(other) == 0                 # чужому ничего
+    items = storage.list_notifications(uid)
+    assert len(items) == 2 and items[0]["text"] == "Ошибка #2"           # свежие сверху
+
+    storage.mark_notification_read(n1, other)                            # не свой — игнор
+    assert storage.count_unread_notifications(uid) == 2
+    storage.mark_notification_read(n1, uid)
+    assert storage.count_unread_notifications(uid) == 1
+    storage.mark_all_notifications_read(uid)
+    assert storage.count_unread_notifications(uid) == 0
+    storage.close()
+
+
 def test_jobs_interrupted_sweep(tmp_path):
     storage = Storage(tmp_path / "t.db")
     uid = storage.create_user("u", "p", iters=1000)

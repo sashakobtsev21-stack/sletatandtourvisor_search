@@ -185,6 +185,19 @@ CREATE TABLE IF NOT EXISTS jobs (
     error             TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_user ON jobs(user_id);
+
+-- Уведомления в приложении (Ф2 батча): «анализ готов» и пр. Значок в шапке поллит
+-- непрочитанные; клик ведёт на связанный батч (job_id).
+CREATE TABLE IF NOT EXISTS notifications (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind       TEXT NOT NULL,                 -- batch_done / batch_failed
+    job_id     INTEGER,                       -- связанный батч (для ссылки)
+    text       TEXT NOT NULL,
+    is_read    INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, is_read);
 """
 
 
@@ -697,6 +710,42 @@ class Storage:
             "WHERE status IN ('pending', 'running')", (auth.utcnow_iso(),))
         self._conn.commit()
         return cur.rowcount
+
+    # ------------------------- Уведомления (Ф2 батча) -------------------------
+
+    def add_notification(self, user_id: int, kind: str, text: str,
+                         job_id: "int | None" = None) -> int:
+        """Добавить уведомление пользователю (непрочитанное). Вернёт id."""
+        cur = self._conn.execute(
+            "INSERT INTO notifications (user_id, kind, job_id, text, is_read, created_at) "
+            "VALUES (?, ?, ?, ?, 0, ?)",
+            (user_id, kind, job_id, text, auth.utcnow_iso()))
+        self._conn.commit()
+        return int(cur.lastrowid)
+
+    def list_notifications(self, user_id: int, limit: int = 30) -> list[dict]:
+        """Последние уведомления пользователя (свежие сверху)."""
+        rows = self._conn.execute(
+            "SELECT * FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT ?",
+            (user_id, limit)).fetchall()
+        return [_row(r) for r in rows]
+
+    def count_unread_notifications(self, user_id: int) -> int:
+        return int(self._conn.execute(
+            "SELECT COUNT(*) FROM notifications WHERE user_id = ? AND is_read = 0",
+            (user_id,)).fetchone()[0])
+
+    def mark_notification_read(self, notif_id: int, user_id: int) -> None:
+        """Отметить прочитанным (только своё — owner в WHERE)."""
+        self._conn.execute(
+            "UPDATE notifications SET is_read = 1 WHERE id = ? AND user_id = ?",
+            (notif_id, user_id))
+        self._conn.commit()
+
+    def mark_all_notifications_read(self, user_id: int) -> None:
+        self._conn.execute(
+            "UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0", (user_id,))
+        self._conn.commit()
 
     def grant_subscription(self, user_id: int, *, days: int) -> None:
         """Выдать/ПРОДЛИТЬ подписку на `days`: paid_until = max(сейчас, текущий) + days (стэк)."""
