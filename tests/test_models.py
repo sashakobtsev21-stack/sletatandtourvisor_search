@@ -6,7 +6,22 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from toursearch.models import ComparisonReport, Offer, ProviderResult, SearchParams
+from toursearch.models import (
+    ComparisonReport,
+    Offer,
+    ProviderResult,
+    SearchParams,
+    is_not_applicable_error,
+)
+
+
+def test_is_not_applicable_error():
+    # «не обслуживает такой запрос» (нейтрально), а не случайный сбой
+    assert is_not_applicable_error("направление «Армения» не предлагается на Sletat") is True
+    assert is_not_applicable_error("country: не найдена в списке Sletat") is True
+    assert is_not_applicable_error("Островок работает только в режиме «Отели»") is True
+    assert is_not_applicable_error("TimeoutError: страница не загрузилась") is False
+    assert is_not_applicable_error(None) is False
 
 
 def make_params(**overrides) -> SearchParams:

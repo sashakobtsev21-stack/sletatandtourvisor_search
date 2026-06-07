@@ -20,7 +20,14 @@ from decimal import Decimal
 
 from playwright.async_api import Page, TimeoutError as PWTimeout, async_playwright
 
-from toursearch.models import HotelOffer, Offer, OperatorOffer, ProviderResult, SearchParams
+from toursearch.models import (
+    HotelOffer,
+    Offer,
+    OperatorOffer,
+    ProviderResult,
+    SearchParams,
+    is_not_applicable_error,
+)
 from toursearch.providers._formcheck import (
     UNKNOWN,
     FormVerificationError,
@@ -259,12 +266,16 @@ class SletatProvider:
                 log.warning("sletat search failed (mode=%s): %s: %s",
                             params.search_mode, type(exc).__name__, exc)
                 shot = await self._safe_screenshot(page)
+                msg = str(exc)
+                # «не предлагается / не обслуживает» — детерминированный отказ (не сбой):
+                # показываем чистым текстом, без префикса типа исключения.
+                err = msg if is_not_applicable_error(msg) else f"{type(exc).__name__}: {msg}"
                 return ProviderResult(
                     provider=self.name,
                     success=False,
                     duration_seconds=time.monotonic() - start,
                     search_mode=params.search_mode,
-                    error=f"{type(exc).__name__}: {exc}",
+                    error=err,
                     screenshot_path=shot,
                 )
             finally:
@@ -349,9 +360,12 @@ class SletatProvider:
                 except Exception:
                     pass
                 await page.wait_for_timeout(200)
-        raise FormVerificationError(
-            [("country", country, "не найдена в списке Sletat (направление не предлагается)")]
-        )
+        # Страна реально отсутствует в списке Sletat для этого режима (напр. «Армения» есть в
+        # «Турах», но не в «Отелях» без перелёта). Это не сбой формы, а «не предлагается» —
+        # чистое сообщение, которое показывается нейтрально (ℹ️), а не красной ошибкой.
+        raise RuntimeError(
+            f"направление «{country}» не предлагается на Sletat для этого типа поиска "
+            f"(возможно, доступно в другом режиме — туры/отели)")
 
     async def _select_dates(self, page: Page, date_from: date, date_to: date) -> None:
         # Sletat ограничивает окно вылета ±13 дней от первой даты — дальше дни disabled.
