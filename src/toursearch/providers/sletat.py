@@ -196,8 +196,8 @@ class SletatProvider:
                 await page.wait_for_timeout(3500)
                 await self._close_popups(page)
                 log.info("Sletat: сайт открыт, задаю параметры (%s)…", params.search_mode)
-                if params.search_mode == "hotels":
-                    await self._switch_to_hotels(page)
+                # Переключение в «Отели» теперь делает _fill_form ПОСЛЕ выбора страны
+                # (страна выбирается в «Турах» и переносится — см. _select_country_for_hotels).
                 await self._fill_form(page, params)
                 await self._verify_and_fix(page, params)
                 await self._click_search(page)
@@ -303,10 +303,14 @@ class SletatProvider:
     # --- заполнение формы ---
 
     async def _fill_form(self, page: Page, params: SearchParams) -> None:
-        # В режиме «Отели» (без перелёта) поля города вылета нет — пропускаем.
-        if params.search_mode != "hotels":
+        if params.search_mode == "hotels":
+            # Режим «Отели» (без перелёта): город вылета не нужен, НО список стран в этом
+            # режиме УРЕЗАН — часть направлений (напр. Армения) в нём отсутствует, хотя
+            # отели по ним есть. Выбираем страну в «Турах» (полный список) и переключаемся.
+            await self._select_country_for_hotels(page, params)
+        else:
             await self._select_departure_city(page, params.departure_city)
-        await self._select_country(page, params.destination_country)
+            await self._select_country(page, params.destination_country)
         # Курорт — ПОСЛЕ страны: смена страны перезагружает список курортов.
         if params.resorts:
             await self._select_resorts(page, params.resorts)
@@ -360,12 +364,34 @@ class SletatProvider:
                 except Exception:
                     pass
                 await page.wait_for_timeout(200)
-        # Страна реально отсутствует в списке Sletat для этого режима (напр. «Армения» есть в
-        # «Турах», но не в «Отелях» без перелёта). Это не сбой формы, а «не предлагается» —
-        # чистое сообщение, которое показывается нейтрально (ℹ️), а не красной ошибкой.
-        raise RuntimeError(
-            f"направление «{country}» не предлагается на Sletat для этого типа поиска "
-            f"(возможно, доступно в другом режиме — туры/отели)")
+        # Страна отсутствует в активном списке Sletat (после двух попыток ввода). Это не сбой
+        # формы, а «не предлагается» — показывается нейтрально (ℹ️), без красной ошибки. В
+        # режиме «Отели» вызывающий (_select_country_for_hotels) сперва пробует выбрать страну
+        # в «Турах» и перенести — сюда долетают лишь направления, которых нет нигде.
+        raise RuntimeError(f"направление «{country}» не предлагается на Sletat")
+
+    async def _select_country_for_hotels(self, page: Page, params: SearchParams) -> None:
+        """Выбрать страну назначения для режима «Отели» (без перелёта).
+
+        Список стран в режиме «Отели» урезан: часть направлений (напр. Армения) в нём
+        отсутствует, хотя инвентарь отелей по ним есть. Рабочий путь (как в UI у агента):
+        выбрать страну в режиме «Туры» (там полный список; нужен город вылета) и затем
+        переключиться в «Отели» — страна ПЕРЕНОСИТСЯ, перелёт отбрасывается (ticketsincluded=
+        false), отели по стране подгружаются. Если страны нет и в «Турах» — запасной путь:
+        выбрать прямо в списке отелей (вдруг направление доступно только как «отели»)."""
+        in_tours = False
+        try:
+            await self._select_departure_city(page, params.departure_city)
+            await self._select_country(page, params.destination_country)
+            in_tours = True
+        except Exception as exc:  # noqa: BLE001
+            log.info("Sletat: «%s» нет в списке «Туров» (%s) — пробую прямой выбор в «Отелях»",
+                     params.destination_country, exc)
+        await self._switch_to_hotels(page)
+        await page.wait_for_timeout(2000)
+        if not in_tours:
+            # запасной путь: страна не нашлась в турах — пробуем напрямую в списке отелей
+            await self._select_country(page, params.destination_country)
 
     async def _select_dates(self, page: Page, date_from: date, date_to: date) -> None:
         # Sletat ограничивает окно вылета ±13 дней от первой даты — дальше дни disabled.
