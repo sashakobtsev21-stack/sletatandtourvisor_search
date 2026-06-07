@@ -9,6 +9,7 @@ import BillingPage from "./pages/BillingPage.jsx";
 import BatchPage from "./pages/BatchPage.jsx";
 import JobsPage from "./pages/JobsPage.jsx";
 import JobPage from "./pages/JobPage.jsx";
+import LandingPage from "./pages/LandingPage.jsx";
 import { useHashRoute, matchRun, matchJob } from "./lib/router.js";
 import { useAuth } from "./lib/auth.jsx";
 
@@ -39,6 +40,8 @@ export default function App() {
   // Гость (аноним с 2 поисками) может открыть форму входа/регистрации, не теряя доступ к поиску.
   if (user.mode === "guest" && (route.startsWith("/login") || route.startsWith("/register")))
     return <LoginPage />;
+  // Гость на корне видит публичный лендинг (продающая стартовая); приложение — на #/search.
+  if (user.mode === "guest" && route === "/") return <LandingPage />;
 
   const runId = matchRun(route);
   const jobId = matchJob(route);
