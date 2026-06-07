@@ -26,19 +26,29 @@ export default function JobPage({ jobId }) {
 
   useEffect(() => {
     let alive = true;
+    let fails = 0;
+    const schedule = () => { timerRef.current = setTimeout(tick, 3000); };
     const tick = async () => {
       try {
         const r = await apiFetch(`/api/jobs/${jobId}`);
-        if (!r.ok) {
+        if (r.status === 404 || r.status === 403) {  // постоянная ошибка (нет/чужой) → сразу
           if (alive) setError(`HTTP ${r.status}`);
           return;
         }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);   // сеть/5xx → транзиторно, ретраим
         const j = await r.json();
         if (!alive) return;
+        fails = 0;
+        setError(null);
         setJob(j);
-        if (j.status === "pending" || j.status === "running") timerRef.current = setTimeout(tick, 3000);
+        if (j.status === "pending" || j.status === "running") schedule();
       } catch (e) {
-        if (alive) setError(String(e));
+        if (!alive) return;
+        // Одна сетевая икота не должна навсегда заморозить прогресс: ретраим, пока не
+        // накопится несколько подряд — только тогда показываем ошибку.
+        fails += 1;
+        if (fails >= 4) setError(String(e));
+        else schedule();
       }
     };
     tick();

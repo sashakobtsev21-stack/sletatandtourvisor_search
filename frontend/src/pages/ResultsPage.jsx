@@ -39,6 +39,14 @@ export default function ResultsPage({ runId }) {
     };
   }, [runId]);
 
+  // Закрытие модалки скриншота по Escape (клавиатурная доступность).
+  useEffect(() => {
+    if (!shot) return;
+    const onKey = (e) => { if (e.key === "Escape") setShot(null); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [shot]);
+
   if (error) return <CenterCard icon={AlertTriangle} tone="err" text={`Не удалось загрузить прогон #${runId}: ${error}`} back />;
   if (!data) return <CenterCard icon={Loader2} spin text={`Загружаю прогон #${runId}…`} />;
 

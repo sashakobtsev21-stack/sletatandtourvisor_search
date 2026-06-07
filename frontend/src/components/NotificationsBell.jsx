@@ -2,14 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Bell, CheckCheck, Layers } from "lucide-react";
 import { apiFetch } from "../lib/api.js";
 import { navigate } from "../lib/router.js";
-
-const fmt = (iso) => {
-  try {
-    return new Date(iso).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
-  } catch {
-    return "";
-  }
-};
+import { formatShortDateTime } from "../lib/format.js";
 
 /**
  * NotificationsBell — значок уведомлений в шапке (Ф2 батча). Поллит непрочитанные
@@ -112,7 +105,7 @@ export default function NotificationsBell() {
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block text-sm text-ink">{n.text}</span>
-                    <span className="block text-[11px] text-muted">{fmt(n.created_at)}</span>
+                    <span className="block text-[11px] text-muted">{formatShortDateTime(n.created_at)}</span>
                   </span>
                   {!n.is_read && <span className="mt-1.5 size-2 shrink-0 rounded-full bg-brand" />}
                 </button>

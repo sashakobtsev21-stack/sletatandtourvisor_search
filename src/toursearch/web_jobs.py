@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import date
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -121,42 +120,18 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
 
     @app.post("/api/jobs")
     async def create_job_ep(request: Request):
-        # Хелперы парсинга формы живут в web.py; импорт ленивый — иначе цикл (web.py зовёт register_jobs).
-        from toursearch.web import MAX_DATE_SPAN_DAYS, _form_flag, _parse_price_input
+        # Разбор формы — общий с /search/prepare (web.py); импорт ленивый (цикл web↔web_jobs).
+        from toursearch.web import parse_search_params
 
         f = await request.form()
         destinations = list(dict.fromkeys(d for d in f.getlist("destination") if d))  # уникальные, порядок
         if len(destinations) < 2:
             return JSONResponse({"error": "Выберите минимум 2 направления для батч-анализа."},
                                 status_code=400)
-        providers = f.getlist("provider") or None
-        ops = [o for o in f.getlist("operator") if o]
-        child_ages = [int(x) for x in f.getlist("child_age") if str(x).isdigit()]
-        try:
-            df = date.fromisoformat(f.get("date_from") or "")
-            dt = date.fromisoformat(f.get("date_to") or "")
-        except ValueError:
-            return JSONResponse({"error": "Некорректные даты поиска."}, status_code=400)
-        if dt < df:
-            return JSONResponse({"error": "Дата «до» не может быть раньше «от»."}, status_code=400)
-        if (dt - df).days > MAX_DATE_SPAN_DAYS:
-            return JSONResponse({"error": f"Диапазон дат вылета — не более {MAX_DATE_SPAN_DAYS} дней."},
-                                status_code=400)
-        try:
-            nmin = int(f.get("nights_min") or 7)
-            nmax = int(f.get("nights_max") or 10)
-            nmin, nmax = min(nmin, nmax), max(nmin, nmax)
-            base = SearchParams(
-                departure_city=f.get("departure_city", "Москва"),
-                destination_country=destinations[0],  # плейсхолдер: воркер подставит каждую страну
-                date_from=df, date_to=dt, nights_min=nmin, nights_max=nmax,
-                adults=int(f.get("adults") or 2), children_ages=child_ages,
-                search_mode=f.get("mode", "tours"), operators=ops,
-                charter_only=_form_flag(f.get("charter_only")), direct_only=_form_flag(f.get("direct_only")),
-                price_max=_parse_price_input(f.get("price_max")),
-            )
+        try:  # страна-плейсхолдер destinations[0]; воркер подставит каждую
+            base, providers = parse_search_params(f, destination_country=destinations[0])
         except ValueError as exc:
-            return JSONResponse({"error": f"Некорректные параметры поиска: {exc}"}, status_code=400)
+            return JSONResponse({"error": str(exc)}, status_code=400)
 
         n = len(destinations)
         user = getattr(request.state, "user", None)

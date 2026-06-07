@@ -20,7 +20,7 @@ const now = () => new Date().toTimeString().slice(0, 8);
 let activeRun = null; // { token, providers } | null
 
 /** Параметры прогона (из истории) → payload для runRealSearch. */
-export function payloadFromParams(p) {
+function payloadFromParams(p) {
   return {
     mode: p.search_mode,
     departure_city: p.departure_city,
