@@ -11,7 +11,7 @@ import NotificationsBell from "./NotificationsBell.jsx";
  * и кнопка выхода. Содержимое конкретной страницы передаётся через children.
  */
 const NAV = [
-  { label: "Поиск", href: "#/", icon: Search, perm: "search.run", match: (p) => p === "/" || p.startsWith("/run") },
+  { label: "Поиск", href: "#/", icon: Search, perm: "search.run", match: (p) => p === "/" || p === "/search" || p.startsWith("/run") },
   // «Анализы» (батч) — только залогиненным (гость mode≠multiuser → скрыт).
   { label: "Анализы", href: "#/batch", icon: Layers, perm: "search.run", mode: "multiuser", match: (p) => p.startsWith("/batch") || p.startsWith("/jobs") },
   { label: "История", href: "#/history", icon: History, perm: "history.view.own", match: (p) => p.startsWith("/history") },
@@ -25,7 +25,11 @@ const ROLE_LABEL = { admin: "админ", user: "пользователь", vip:
 
 export default function AppShell({ route = "/", children }) {
   const { user, can, logout } = useAuth();
-  const nav = NAV.filter((n) => (!n.perm || can(n.perm)) && (!n.mode || user?.mode === n.mode));
+  const isGuest = user?.mode === "guest";
+  // У гостя корень «/» занят лендингом → вкладка «Поиск» ведёт в приложение на «/search».
+  const nav = NAV
+    .filter((n) => (!n.perm || can(n.perm)) && (!n.mode || user?.mode === n.mode))
+    .map((n) => (n.label === "Поиск" && isGuest ? { ...n, href: "#/search" } : n));
   return (
     <div className="relative min-h-screen">
       {/* Анимированный градиентный фон путешествий (мягкие световые пятна) */}
