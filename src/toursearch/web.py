@@ -559,9 +559,18 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
         return {"token": token}
 
     @app.post("/search/cancel")
-    async def search_cancel(token: str):
+    async def search_cancel(request: Request, token: str):
         session = _searches.get(token)
-        if session is not None and session.task is not None and not session.task.done():
+        if session is None:
+            return {"cancelled": False}
+        # Отменять можно только СВОЙ прогон (uuid4-токен неугадываем, но проверяем владельца):
+        # по user_id (залогинен) или device (гость); в локальном режиме владельца нет.
+        uid = current_user_id(request)
+        device = getattr(request.state, "device", None)
+        owns = ((session.user_id is not None and session.user_id == uid)
+                or (session.device is not None and session.device == device)
+                or (session.user_id is None and session.device is None))
+        if owns and session.task is not None and not session.task.done():
             session.task.cancel()
             return {"cancelled": True}
         return {"cancelled": False}
@@ -594,7 +603,8 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
                     if session.consume:
                         with Storage(db_path) as s:
                             if session.device is not None:        # гость — расход по устройству (анонимно)
-                                session.consumed = s.try_consume_anon(session.device, session.ip or "")
+                                session.consumed = s.try_consume_anon(
+                                    session.device, session.ip or "", device_limit=billing.ANON_CREDITS)
                             else:                                  # обычный юзер — кредит из остатка
                                 session.consumed = s.try_consume_search(session.user_id)
                     if session.consume and not session.consumed:

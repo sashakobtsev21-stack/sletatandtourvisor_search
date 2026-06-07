@@ -52,13 +52,11 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
             job = s.get_job(job_id)
             if job is None:
                 return
-            user = s.get_user_by_id(job["user_id"]) if job["user_id"] else None
         stored = json.loads(job["params_json"])
         base = SearchParams.model_validate(stored["search_params"])
         providers = stored["providers"]
         destinations = json.loads(job["destinations_json"])
         user_id = job["user_id"]
-        consume = billing.consumes_credit(user) if user else False
 
         with Storage(db_path) as s:
             s.update_job(job_id, status="running")
@@ -78,14 +76,16 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
                 while active["n"] >= max_conc:        # ждать слот общего предела (не отклонять)
                     await asyncio.sleep(0.5)
                 consumed = False
-                if consume:
+                # Списание считаем по СВЕЖЕМУ пользователю каждый раз: за длинный батч могли
+                # оформить подписку / сменить роль — тогда кредиты больше не списываем.
+                if user_id is not None:
                     with Storage(db_path) as s:
-                        consumed = s.try_consume_search(user_id)
-                    if not consumed:                  # кредиты кончились — частичный результат
-                        with Storage(db_path) as s:
-                            s.update_job(job_id, error=f"Кредиты закончились: выполнено {done} из "
-                                                       f"{len(destinations)}.")
-                        break
+                        if billing.consumes_credit(s.get_user_by_id(user_id)):
+                            consumed = s.try_consume_search(user_id)
+                            if not consumed:          # кредиты кончились — частичный результат
+                                s.update_job(job_id, error=f"Кредиты закончились: выполнено {done} "
+                                                           f"из {len(destinations)}.")
+                                break
                 active["n"] += 1
                 try:
                     sp = base.model_copy(update={"destination_country": country})

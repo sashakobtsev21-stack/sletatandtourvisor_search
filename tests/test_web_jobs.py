@@ -151,6 +151,29 @@ def test_worker_runs_all_directions_and_consumes_credits(tmp_path, monkeypatch):
         assert s.list_notifications(uid)[0]["kind"] == "batch_done"
 
 
+def test_worker_subscription_consumes_no_credits(tmp_path, monkeypatch):
+    # активная подписка → воркер не списывает кредиты (списание считается по СВЕЖЕМУ юзеру)
+    _patch_search(monkeypatch)
+    db = _seed(tmp_path, [("u", "secret1", "user")])
+    app = create_app(db_path=db)
+    base = SearchParams(departure_city="Москва", destination_country="X",
+                        date_from=date(2026, 7, 1), date_to=date(2026, 7, 8),
+                        nights_min=7, nights_max=10, adults=2)
+    params_json = json.dumps({"search_params": base.model_dump(mode="json"),
+                              "providers": ["sletat"]}, ensure_ascii=False)
+    with Storage(db) as s:
+        uid = s.get_user_by_username("u")["id"]
+        s.grant_subscription(uid, days=30)              # безлимит на срок
+        before = s.get_user_by_id(uid)["searches_left"]
+        job_id = s.create_job(uid, params_json, ["Турция", "Египет"])
+
+    asyncio.run(app.state.run_job(job_id))
+
+    with Storage(db) as s:
+        assert s.get_job(job_id)["status"] == "done"
+        assert s.get_user_by_id(uid)["searches_left"] == before  # подписка → кредиты не тронуты
+
+
 def test_notifications_api_and_isolation(tmp_path, monkeypatch):
     _patch_search(monkeypatch)
     db = _seed(tmp_path, [("u", "secret1", "user"), ("v", "secret1", "user")])

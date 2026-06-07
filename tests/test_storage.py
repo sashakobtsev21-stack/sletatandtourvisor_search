@@ -374,6 +374,21 @@ def test_grant_subscription_and_payment(tmp_path):
     storage.close()
 
 
+def test_complete_payment_atomic_and_idempotent(tmp_path):
+    # пакет кредитов: статус succeeded и начисление — согласованы и применяются РОВНО один раз
+    storage = Storage(tmp_path / "t.db")
+    uid = storage.create_user("u", "p", iters=1000)
+    assert storage.get_user_by_id(uid)["searches_left"] == 5
+    pid = storage.create_payment(uid, provider="stub", plan="100", amount=999,
+                                 kind="credits", credits=100)
+    p = storage.complete_payment(pid)
+    assert p["status"] == "succeeded"
+    assert storage.get_user_by_id(uid)["searches_left"] == 105        # начислено вместе со статусом
+    storage.complete_payment(pid)                                     # повтор (вебхук дважды)
+    assert storage.get_user_by_id(uid)["searches_left"] == 105        # второй раз не начисляет
+    storage.close()
+
+
 def test_anon_consume_refund_and_device_limit(tmp_path):
     storage = Storage(tmp_path / "t.db")
     assert storage.anon_used("devA") == 0
