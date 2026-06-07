@@ -4,6 +4,7 @@ import { Layers, Loader2, Plus, ChevronRight } from "lucide-react";
 import GlassCard from "../components/ui/GlassCard.jsx";
 import { staggerContainer, fadeUp } from "../lib/animations.js";
 import { apiFetch } from "../lib/api.js";
+import { formatShortDateTime } from "../lib/format.js";
 
 /** Человеческая метка и цвет статуса батча. */
 const STATUS = {
@@ -12,14 +13,6 @@ const STATUS = {
   done: { label: "готово", cls: "border-emerald-400/30 bg-emerald-500/15 text-emerald-200" },
   failed: { label: "ошибка", cls: "border-rose-400/30 bg-rose-500/15 text-rose-200" },
   interrupted: { label: "прервано", cls: "border-amber-400/30 bg-amber-400/10 text-amber-300" },
-};
-
-const fmtDate = (iso) => {
-  try {
-    return new Date(iso).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
-  } catch {
-    return iso;
-  }
 };
 
 /**
@@ -71,7 +64,7 @@ export default function JobsPage() {
                 <div className="mb-1 flex flex-wrap items-center gap-2">
                   <span className="font-bold text-white">Анализ #{j.id}</span>
                   <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${st.cls}`}>{st.label}</span>
-                  <span className="text-xs text-muted">{fmtDate(j.created_at)}</span>
+                  <span className="text-xs text-muted">{formatShortDateTime(j.created_at)}</span>
                 </div>
                 <div className="truncate text-sm text-muted">
                   {j.destinations.join(", ")}

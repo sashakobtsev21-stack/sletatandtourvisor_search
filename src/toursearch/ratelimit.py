@@ -51,5 +51,11 @@ class SlidingWindow:
         self._events.pop(key, None)
 
     def _gc(self) -> None:
-        if len(self._events) > 10000:  # страховка от неограниченного роста словаря
-            self._events.clear()
+        """Подчистка от роста словаря: выкинуть только ПРОТУХШИЕ ключи (без событий в окне),
+        НЕ сбрасывая активные счётчики/лок-ауты — иначе спам уникальными ключами обнулил бы
+        все лок-ауты входа разом."""
+        if len(self._events) <= 10000:
+            return
+        now = time.monotonic()
+        self._events = {k: v for k, v in self._events.items()
+                        if any(now - t < self.window for t in v)}

@@ -170,6 +170,41 @@ def _form_flag(value) -> bool:
     return str(value or "").strip().lower() in ("on", "true", "1", "yes")
 
 
+def parse_search_params(form, *, destination_country: "str | None" = None) -> "tuple[SearchParams, list[str] | None]":
+    """Разобрать форму поиска в (SearchParams, список площадок). Бросает ValueError с понятным
+    текстом при некорректном вводе. `destination_country` переопределяет страну (для батча, где
+    их много); иначе берётся из формы. Единый разбор для /search/prepare и /api/jobs (раньше
+    дублировался почти построчно)."""
+    chosen = form.getlist("provider") or None
+    ops = [o for o in form.getlist("operator") if o]
+    child_ages = [int(x) for x in form.getlist("child_age") if str(x).isdigit()]
+    try:
+        df = date.fromisoformat(form.get("date_from") or "")
+        dt = date.fromisoformat(form.get("date_to") or "")
+    except ValueError:
+        raise ValueError("Некорректные даты поиска.") from None
+    if dt < df:
+        raise ValueError("Дата «до» не может быть раньше даты «от».")
+    if (dt - df).days > MAX_DATE_SPAN_DAYS:
+        raise ValueError(f"Диапазон дат вылета не должен превышать {MAX_DATE_SPAN_DAYS} дней (ограничение Sletat).")
+    try:
+        nmin = int(form.get("nights_min") or 7)
+        nmax = int(form.get("nights_max") or 10)
+        nmin, nmax = min(nmin, nmax), max(nmin, nmax)
+        params = SearchParams(
+            departure_city=form.get("departure_city", "Москва"),
+            destination_country=destination_country or form.get("destination_country", "Турция"),
+            date_from=df, date_to=dt, nights_min=nmin, nights_max=nmax,
+            adults=int(form.get("adults") or 2), children_ages=child_ages,
+            search_mode=form.get("mode", "tours"), operators=ops,
+            charter_only=_form_flag(form.get("charter_only")), direct_only=_form_flag(form.get("direct_only")),
+            price_max=_parse_price_input(form.get("price_max")),
+        )
+    except ValueError as exc:
+        raise ValueError(f"Некорректные параметры поиска: {exc}") from exc
+    return params, chosen
+
+
 # --- сериализация отчёта в JSON для React-дашборда ---
 
 def _offer_dict(o) -> dict:
@@ -513,34 +548,10 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
     @app.post("/search/prepare")
     async def search_prepare(request: Request):
         f = await request.form()
-        chosen = f.getlist("provider") or None
-        ops = [o for o in f.getlist("operator") if o]
-        child_ages = [int(x) for x in f.getlist("child_age") if str(x).isdigit()]
         try:
-            df = date.fromisoformat(f.get("date_from") or "")
-            dt = date.fromisoformat(f.get("date_to") or "")
-        except ValueError:
-            return {"error": "Некорректные даты поиска."}
-        if dt < df:
-            return {"error": "Дата «до» не может быть раньше даты «от»."}
-        if (dt - df).days > MAX_DATE_SPAN_DAYS:
-            return {"error": f"Диапазон дат вылета не должен превышать {MAX_DATE_SPAN_DAYS} дней (ограничение Sletat)."}
-        try:
-            nmin = int(f.get("nights_min") or 7)
-            nmax = int(f.get("nights_max") or 10)
-            nmin, nmax = min(nmin, nmax), max(nmin, nmax)
-            params = SearchParams(
-                departure_city=f.get("departure_city", "Москва"),
-                destination_country=f.get("destination_country", "Турция"),
-                date_from=df, date_to=dt,
-                nights_min=nmin, nights_max=nmax,
-                adults=int(f.get("adults") or 2), children_ages=child_ages,
-                search_mode=f.get("mode", "tours"), operators=ops,
-                charter_only=_form_flag(f.get("charter_only")), direct_only=_form_flag(f.get("direct_only")),
-                price_max=_parse_price_input(f.get("price_max")),
-            )
+            params, chosen = parse_search_params(f)
         except ValueError as exc:
-            return {"error": f"Некорректные параметры поиска: {exc}"}
+            return {"error": str(exc)}
         token = uuid.uuid4().hex
         u = request.state.user if hasattr(request.state, "user") else None
         mode = getattr(request.state, "auth_mode", "local")
@@ -559,9 +570,18 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
         return {"token": token}
 
     @app.post("/search/cancel")
-    async def search_cancel(token: str):
+    async def search_cancel(request: Request, token: str):
         session = _searches.get(token)
-        if session is not None and session.task is not None and not session.task.done():
+        if session is None:
+            return {"cancelled": False}
+        # Отменять можно только СВОЙ прогон (uuid4-токен неугадываем, но проверяем владельца):
+        # по user_id (залогинен) или device (гость); в локальном режиме владельца нет.
+        uid = current_user_id(request)
+        device = getattr(request.state, "device", None)
+        owns = ((session.user_id is not None and session.user_id == uid)
+                or (session.device is not None and session.device == device)
+                or (session.user_id is None and session.device is None))
+        if owns and session.task is not None and not session.task.done():
             session.task.cancel()
             return {"cancelled": True}
         return {"cancelled": False}
@@ -594,7 +614,8 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
                     if session.consume:
                         with Storage(db_path) as s:
                             if session.device is not None:        # гость — расход по устройству (анонимно)
-                                session.consumed = s.try_consume_anon(session.device, session.ip or "")
+                                session.consumed = s.try_consume_anon(
+                                    session.device, session.ip or "", device_limit=billing.ANON_CREDITS)
                             else:                                  # обычный юзер — кредит из остатка
                                 session.consumed = s.try_consume_search(session.user_id)
                     if session.consume and not session.consumed:

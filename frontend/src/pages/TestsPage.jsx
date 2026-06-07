@@ -75,6 +75,14 @@ export default function TestsPage() {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [logs.length]);
 
+  // Закрытие лайтбокса скриншота по Escape (клавиатурная доступность).
+  useEffect(() => {
+    if (!lightbox) return;
+    const onKey = (e) => { if (e.key === "Escape") setLightbox(null); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [lightbox]);
+
   const allIds = useMemo(
     () => (catalog ? catalog.groups.flatMap((g) => g.cases.map((c) => c.id)) : []),
     [catalog]

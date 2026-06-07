@@ -66,6 +66,14 @@ def _patch_search(monkeypatch):
     monkeypatch.setattr("toursearch.web_jobs.run_search", fake_run)
 
 
+def _params_json(providers=("sletat",)) -> str:
+    base = SearchParams(departure_city="Москва", destination_country="X",
+                        date_from=date(2026, 7, 1), date_to=date(2026, 7, 8),
+                        nights_min=7, nights_max=10, adults=2)
+    return json.dumps({"search_params": base.model_dump(mode="json"),
+                       "providers": list(providers)}, ensure_ascii=False)
+
+
 # --------------------------- HTTP-контракт ---------------------------
 
 def test_batch_blocked_for_guest(tmp_path, monkeypatch):
@@ -149,6 +157,104 @@ def test_worker_runs_all_directions_and_consumes_credits(tmp_path, monkeypatch):
         assert s.get_user_by_id(uid)["searches_left"] == 3  # 5 − 2 направления
         assert s.count_unread_notifications(uid) == 1       # Ф2: уведомление «готово»
         assert s.list_notifications(uid)[0]["kind"] == "batch_done"
+
+
+def test_worker_subscription_consumes_no_credits(tmp_path, monkeypatch):
+    # активная подписка → воркер не списывает кредиты (списание считается по СВЕЖЕМУ юзеру)
+    _patch_search(monkeypatch)
+    db = _seed(tmp_path, [("u", "secret1", "user")])
+    app = create_app(db_path=db)
+    base = SearchParams(departure_city="Москва", destination_country="X",
+                        date_from=date(2026, 7, 1), date_to=date(2026, 7, 8),
+                        nights_min=7, nights_max=10, adults=2)
+    params_json = json.dumps({"search_params": base.model_dump(mode="json"),
+                              "providers": ["sletat"]}, ensure_ascii=False)
+    with Storage(db) as s:
+        uid = s.get_user_by_username("u")["id"]
+        s.grant_subscription(uid, days=30)              # безлимит на срок
+        before = s.get_user_by_id(uid)["searches_left"]
+        job_id = s.create_job(uid, params_json, ["Турция", "Египет"])
+
+    asyncio.run(app.state.run_job(job_id))
+
+    with Storage(db) as s:
+        assert s.get_job(job_id)["status"] == "done"
+        assert s.get_user_by_id(uid)["searches_left"] == before  # подписка → кредиты не тронуты
+
+
+def test_worker_health_fail_marks_failed_and_notifies(tmp_path, monkeypatch):
+    # health-check не пройден → job failed + уведомление batch_failed, кредиты не тронуты
+    async def fake_health(providers=None, headless=True):
+        return {}
+
+    async def boom(*a, **k):
+        raise AssertionError("run_search не должен вызываться при провале health")
+
+    monkeypatch.setattr("toursearch.web_jobs.run_health_check", fake_health)
+    monkeypatch.setattr("toursearch.web_jobs.gate_passed", lambda h: False)
+    monkeypatch.setattr("toursearch.web_jobs.run_search", boom)
+    db = _seed(tmp_path, [("u", "secret1", "user")])
+    app = create_app(db_path=db)
+    with Storage(db) as s:
+        uid = s.get_user_by_username("u")["id"]
+        before = s.get_user_by_id(uid)["searches_left"]
+        job_id = s.create_job(uid, _params_json(), ["Турция", "Египет"])
+
+    asyncio.run(app.state.run_job(job_id))
+
+    with Storage(db) as s:
+        assert s.get_job(job_id)["status"] == "failed"
+        assert s.get_user_by_id(uid)["searches_left"] == before        # кредиты не списаны
+        assert s.count_unread_notifications(uid) == 1
+        assert s.list_notifications(uid)[0]["kind"] == "batch_failed"
+
+
+def test_worker_direction_failure_refunds(tmp_path, monkeypatch):
+    # одно направление падает → его кредит возвращается, батч завершается с остальными
+    async def fake_health(providers=None, headless=True):
+        return {}
+
+    async def fake_run(params, providers=None, headless=True, on_frame=None):
+        if params.destination_country == "Египет":
+            raise RuntimeError("сайт упал")
+        return _report(params.destination_country)
+
+    monkeypatch.setattr("toursearch.web_jobs.run_health_check", fake_health)
+    monkeypatch.setattr("toursearch.web_jobs.gate_passed", lambda h: True)
+    monkeypatch.setattr("toursearch.web_jobs.run_search", fake_run)
+    db = _seed(tmp_path, [("u", "secret1", "user")])
+    app = create_app(db_path=db)
+    with Storage(db) as s:
+        uid = s.get_user_by_username("u")["id"]            # 5 кредитов
+        job_id = s.create_job(uid, _params_json(), ["Турция", "Египет"])
+
+    asyncio.run(app.state.run_job(job_id))
+
+    with Storage(db) as s:
+        assert s.get_job(job_id)["status"] == "done"
+        assert s.get_user_by_id(uid)["searches_left"] == 4  # Турция списано; Египет списано→возвращено
+        assert len(s.list_job_runs(job_id)) == 1            # сохранилась только Турция
+
+
+def test_worker_credit_exhaustion_stops_partial(tmp_path, monkeypatch):
+    # кредиты кончились посреди батча → частичный результат, статус done с пометкой
+    _patch_search(monkeypatch)
+    db = _seed(tmp_path, [("u", "secret1", "user")])
+    with Storage(db) as s:
+        uid = s.get_user_by_username("u")["id"]
+        s._conn.execute("UPDATE users SET searches_left = 1 WHERE id = ?", (uid,))
+        s._conn.commit()
+    app = create_app(db_path=db)
+    with Storage(db) as s:
+        job_id = s.create_job(uid, _params_json(), ["Турция", "Египет"])
+
+    asyncio.run(app.state.run_job(job_id))
+
+    with Storage(db) as s:
+        job = s.get_job(job_id)
+        assert job["status"] == "done" and "Кредиты закончились" in (job["error"] or "")
+        assert s.get_user_by_id(uid)["searches_left"] == 0
+        assert len(s.list_job_runs(job_id)) == 1            # успело одно направление
 
 
 def test_notifications_api_and_isolation(tmp_path, monkeypatch):

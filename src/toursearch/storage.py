@@ -228,6 +228,10 @@ class Storage:
             self._conn.execute("PRAGMA busy_timeout = 5000")
         except sqlite3.Error:  # напр. :memory: не поддерживает WAL — не критично
             pass
+        # NB: ~2мс на открытие Storage — это inherent-стоимость подключения к WAL-БД (инициализация
+        # -shm/-wal на первый доступ), НЕ команда PRAGMA. Убирается только переиспользованием
+        # соединений (рискованно при per-request модели). Несущественно: поиск занимает ~60с,
+        # 2мс на коннект — шум. WAL оставляем ради конкурентности (запись отчёта не блокирует чтения).
         self._conn.executescript(_SCHEMA)
         self._migrate()
         self._conn.commit()
@@ -747,8 +751,9 @@ class Storage:
             "UPDATE notifications SET is_read = 1 WHERE user_id = ? AND is_read = 0", (user_id,))
         self._conn.commit()
 
-    def grant_subscription(self, user_id: int, *, days: int) -> None:
-        """Выдать/ПРОДЛИТЬ подписку на `days`: paid_until = max(сейчас, текущий) + days (стэк)."""
+    def _apply_subscription(self, user_id: int, *, days: int) -> None:
+        """Продлить подписку БЕЗ commit (для атомарного complete_payment): paid_until =
+        max(сейчас, текущий) + days (стэк)."""
         base = auth.utcnow()
         row = self._conn.execute("SELECT paid_until FROM users WHERE id = ?", (user_id,)).fetchone()
         if row and row["paid_until"]:
@@ -762,6 +767,10 @@ class Storage:
                 pass
         self._conn.execute("UPDATE users SET paid_until = ? WHERE id = ?",
                            (auth.iso(base + timedelta(days=days)), user_id))
+
+    def grant_subscription(self, user_id: int, *, days: int) -> None:
+        """Выдать/ПРОДЛИТЬ подписку на `days` (стэк от max(сейчас, текущий))."""
+        self._apply_subscription(user_id, days=days)
         self._conn.commit()
 
     # --- платежи: пакеты поисков (kind='credits') и подписка (kind='subscription') ---
@@ -782,8 +791,10 @@ class Storage:
             "SELECT * FROM payments WHERE id = ?", (payment_id,)).fetchone())
 
     def complete_payment(self, payment_id: int) -> "dict | None":
-        """Идемпотентно отметить платёж успешным и применить его: пакет → начислить поиски,
-        подписка → продлить срок. Повтор ничего не делает (условный UPDATE). None — если нет."""
+        """Идемпотентно отметить платёж успешным и применить его (пакет → начислить поиски,
+        подписка → продлить срок) — ОДНОЙ транзакцией: статус-флип и начисление коммитятся
+        вместе, иначе краш между ними = деньги взяты, кредиты не начислены. Повтор/гонка —
+        условие status != 'succeeded' (применяем ровно один раз). None — если платежа нет."""
         p = self.get_payment(payment_id)
         if p is None:
             return None
@@ -791,12 +802,13 @@ class Storage:
             "UPDATE payments SET status = 'succeeded', paid_at = ? WHERE id = ? AND status != 'succeeded'",
             (auth.utcnow_iso(), payment_id),
         )
-        self._conn.commit()
-        if cur.rowcount == 1:  # переход pending→succeeded сделали именно мы → применяем один раз
+        if cur.rowcount == 1:  # переход pending→succeeded наш → применяем в ТОЙ ЖЕ транзакции
             if p["kind"] == "subscription":
-                self.grant_subscription(p["user_id"], days=int(p["days"]))
+                self._apply_subscription(p["user_id"], days=int(p["days"]))
             else:
-                self.add_credits(p["user_id"], int(p["credits"]))
+                self._conn.execute("UPDATE users SET searches_left = searches_left + ? WHERE id = ?",
+                                   (int(p["credits"]), p["user_id"]))
+        self._conn.commit()  # один атомарный коммит: статус + начисление вместе
         return self.get_payment(payment_id)
 
     def create_session(self, user_id: int, token: str, *, remember: bool = False) -> None:
