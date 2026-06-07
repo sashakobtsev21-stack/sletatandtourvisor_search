@@ -228,6 +228,10 @@ class Storage:
             self._conn.execute("PRAGMA busy_timeout = 5000")
         except sqlite3.Error:  # напр. :memory: не поддерживает WAL — не критично
             pass
+        # NB: ~2мс на открытие Storage — это inherent-стоимость подключения к WAL-БД (инициализация
+        # -shm/-wal на первый доступ), НЕ команда PRAGMA. Убирается только переиспользованием
+        # соединений (рискованно при per-request модели). Несущественно: поиск занимает ~60с,
+        # 2мс на коннект — шум. WAL оставляем ради конкурентности (запись отчёта не блокирует чтения).
         self._conn.executescript(_SCHEMA)
         self._migrate()
         self._conn.commit()
