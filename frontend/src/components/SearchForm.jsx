@@ -2,11 +2,11 @@ import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Plane, Globe2, CalendarDays, MoonStar, Users, Baby,
-  Wallet, Building2, Search, ChevronRight, Hotel, Sparkles,
+  Building2, Search, ChevronRight, Hotel, Sparkles,
   ShieldCheck, ChevronDown, Plus, X,
 } from "lucide-react";
 import GlassCard from "./ui/GlassCard.jsx";
-import { Field, Input, Select } from "./ui/Field.jsx";
+import { Field, Select } from "./ui/Field.jsx";
 import { DatePicker } from "./ui/DatePicker.jsx";
 import { staggerContainer, fadeUp, spring } from "../lib/animations.js";
 import {
@@ -26,6 +26,15 @@ const minDate = addDays(today, 1);
 // Дефолтное окно: завтра … +7 дней.
 const defaultFrom = minDate;
 const defaultTo = addDays(minDate, 7);
+
+// «8–10 июля» (один месяц) либо «30 июня – 2 июля» — для строки-сводки батча.
+function fmtDateRange(fromIso, toIso) {
+  const f = new Date(fromIso), t = new Date(toIso);
+  const month = (d) => d.toLocaleDateString("ru-RU", { month: "long" });
+  if (f.getMonth() === t.getMonth() && f.getFullYear() === t.getFullYear())
+    return `${f.getDate()}–${t.getDate()} ${month(t)}`;
+  return `${f.getDate()} ${month(f)} – ${t.getDate()} ${month(t)}`;
+}
 
 /**
  * SearchForm — центральная колонка. Форма параметров поиска тура.
@@ -55,6 +64,8 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
   const [dateTo, setDateTo] = useState(initial?.date_to ?? defaultTo);
   const [nightsMin, setNightsMin] = useState(initial?.nights_min ?? 7);
   const [nightsMax, setNightsMax] = useState(initial?.nights_max ?? 10);
+  const [departureCity, setDepartureCity] = useState(initial?.departure_city ?? "Москва"); // контролируемый — для сводки
+  const [adults, setAdults] = useState(initial?.adults ?? 2);
   const [destinations, setDestinations] = useState([]); // батч: выбранные направления (чипы)
   const [destPick, setDestPick] = useState("");          // батч: страна в селекте «добавить»
 
@@ -148,7 +159,6 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
       nights_max: Number(data.get("nights_max")) || 10,
       adults: Number(data.get("adults")),
       child_ages: childAges,
-      price_max: data.get("price_max") || null,
       operators,
       charter_only: data.get("charter_only") === "on",
       direct_only: data.get("direct_only") === "on",
@@ -176,7 +186,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
         </span>
         <div>
           <h2 className="text-xl font-extrabold tracking-tight text-white">
-            {batch ? "Батч-анализ" : "Параметры поиска"}
+            {batch ? "Мультипоиск" : "Параметры поиска"}
           </h2>
           <p className="text-xs text-muted">
             {batch
@@ -220,7 +230,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
       <div className="grid gap-4 sm:grid-cols-2">
         {!isHotels && (
           <Field label="Откуда?" icon={Plane} htmlFor="departure_city">
-            <Select id="departure_city" name="departure_city" icon searchable defaultValue={initial?.departure_city ?? "Москва"}>
+            <Select id="departure_city" name="departure_city" icon searchable value={departureCity} onChange={(e) => setDepartureCity(e.target.value)}>
               {departureCities.map((c) => <option key={c}>{c}</option>)}
             </Select>
           </Field>
@@ -279,6 +289,16 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
               </span>
             ))}
           </div>
+          {destinations.length > 0 && (
+            <p className="mt-2 px-1 text-xs leading-relaxed text-muted">
+              {!isHotels && `Из ${departureCity}: `}
+              <span className="text-ink">{destinations.join(", ")}</span>
+              {" · "}{fmtDateRange(dateFrom, dateTo)}
+              {!isHotels && ` · ${nightsMin}–${nightsMax} ноч.`}
+              {` · ${adults} взр.`}
+              {childAges.length > 0 && ` + ${childAges.length} реб. (${childAges.join(", ")})`}
+            </p>
+          )}
         </motion.div>
       )}
 
@@ -319,10 +339,10 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
         </div>
       )}
 
-      {/* Туристы + бюджет */}
-      <div className="mt-4 grid gap-4 sm:grid-cols-3">
+      {/* Туристы */}
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <Field label="Взрослых" icon={Users} htmlFor="adults">
-          <Select id="adults" name="adults" icon defaultValue={initial?.adults ?? 2}>
+          <Select id="adults" name="adults" icon value={adults} onChange={(e) => setAdults(Number(e.target.value))}>
             {ADULTS.map((a) => <option key={a}>{a}</option>)}
           </Select>
         </Field>
@@ -335,9 +355,6 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
           >
             {CHILDREN.map((k) => <option key={k}>{k}</option>)}
           </Select>
-        </Field>
-        <Field label="Макс. цена, ₽" icon={Wallet} htmlFor="price_max">
-          <Input id="price_max" name="price_max" type="text" icon placeholder="любая" inputMode="numeric" defaultValue={initial?.price_max ?? ""} />
         </Field>
       </div>
 
@@ -363,38 +380,40 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
         </div>
       )}
 
-      {/* Туроператоры — мультивыбор чипами */}
-      <motion.div variants={fadeUp} className="mt-5">
-        <label className="mb-2 block text-xs font-medium tracking-wide text-muted">
-          Туроператоры{" "}
-          <span className="text-muted/60">
-            {operators.length ? `выбрано: ${operators.length}` : "(пусто = все)"}
-          </span>
-        </label>
-        <div className="flex max-h-44 flex-wrap gap-2 overflow-y-auto rounded-xl border border-white/5 bg-white/[0.02] p-2.5">
-          {operatorOptions.map((op) => {
-            const active = operators.includes(op);
-            return (
-              <motion.button
-                key={op}
-                type="button"
-                onClick={() => toggleOperator(op)}
-                whileHover={{ scale: 1.05, y: -1 }}
-                whileTap={{ scale: 0.95 }}
-                className={[
-                  "flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors",
-                  active
-                    ? "border-brand/50 bg-brand/20 text-white shadow-glow"
-                    : "border-white/10 bg-white/[0.03] text-muted hover:text-ink",
-                ].join(" ")}
-              >
-                <Building2 className="size-3.5" />
-                {op}
-              </motion.button>
-            );
-          })}
-        </div>
-      </motion.div>
+      {/* Туроператоры — мультивыбор чипами. В режиме мультипоиска скрыто (одни параметры на все направления). */}
+      {!batch && (
+        <motion.div variants={fadeUp} className="mt-5">
+          <label className="mb-2 block text-xs font-medium tracking-wide text-muted">
+            Туроператоры{" "}
+            <span className="text-muted/60">
+              {operators.length ? `выбрано: ${operators.length}` : "(пусто = все)"}
+            </span>
+          </label>
+          <div className="flex max-h-44 flex-wrap gap-2 overflow-y-auto rounded-xl border border-white/5 bg-white/[0.02] p-2.5">
+            {operatorOptions.map((op) => {
+              const active = operators.includes(op);
+              return (
+                <motion.button
+                  key={op}
+                  type="button"
+                  onClick={() => toggleOperator(op)}
+                  whileHover={{ scale: 1.05, y: -1 }}
+                  whileTap={{ scale: 0.95 }}
+                  className={[
+                    "flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors",
+                    active
+                      ? "border-brand/50 bg-brand/20 text-white shadow-glow"
+                      : "border-white/10 bg-white/[0.03] text-muted hover:text-ink",
+                  ].join(" ")}
+                >
+                  <Building2 className="size-3.5" />
+                  {op}
+                </motion.button>
+              );
+            })}
+          </div>
+        </motion.div>
+      )}
 
       {/* Фильтры рейсов — только для туров */}
       {!isHotels && (
@@ -491,7 +510,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
         ) : (
           <>
             <Search className="size-5" />
-            {batch ? `Запустить анализ${destinations.length ? ` (${destinations.length})` : ""}` : "Сравнить"}
+            {batch ? `Запустить мультипоиск${destinations.length ? ` (${destinations.length})` : ""}` : "Сравнить"}
             <ChevronRight className="size-4 transition-transform group-hover:translate-x-1" />
           </>
         )}

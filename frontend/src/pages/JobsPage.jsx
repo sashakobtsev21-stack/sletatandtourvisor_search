@@ -44,16 +44,16 @@ export default function JobsPage() {
         <span className="grid size-10 place-items-center rounded-xl bg-gradient-to-br from-brand to-ocean shadow-glow">
           <Layers className="size-5 text-white" />
         </span>
-        <h2 className="text-xl font-extrabold tracking-tight text-white">Мои анализы</h2>
+        <h2 className="text-xl font-extrabold tracking-tight text-white">Мои мультипоиски</h2>
         <a href="#/batch" className="ml-auto flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-brand to-ocean px-3 py-2 text-sm font-semibold text-white shadow-glow transition-opacity hover:opacity-95">
-          <Plus className="size-4" /> Новый анализ
+          <Plus className="size-4" /> Новый мультипоиск
         </a>
       </motion.div>
 
       {jobs.length === 0 ? (
         <GlassCard variants={fadeUp} className="p-10 text-center text-sm text-muted">
-          Анализов пока нет. Запустите первый — выберите несколько направлений на странице
-          «Новый анализ».
+          Мультипоисков пока нет. Запустите первый — выберите несколько направлений на странице
+          «Новый мультипоиск».
         </GlassCard>
       ) : (
         jobs.map((j) => {
@@ -62,7 +62,7 @@ export default function JobsPage() {
             <GlassCard key={j.id} as={motion.a} variants={fadeUp} href={`#/jobs/${j.id}`} className="flex items-center gap-4 p-4 transition-colors hover:bg-white/[0.04]">
               <div className="min-w-0 flex-1">
                 <div className="mb-1 flex flex-wrap items-center gap-2">
-                  <span className="font-bold text-white">Анализ #{j.id}</span>
+                  <span className="font-bold text-white">Мультипоиск #{j.id}</span>
                   <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${st.cls}`}>{st.label}</span>
                   <span className="text-xs text-muted">{formatShortDateTime(j.created_at)}</span>
                 </div>

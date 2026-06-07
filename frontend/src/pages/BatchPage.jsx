@@ -37,7 +37,7 @@ export default function BatchPage() {
       const resp = await apiFetch("/api/jobs", { method: "POST", body: fd });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) {
-        setError(data.error || "Не удалось запустить анализ.");
+        setError(data.error || "Не удалось запустить мультипоиск.");
         setBusy(false);
         return;
       }
@@ -55,9 +55,9 @@ export default function BatchPage() {
           <Layers className="size-5 text-white" />
         </span>
         <div className="text-sm text-muted">
-          <div className="font-semibold text-ink">Анализ по многим направлениям</div>
+          <div className="font-semibold text-ink">Мультипоиск — сравнение по многим направлениям</div>
           Выберите минимум 2 страны — поиск пойдёт в фоне по каждой, прогресс увидите на
-          странице анализа. Каждое направление расходует 1 поиск.
+          странице мультипоиска. Каждое направление расходует 1 поиск.
         </div>
       </GlassCard>
 

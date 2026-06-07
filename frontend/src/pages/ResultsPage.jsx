@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Hotel, Plane, ArrowLeft, ImageIcon, ExternalLink, AlertTriangle, Loader2, Star, Trophy,
+  Hotel, Plane, ArrowLeft, ImageIcon, ExternalLink, AlertTriangle, Loader2, Star, Trophy, Info,
 } from "lucide-react";
 import GlassCard from "../components/ui/GlassCard.jsx";
 import { staggerContainer, fadeUp } from "../lib/animations.js";
@@ -82,7 +82,7 @@ export default function ResultsPage({ runId }) {
 
         {data.best && (
           <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-emerald-400/30 bg-emerald-500/15 px-3 py-1.5 text-sm font-semibold text-emerald-200">
-            <Trophy className="size-4" /> Лучшее: {formatPrice(data.best.price)} — {data.best.label} ({data.best.provider})
+            <Trophy className="size-4" /> Лучшее: {formatPrice(data.best.price)} — {data.best.label} · {hotels ? "отель" : "оператор"}, {providerLabel(data.best.provider)}
           </div>
         )}
       </GlassCard>
@@ -105,9 +105,17 @@ export default function ResultsPage({ runId }) {
                   </button>
                 )}
                 {r.search_url && (
-                  <a href={r.search_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-ocean transition-colors hover:text-brand-soft">
-                    <ExternalLink className="size-3.5" /> поиск
-                  </a>
+                  <span className="flex items-center gap-1">
+                    <a href={r.search_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1 text-ocean transition-colors hover:text-brand-soft">
+                      <ExternalLink className="size-3.5" /> поиск
+                    </a>
+                    {r.provider === "tourvisor" && hotels && (
+                      <Info
+                        className="size-3.5 cursor-help text-amber-300/80"
+                        title="Ведёт на общий поиск Турвизора без сохранённых параметров — задайте их на сайте вручную."
+                      />
+                    )}
+                  </span>
                 )}
               </div>
             </div>

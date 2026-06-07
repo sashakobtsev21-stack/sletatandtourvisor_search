@@ -14,7 +14,7 @@ const control =
   "placeholder:text-muted/70 outline-none transition-all focus:border-brand/60 " +
   "focus:bg-white/[0.07] focus:ring-4 focus:ring-brand/20";
 
-export default function LoginPage() {
+export default function LoginPage({ guest = false }) {
   const { login, register } = useAuth();
   // Гость открывает форму по #/register или #/login — стартуем с нужной вкладки.
   const [mode, setMode] = useState(() =>
@@ -137,6 +137,16 @@ export default function LoginPage() {
         <button onClick={toggle} className="mt-4 w-full text-center text-sm text-muted hover:text-ink">
           {isReg ? "Уже есть аккаунт? Войти" : "Нет аккаунта? Зарегистрироваться"}
         </button>
+
+        {/* Гость пришёл из приложения — даём выход обратно, чтобы случайный клик не запирал. */}
+        {guest && (
+          <button
+            onClick={() => navigate("/search")}
+            className="mt-2 w-full text-center text-xs text-muted/70 transition-colors hover:text-ink"
+          >
+            ← Вернуться к поиску
+          </button>
+        )}
       </GlassCard>
     </div>
   );

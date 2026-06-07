@@ -8,7 +8,7 @@ import { apiFetch } from "../lib/api.js";
 
 const JOB_STATUS = {
   pending: { label: "в очереди", cls: "border-white/15 bg-white/5 text-muted" },
-  running: { label: "идёт анализ", cls: "border-ocean/40 bg-ocean/15 text-ocean" },
+  running: { label: "идёт мультипоиск", cls: "border-ocean/40 bg-ocean/15 text-ocean" },
   done: { label: "готово", cls: "border-emerald-400/30 bg-emerald-500/15 text-emerald-200" },
   failed: { label: "ошибка", cls: "border-rose-400/30 bg-rose-500/15 text-rose-200" },
   interrupted: { label: "прервано", cls: "border-amber-400/30 bg-amber-400/10 text-amber-300" },
@@ -59,9 +59,9 @@ export default function JobPage({ jobId }) {
   }, [jobId]);
 
   if (error)
-    return <Center icon={AlertTriangle} tone="err" text={`Не удалось загрузить анализ #${jobId}: ${error}`} />;
+    return <Center icon={AlertTriangle} tone="err" text={`Не удалось загрузить мультипоиск #${jobId}: ${error}`} />;
   if (!job)
-    return <Center icon={Loader2} spin text={`Загружаю анализ #${jobId}…`} />;
+    return <Center icon={Loader2} spin text={`Загружаю мультипоиск #${jobId}…`} />;
 
   const st = JOB_STATUS[job.status] ?? JOB_STATUS.pending;
   const pct = job.progress_total ? Math.round((job.progress_done / job.progress_total) * 100) : 0;
@@ -73,10 +73,10 @@ export default function JobPage({ jobId }) {
           <span className="grid size-10 place-items-center rounded-xl bg-gradient-to-br from-brand to-ocean shadow-glow">
             <Layers className="size-5 text-white" />
           </span>
-          <h2 className="text-xl font-extrabold tracking-tight text-white">Анализ #{job.id}</h2>
+          <h2 className="text-xl font-extrabold tracking-tight text-white">Мультипоиск #{job.id}</h2>
           <span className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold ${st.cls}`}>{st.label}</span>
           <a href="#/jobs" className="ml-auto flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-semibold text-muted transition-colors hover:text-ink">
-            <ArrowLeft className="size-4" /> Все анализы
+            <ArrowLeft className="size-4" /> Все мультипоиски
           </a>
         </div>
 
@@ -142,7 +142,7 @@ function Center({ icon: Icon, text, spin = false, tone }) {
           <Icon className={`size-8 ${spin ? "animate-spin" : ""}`} />
           <p className="text-sm">{text}</p>
           <a href="#/jobs" className="mt-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-semibold text-ink hover:bg-white/[0.07]">
-            ← Мои анализы
+            ← Мои мультипоиски
           </a>
         </div>
       </GlassCard>

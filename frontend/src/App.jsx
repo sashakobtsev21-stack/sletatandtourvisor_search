@@ -52,7 +52,7 @@ export default function App() {
   if (!user) return <LoginPage />;
   // Гость (аноним с 2 поисками) может открыть форму входа/регистрации, не теряя доступ к поиску.
   if (user.mode === "guest" && (route.startsWith("/login") || route.startsWith("/register")))
-    return <LoginPage />;
+    return <LoginPage guest />;
   // Гость на корне видит публичный лендинг (продающая стартовая); приложение — на #/search.
   if (user.mode === "guest" && route === "/") return <LandingPage />;
 

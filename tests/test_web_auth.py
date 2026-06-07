@@ -330,9 +330,10 @@ def test_secure_cookie_on_nonlocal_host(tmp_path):
     assert set_cookies and all("secure" in v.lower() for v in set_cookies)
 
 
-def test_screenshots_gated_in_multiuser(tmp_path):
-    # скриншоты выдачи — данные прогонов; в мультиюзере доступны только после входа
+def test_screenshots_open_to_guest(tmp_path):
+    # скриншоты выдачи — снимки тур-сайтов (не приватные); доступны и гостю (нужны, чтобы
+    # показать его собственный результат). Middleware пропускает → StaticFiles, 404 на отсутствующий.
     client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))
-    assert client.get("/screenshots/none.png").status_code == 401  # middleware режет до StaticFiles
+    assert client.get("/screenshots/none.png").status_code != 401   # гость не режется middleware
     _login(client, "admin", "secret1")
-    assert client.get("/screenshots/none.png").status_code != 401  # 404 (файла нет) → middleware пропустил
+    assert client.get("/screenshots/none.png").status_code != 401   # и залогиненный тоже

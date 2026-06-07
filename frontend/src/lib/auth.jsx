@@ -6,6 +6,7 @@
 // нужен); multiuser → 200 после входа / 401 без; legacy → 200 если есть токен-cookie.
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { apiFetch, setUnauthorizedHandler } from "./api.js";
+import { navigate } from "./router.js";
 
 const AuthContext = createContext(null);
 
@@ -61,8 +62,9 @@ export function AuthProvider({ children }) {
 
   const logout = useCallback(async () => {
     await apiFetch("/api/logout", { method: "POST" }).catch(() => {});
-    setUser(null);
-  }, []);
+    navigate("/");        // на главную (в мультиюзере — лендинг гостя)
+    await refresh();      // /api/me → гость (мультиюзер) или полный доступ (локальный режим)
+  }, [refresh]);
 
   const can = useCallback(
     (perm) => Boolean(user && user.permissions && user.permissions.includes(perm)),

@@ -67,7 +67,7 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
                                  error="Health-check площадок не пройден — структура форм изменилась.")
                     if user_id:
                         s.add_notification(user_id, "batch_failed",
-                                           f"Батч-анализ #{job_id} не выполнен: health-check площадок не пройден.",
+                                           f"Мультипоиск #{job_id} не выполнен: health-check площадок не пройден.",
                                            job_id=job_id)
                 return
             done = 0
@@ -106,7 +106,7 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
                 s.update_job(job_id, status="done", finished_at=auth.utcnow_iso())
                 if user_id:
                     s.add_notification(user_id, "batch_done",
-                                       f"Батч-анализ #{job_id} готов: {done} из {len(destinations)} направлений.",
+                                       f"Мультипоиск #{job_id} готов: {done} из {len(destinations)} направлений.",
                                        job_id=job_id)
         except Exception as exc:  # noqa: BLE001
             logger.exception("батч #%s упал", job_id)
@@ -114,7 +114,7 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
                 s.update_job(job_id, status="failed", finished_at=auth.utcnow_iso(), error=str(exc))
                 if user_id:
                     s.add_notification(user_id, "batch_failed",
-                                       f"Батч-анализ #{job_id} завершился ошибкой.", job_id=job_id)
+                                       f"Мультипоиск #{job_id} завершился ошибкой.", job_id=job_id)
 
     app_state.run_job = _run_job  # хук для тестов/будущего ретрая: await app.state.run_job(id)
 

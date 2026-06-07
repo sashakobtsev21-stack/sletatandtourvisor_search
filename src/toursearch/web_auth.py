@@ -41,7 +41,7 @@ _AUTH_EXEMPT_EXACT = ("/api/login", "/api/register", "/api/logout", "/api/me")
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 # Пути, доступные анонимному гостю (мультиюзер, без входа): сам поиск + справочники/статус.
 # Лимит ANON_CREDITS на устройство; история/тесты/пользователи — только после входа.
-_ANON_ALLOWED_PREFIXES = ("/search/",)               # /search/prepare|stream|cancel (не bare /search)
+_ANON_ALLOWED_PREFIXES = ("/search/", "/screenshots/")  # поиск + скриншоты выдачи (нужны гостю для показа результата)
 _ANON_ALLOWED_EXACT = ("/api/refdata", "/api/billing/status")
 
 
