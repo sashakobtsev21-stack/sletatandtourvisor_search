@@ -389,6 +389,15 @@ def test_complete_payment_atomic_and_idempotent(tmp_path):
     storage.close()
 
 
+def test_subscription_active_edge_cases():
+    from toursearch import billing
+    assert billing.subscription_active(None) is False
+    assert billing.subscription_active({}) is False                              # нет paid_until
+    assert billing.subscription_active({"paid_until": "не-дата"}) is False        # битая дата → не падаем
+    assert billing.subscription_active({"paid_until": "2099-01-01T00:00:00"}) is True       # наивная (UTC), в будущем
+    assert billing.subscription_active({"paid_until": "2000-01-01T00:00:00+00:00"}) is False  # в прошлом
+
+
 def test_anon_consume_refund_and_device_limit(tmp_path):
     storage = Storage(tmp_path / "t.db")
     assert storage.anon_used("devA") == 0
