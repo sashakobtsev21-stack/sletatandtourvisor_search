@@ -203,6 +203,31 @@ def build_hotel_offers(provider_name: str, rows: list[dict]) -> list[HotelOffer]
     return out
 
 
+# Поля SearchParams, которые tourvisor.ru НЕ выставляет в UI формы и API —
+# у пользователя они выглядят как «применилось», но Tourvisor их игнорирует.
+# Возвращаем в ProviderResult.unsupported_filters → UI показывает явный бейдж,
+# а не молчит. Если когда-то реализуем — убрать соответствующий ключ отсюда.
+_TOURVISOR_UNSUPPORTED = (
+    "direct_only", "no_stops", "with_transfer",
+    "instant_confirmation", "hotel_rating_min", "hotel_types",
+)
+
+
+def _unsupported_used(params: SearchParams) -> list[str]:
+    """Имена unsupported-фильтров, которые ПОЛЬЗОВАТЕЛЬ реально задал (а не default)."""
+    used: list[str] = []
+    for f in _TOURVISOR_UNSUPPORTED:
+        v = getattr(params, f, None)
+        # bool=True / непустой список / не-None число — считаем «задано пользователем».
+        if isinstance(v, bool) and v:
+            used.append(f)
+        elif isinstance(v, list) and v:
+            used.append(f)
+        elif v is not None and not isinstance(v, (bool, list)):
+            used.append(f)
+    return used
+
+
 @register_provider("tourvisor")
 class TourvisorProvider:
     """Поиск туров на tourvisor.ru."""
@@ -232,6 +257,12 @@ class TourvisorProvider:
         self.on_frame = None
 
     async def search(self, params: SearchParams) -> ProviderResult:
+        # Tourvisor не поддерживает часть фильтров — сообщаем пользователю явно,
+        # чтобы он видел в результате, а не думал что фильтр применился.
+        unsupported = _unsupported_used(params)
+        if unsupported:
+            log.warning("Tourvisor: фильтры %s не поддерживаются и не применены",
+                        ", ".join(unsupported))
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(
                 headless=self.headless,
@@ -283,6 +314,7 @@ class TourvisorProvider:
                         search_url=page.url,
                         screenshot_path=shot,
                         error=None if hotel_offers else "Предложений не найдено по заданным параметрам.",
+                        unsupported_filters=unsupported,
                     )
 
                 # Туры: главная форма навигирует на /tours/{country}/{city}?params (URL со всеми
@@ -324,6 +356,7 @@ class TourvisorProvider:
                         search_mode="tours", search_url=search_url,
                         error="URL-параметры не совпали: " + "; ".join(
                             f"{f}: ожидали {e!r}, получили {a!r}" for f, e, a in url_problems),
+                        unsupported_filters=unsupported,
                     )
                 top_hotels = (await self._parse_hotels(page))[:10]  # первые 10 отелей выдачи — для показа
                 operator_offers = self._to_operator_offers(offers, top_hotels)
@@ -338,6 +371,7 @@ class TourvisorProvider:
                     search_url=search_url,
                     screenshot_path=shot,
                     error=None if offers else "Предложений не найдено по заданным параметрам.",
+                    unsupported_filters=unsupported,
                 )
             except Exception as exc:  # noqa: BLE001 — провал одной площадки не валит прогон
                 log.warning("tourvisor search failed (mode=%s): %s: %s",
@@ -354,6 +388,7 @@ class TourvisorProvider:
                     error=f"{type(exc).__name__}: {exc}",
                     screenshot_path=shot,
                     search_url=nav_url,
+                    unsupported_filters=unsupported,
                 )
             finally:
                 await stop_frame_pump(pump)

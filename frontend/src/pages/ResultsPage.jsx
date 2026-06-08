@@ -120,6 +120,15 @@ export default function ResultsPage({ runId }) {
               </div>
             </div>
 
+            {r.unsupported_filters?.length > 0 && (
+              <p className="mb-2 flex items-start gap-1.5 rounded-lg border border-amber-400/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                <Info className="size-3.5 shrink-0" />
+                <span>
+                  Площадка не поддерживает: <code>{r.unsupported_filters.join(", ")}</code>
+                  — эти фильтры в выдаче <b>не применены</b>.
+                </span>
+              </p>
+            )}
             {!r.success ? (
               r.not_applicable ? (
                 <p className="flex items-start gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-muted">

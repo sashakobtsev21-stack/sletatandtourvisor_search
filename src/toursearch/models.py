@@ -175,6 +175,10 @@ class ProviderResult(BaseModel):
     error: str | None = None
     screenshot_path: str | None = None
     search_url: str | None = None  # URL результата (если площадка его формирует)
+    # Имена фильтров SearchParams, которые ПОЛЬЗОВАТЕЛЬ задал, но эта площадка их
+    # не применяет (нет в UI/API площадки). Раньше тихо игнорировались — пользователь
+    # думал, что фильтр сработал. UI показывает бейджем (P2-1 от 2026-06).
+    unsupported_filters: list[str] = Field(default_factory=list)
 
     def priced_items(self) -> list[PricedItem]:
         """Предложения с ценой ДЛЯ СРАВНЕНИЯ: в турах — операторы, в отелях — отели.

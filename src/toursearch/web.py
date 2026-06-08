@@ -285,6 +285,7 @@ def _result_dict(r, run_id: int | None = None) -> dict:
         "operators_no_tours": r.operators_no_tours,
         "operators_not_responding": r.operators_not_responding,
         "operators_available": r.operators_available,
+        "unsupported_filters": list(r.unsupported_filters),
         "cheapest": ({"label": c.label, "price": str(c.price), "currency": c.currency} if c else None),
     }
 
