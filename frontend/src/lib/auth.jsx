@@ -10,19 +10,29 @@ import { navigate } from "./router.js";
 
 const AuthContext = createContext(null);
 
+// Single-flight для refresh: параллельные вызовы (login → refresh + onUnauthorized →
+// setUser(null) + другой apiFetch → ещё refresh) шарят одну текущую загрузку /api/me.
+// Раньше последний ответ выигрывал, состояние могло уехать в стейл-значение (P2-4).
+let _refreshInFlight = null;
+
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);   // { mode, username, role, permissions } | null
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    try {
-      const r = await apiFetch("/api/me");
-      setUser(r.ok ? await r.json() : null);
-    } catch {
-      setUser(null);
-    } finally {
-      setLoading(false);
-    }
+    if (_refreshInFlight) return _refreshInFlight;
+    _refreshInFlight = (async () => {
+      try {
+        const r = await apiFetch("/api/me");
+        setUser(r.ok ? await r.json() : null);
+      } catch {
+        setUser(null);
+      } finally {
+        setLoading(false);
+        _refreshInFlight = null;
+      }
+    })();
+    return _refreshInFlight;
   }, []);
 
   useEffect(() => {

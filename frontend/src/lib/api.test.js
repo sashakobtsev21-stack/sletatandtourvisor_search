@@ -1,10 +1,28 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { apiFetch, setUnauthorizedHandler } from "./api.js";
 
+// fetch-мок, возвращающий цепочку ответов по очереди.
+function mockResponses(...responses) {
+  let i = 0;
+  return vi.fn(async () => {
+    const next = responses[Math.min(i, responses.length - 1)];
+    i++;
+    if (next instanceof Error) throw next;
+    const { status = 200, retryAfter } = next;
+    return {
+      status,
+      ok: status < 400,
+      headers: { get: (h) => (h.toLowerCase() === "retry-after" ? retryAfter ?? null : null) },
+    };
+  });
+}
+
 describe("apiFetch", () => {
   beforeEach(() => {
     globalThis.document = { cookie: "" };
-    globalThis.fetch = vi.fn(async () => ({ status: 200, ok: true }));
+    globalThis.fetch = vi.fn(async () => ({
+      status: 200, ok: true, headers: { get: () => null },
+    }));
     setUnauthorizedHandler(() => {});
   });
 
@@ -32,7 +50,9 @@ describe("apiFetch", () => {
   it("401 → дёргает обработчик; на /api/login — НЕ дёргает", async () => {
     const onUnauth = vi.fn();
     setUnauthorizedHandler(onUnauth);
-    globalThis.fetch = vi.fn(async () => ({ status: 401, ok: false }));
+    globalThis.fetch = vi.fn(async () => ({
+      status: 401, ok: false, headers: { get: () => null },
+    }));
 
     await apiFetch("/api/runs");
     expect(onUnauth).toHaveBeenCalledTimes(1);
@@ -40,5 +60,69 @@ describe("apiFetch", () => {
     onUnauth.mockClear();
     await apiFetch("/api/login", { method: "POST" });
     expect(onUnauth).not.toHaveBeenCalled(); // вход 401 — это просто «неверный пароль»
+  });
+});
+
+// --------------------------- P2-4: retry / timeout / abort ---------------------------
+
+describe("apiFetch retry/timeout", () => {
+  beforeEach(() => {
+    globalThis.document = { cookie: "" };
+    setUnauthorizedHandler(() => {});
+  });
+
+  it("GET с 503 ретраится дважды и возвращает финальный 200", async () => {
+    globalThis.fetch = mockResponses(
+      { status: 503 }, { status: 503 }, { status: 200 },
+    );
+    const r = await apiFetch("/api/runs");
+    expect(r.status).toBe(200);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("GET с 429 + Retry-After: 0 ретраится сразу", async () => {
+    globalThis.fetch = mockResponses(
+      { status: 429, retryAfter: "0" }, { status: 200 },
+    );
+    const r = await apiFetch("/api/runs");
+    expect(r.status).toBe(200);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("POST по умолчанию НЕ ретраится на 503 (риск двойного списания)", async () => {
+    globalThis.fetch = mockResponses({ status: 503 }, { status: 200 });
+    const r = await apiFetch("/search/prepare", { method: "POST" });
+    expect(r.status).toBe(503);                              // первый ответ, без ретрая
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("POST с явным retry:true — ретраится", async () => {
+    globalThis.fetch = mockResponses({ status: 503 }, { status: 200 });
+    const r = await apiFetch("/api/idempotent", { method: "POST", retry: true });
+    expect(r.status).toBe(200);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("после MAX_RETRIES возвращает последний ответ (а не throw)", async () => {
+    globalThis.fetch = mockResponses(
+      { status: 503 }, { status: 503 }, { status: 503 }, { status: 503 },
+    );
+    const r = await apiFetch("/api/runs");
+    expect(r.status).toBe(503);                              // не успело перейти в 200
+    expect(globalThis.fetch).toHaveBeenCalledTimes(3);       // 1 первичная + 2 ретрая
+  });
+
+  it("внешний AbortSignal отменяет до завершения", async () => {
+    // fetch принимает signal — реалистично пробрасываем abort через ошибку.
+    globalThis.fetch = vi.fn(async (_url, opts) => {
+      return new Promise((_, reject) => {
+        opts.signal.addEventListener("abort",
+          () => reject(new DOMException("aborted", "AbortError")));
+      });
+    });
+    const ctrl = new AbortController();
+    const promise = apiFetch("/api/runs", { signal: ctrl.signal });
+    ctrl.abort();
+    await expect(promise).rejects.toThrow();
   });
 });
