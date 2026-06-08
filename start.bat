@@ -94,7 +94,9 @@ if "%BUILD_RC%"=="0" (
 :skipbuild
 echo.
 echo Запускаю сервер в отдельном окне...
-start "Tour Search (СЕРВЕР - не закрывать)" ".venv\Scripts\toursearch.exe" web --port %PORT%
+rem --host 127.0.0.1 явно: чтобы случайная переменная окружения / правка не
+rem повесила сервер на 0.0.0.0 и не открыла его в локальную сеть без TLS.
+start "Tour Search (СЕРВЕР - не закрывать)" ".venv\Scripts\toursearch.exe" web --host 127.0.0.1 --port %PORT%
 echo Жду, пока сервер поднимется...
 set /a tries=0
 :waitloop
