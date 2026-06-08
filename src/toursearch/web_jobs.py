@@ -69,7 +69,15 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
                                            f"Мультипоиск #{job_id} не выполнен: health-check площадок не пройден.",
                                            job_id=job_id)
                 return
+            # done — направления, которые реально успели; failures — упавшие;
+            # interrupted — вышли по break (кредиты кончились). На основе этих трёх
+            # выбираем итоговый статус: done / partial / interrupted. P1-4: раньше
+            # done инкрементировался даже при сбое (ложная полнота прогресса), а
+            # status всегда «done» — даже когда из 10 направлений сделано 3.
             done = 0
+            failures = 0
+            interrupted = False
+            total = len(destinations)
             for country in destinations:
                 consumed = False
                 # Списание считаем по СВЕЖЕМУ пользователю каждый раз: за длинный батч могли
@@ -79,33 +87,52 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
                         if billing.consumes_credit(s.get_user_by_id(user_id)):
                             consumed = s.try_consume_search(user_id)
                             if not consumed:          # кредиты кончились — частичный результат
-                                s.update_job(job_id, error=f"Кредиты закончились: выполнено {done} "
-                                                           f"из {len(destinations)}.")
+                                s.update_job(job_id, error=f"Кредиты закончились: выполнено {done} из {total}.")
+                                interrupted = True
                                 break
                 # Атомарно дождаться свободного слота и занять (asyncio.Lock внутри).
                 await active.acquire_wait()
+                success = False
                 try:
                     sp = base.model_copy(update={"destination_country": country})
                     report = await run_search(sp, providers=providers, headless=True)
                     with Storage(db_path) as s:
                         s.save_report(report, user_id=user_id, job_id=job_id)
+                    success = True
                 except Exception as exc:  # noqa: BLE001 — одно направление не должно ронять весь батч
                     logger.warning("батч #%s, направление %s: %s", job_id, country, exc)
+                    failures += 1
                     if consumed:
                         with Storage(db_path) as s:
                             s.refund_search(user_id)  # направление не сделано — вернуть кредит
                 finally:
                     await active.release()
                     prune_screenshots()
-                done += 1
-                with Storage(db_path) as s:
-                    s.update_job(job_id, progress_done=done)
+                if success:
+                    done += 1
+                    with Storage(db_path) as s:
+                        s.update_job(job_id, progress_done=done)
+
+            # Финальный статус: done только если ВСЕ направления реально успешны и не было
+            # прерывания по кредитам. partial — есть упавшие. interrupted — выйти по break.
+            if interrupted:
+                final_status = "interrupted"
+                summary = (f"Мультипоиск #{job_id} прерван: выполнено {done} из {total} "
+                           "(кредиты закончились).")
+                notif_kind = "batch_partial"
+            elif failures > 0:
+                final_status = "partial"
+                summary = (f"Мультипоиск #{job_id}: {done} из {total} направлений "
+                           f"(не получилось у {failures}).")
+                notif_kind = "batch_partial"
+            else:
+                final_status = "done"
+                summary = f"Мультипоиск #{job_id} готов: {done} из {total} направлений."
+                notif_kind = "batch_done"
             with Storage(db_path) as s:
-                s.update_job(job_id, status="done", finished_at=auth.utcnow_iso())
+                s.update_job(job_id, status=final_status, finished_at=auth.utcnow_iso())
                 if user_id:
-                    s.add_notification(user_id, "batch_done",
-                                       f"Мультипоиск #{job_id} готов: {done} из {len(destinations)} направлений.",
-                                       job_id=job_id)
+                    s.add_notification(user_id, notif_kind, summary, job_id=job_id)
         except Exception as exc:  # noqa: BLE001
             logger.exception("батч #%s упал", job_id)
             with Storage(db_path) as s:

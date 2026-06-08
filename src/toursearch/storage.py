@@ -175,7 +175,7 @@ CREATE INDEX IF NOT EXISTS idx_anon_usage_ip ON anon_usage(ip);
 CREATE TABLE IF NOT EXISTS jobs (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id           INTEGER REFERENCES users(id) ON DELETE CASCADE,
-    status            TEXT NOT NULL DEFAULT 'pending',  -- pending/running/done/failed/interrupted
+    status            TEXT NOT NULL DEFAULT 'pending',  -- pending/running/done/partial/failed/interrupted
     params_json       TEXT NOT NULL,                    -- общие параметры (без страны)
     destinations_json TEXT NOT NULL,                    -- список стран (JSON-массив)
     progress_done     INTEGER NOT NULL DEFAULT 0,
@@ -191,7 +191,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_user ON jobs(user_id);
 CREATE TABLE IF NOT EXISTS notifications (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    kind       TEXT NOT NULL,                 -- batch_done / batch_failed
+    kind       TEXT NOT NULL,                 -- batch_done / batch_partial / batch_failed
     job_id     INTEGER,                       -- связанный батч (для ссылки)
     text       TEXT NOT NULL,
     is_read    INTEGER NOT NULL DEFAULT 0,

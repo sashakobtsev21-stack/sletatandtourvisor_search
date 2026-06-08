@@ -209,8 +209,10 @@ def test_worker_health_fail_marks_failed_and_notifies(tmp_path, monkeypatch):
         assert s.list_notifications(uid)[0]["kind"] == "batch_failed"
 
 
-def test_worker_direction_failure_refunds(tmp_path, monkeypatch):
-    # одно направление падает → его кредит возвращается, батч завершается с остальными
+def test_worker_direction_failure_marks_partial(tmp_path, monkeypatch):
+    # Регрессия P1-4: одно направление падает → status='partial' (не 'done'),
+    # progress_done считает ТОЛЬКО успешные, кредит за упавшее возвращается,
+    # уведомление — 'batch_partial' с числом успешных/упавших.
     async def fake_health(providers=None, headless=True):
         return {}
 
@@ -231,13 +233,19 @@ def test_worker_direction_failure_refunds(tmp_path, monkeypatch):
     asyncio.run(app.state.run_job(job_id))
 
     with Storage(db) as s:
-        assert s.get_job(job_id)["status"] == "done"
+        job = s.get_job(job_id)
+        assert job["status"] == "partial"                   # был сбой → НЕ 'done'
+        assert job["progress_done"] == 1                    # инкремент только для успеха
         assert s.get_user_by_id(uid)["searches_left"] == 4  # Турция списано; Египет списано→возвращено
         assert len(s.list_job_runs(job_id)) == 1            # сохранилась только Турция
+        notifs = s.list_notifications(uid)
+        assert notifs[0]["kind"] == "batch_partial"
+        assert "1 из 2" in notifs[0]["text"] and "1" in notifs[0]["text"]
 
 
-def test_worker_credit_exhaustion_stops_partial(tmp_path, monkeypatch):
-    # кредиты кончились посреди батча → частичный результат, статус done с пометкой
+def test_worker_credit_exhaustion_marks_interrupted(tmp_path, monkeypatch):
+    # Регрессия P1-4: кредиты кончились посреди батча → status='interrupted'
+    # (не 'done'), progress_done = число РЕАЛЬНО успевших до break.
     _patch_search(monkeypatch)
     db = _seed(tmp_path, [("u", "secret1", "user")])
     with Storage(db) as s:
@@ -252,9 +260,14 @@ def test_worker_credit_exhaustion_stops_partial(tmp_path, monkeypatch):
 
     with Storage(db) as s:
         job = s.get_job(job_id)
-        assert job["status"] == "done" and "Кредиты закончились" in (job["error"] or "")
+        assert job["status"] == "interrupted"
+        assert job["progress_done"] == 1                    # успело одно
+        assert "Кредиты закончились" in (job["error"] or "")
         assert s.get_user_by_id(uid)["searches_left"] == 0
-        assert len(s.list_job_runs(job_id)) == 1            # успело одно направление
+        assert len(s.list_job_runs(job_id)) == 1
+        notifs = s.list_notifications(uid)
+        assert notifs[0]["kind"] == "batch_partial"        # interrupted тоже уведомляется как partial
+        assert "прерван" in notifs[0]["text"]
 
 
 def test_notifications_api_and_isolation(tmp_path, monkeypatch):

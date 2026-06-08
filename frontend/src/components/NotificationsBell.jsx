@@ -100,7 +100,11 @@ export default function NotificationsBell() {
                     n.is_read ? "opacity-60" : "",
                   ].join(" ")}
                 >
-                  <span className={`mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg ${n.kind === "batch_failed" ? "bg-rose-500/15 text-rose-300" : "bg-emerald-500/15 text-emerald-300"}`}>
+                  <span className={`mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg ${
+                    n.kind === "batch_failed" ? "bg-rose-500/15 text-rose-300"
+                    : n.kind === "batch_partial" ? "bg-amber-500/15 text-amber-300"
+                    : "bg-emerald-500/15 text-emerald-300"
+                  }`}>
                     <Layers className="size-3.5" />
                   </span>
                   <span className="min-w-0 flex-1">
