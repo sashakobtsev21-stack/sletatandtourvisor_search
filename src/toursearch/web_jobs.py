@@ -28,6 +28,7 @@ from toursearch.orchestrator import run_search
 from toursearch.providers.base import prune_screenshots
 from toursearch.storage import Storage
 from toursearch.web_auth import current_user_id, owner_filter
+from toursearch.web_forms import parse_search_params
 
 logger = logging.getLogger("toursearch.jobs")
 
@@ -150,9 +151,8 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
 
     @app.post("/api/jobs")
     async def create_job_ep(request: Request):
-        # Разбор формы — общий с /search/prepare (web.py); импорт ленивый (цикл web↔web_jobs).
-        from toursearch.web import parse_search_params
-
+        # Разбор формы — общий с /search/prepare; в web_forms.py, чтобы не было
+        # обратной зависимости web_jobs→web (раньше был лениво-импорт-костыль).
         f = await request.form()
         destinations = list(dict.fromkeys(d for d in f.getlist("destination") if d))  # уникальные, порядок
         if len(destinations) < 2:

@@ -1,4 +1,4 @@
-import { Children, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Children, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { motion } from "framer-motion";
 import { fadeUp } from "../../lib/animations.js";
@@ -90,6 +90,10 @@ export function Select({
   const ref = useRef(null);     // обёртка с кнопкой-триггером
   const popRef = useRef(null);  // панель опций (в портале на body)
   const searchRef = useRef(null);
+  // a11y: уникальные id для listbox и каждой опции — нужны aria-activedescendant,
+  // чтобы screen reader объявлял активную опцию при ArrowDown/Up (P1-b 2026-06).
+  const listboxId = useId();
+  const optionId = (idx) => `${listboxId}-opt-${idx}`;
 
   // Живой фильтр по подстроке (регистронезависимо), только в searchable.
   const q = query.trim().toLowerCase();
@@ -171,6 +175,8 @@ export function Select({
         onKeyDown={onKeyDown}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={open ? listboxId : undefined}
+        aria-activedescendant={open && filtered[activeIdx] ? optionId(activeIdx) : undefined}
         className={[
           controlBase, "flex items-center justify-between py-2.5",
           icon ? "pl-9 pr-3" : "px-3", className,
@@ -207,11 +213,16 @@ export function Select({
                   onChange={(e) => setQuery(e.target.value)}
                   onKeyDown={onKeyDown}
                   placeholder="Поиск…"
+                  role="combobox"
+                  aria-expanded={true}
+                  aria-controls={listboxId}
+                  aria-activedescendant={filtered[activeIdx] ? optionId(activeIdx) : undefined}
+                  aria-autocomplete="list"
                   className="w-full rounded-lg border border-white/10 bg-white/[0.04] py-2 pl-8 pr-3 text-sm text-ink outline-none placeholder:text-muted/60 focus:border-brand/60 focus:ring-2 focus:ring-brand/20"
                 />
               </div>
             )}
-            <ul role="listbox" className="max-h-60 overflow-y-auto">
+            <ul id={listboxId} role="listbox" className="max-h-60 overflow-y-auto">
               {filtered.length === 0 && (
                 <li className="px-3 py-3 text-center text-sm text-muted">Ничего не найдено</li>
               )}
@@ -219,7 +230,7 @@ export function Select({
                 const selected = o.value === current;
                 const active = i === activeIdx;
                 return (
-                  <li key={o.value} role="option" aria-selected={selected}>
+                  <li key={o.value} id={optionId(i)} role="option" aria-selected={selected}>
                     <button
                       type="button"
                       onClick={() => choose(o.value)}

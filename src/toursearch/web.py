@@ -7,7 +7,6 @@ import contextvars
 import json
 import logging
 import os
-import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -40,8 +39,8 @@ from toursearch.testkit import REGISTRY, run_selected
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
+# MAX_DATE_SPAN_DAYS — вынесена в web_forms.py (импортирована ниже после parse_search_params).
 # Sletat ограничивает окно вылета ±13 дней от первой даты (наблюдено вживую).
-MAX_DATE_SPAN_DAYS = 13
 
 # Content-Security-Policy для SPA. script/connect — только свой origin; стили инлайновые
 # разрешены (framer-motion ставит style-атрибуты); шрифты — Google Fonts (см. index.html);
@@ -199,53 +198,14 @@ def _fmt_price(value) -> str:
 _TEMPLATES.env.filters["price"] = _fmt_price
 
 
-def _parse_price_input(raw) -> "Decimal | None":
-    """Безопасно разобрать цену из формы: берём только цифры («12 000 ₽» → 12000),
-    мусор/пусто → None. НИКОГДА не бросает — иначе нечисловой ввод ронял /search в
-    500 (`Decimal('abc')` кидает `InvalidOperation`, а это не `ValueError`)."""
-    digits = re.sub(r"[^\d]", "", str(raw or ""))
-    return Decimal(digits) if digits else None
-
-
-def _form_flag(value) -> bool:
-    """Чекбокс формы → bool. Истинно только для явных «on/true/1/yes»; раньше было
-    `bool(строка)`, из-за чего любое непустое значение (в т.ч. 'false') было True."""
-    return str(value or "").strip().lower() in ("on", "true", "1", "yes")
-
-
-def parse_search_params(form, *, destination_country: "str | None" = None) -> "tuple[SearchParams, list[str] | None]":
-    """Разобрать форму поиска в (SearchParams, список площадок). Бросает ValueError с понятным
-    текстом при некорректном вводе. `destination_country` переопределяет страну (для батча, где
-    их много); иначе берётся из формы. Единый разбор для /search/prepare и /api/jobs (раньше
-    дублировался почти построчно)."""
-    chosen = form.getlist("provider") or None
-    ops = [o for o in form.getlist("operator") if o]
-    child_ages = [int(x) for x in form.getlist("child_age") if str(x).isdigit()]
-    try:
-        df = date.fromisoformat(form.get("date_from") or "")
-        dt = date.fromisoformat(form.get("date_to") or "")
-    except ValueError:
-        raise ValueError("Некорректные даты поиска.") from None
-    if dt < df:
-        raise ValueError("Дата «до» не может быть раньше даты «от».")
-    if (dt - df).days > MAX_DATE_SPAN_DAYS:
-        raise ValueError(f"Диапазон дат вылета не должен превышать {MAX_DATE_SPAN_DAYS} дней (ограничение Sletat).")
-    try:
-        nmin = int(form.get("nights_min") or 7)
-        nmax = int(form.get("nights_max") or 10)
-        nmin, nmax = min(nmin, nmax), max(nmin, nmax)
-        params = SearchParams(
-            departure_city=form.get("departure_city", "Москва"),
-            destination_country=destination_country or form.get("destination_country", "Турция"),
-            date_from=df, date_to=dt, nights_min=nmin, nights_max=nmax,
-            adults=int(form.get("adults") or 2), children_ages=child_ages,
-            search_mode=form.get("mode", "tours"), operators=ops,
-            charter_only=_form_flag(form.get("charter_only")), direct_only=_form_flag(form.get("direct_only")),
-            price_max=_parse_price_input(form.get("price_max")),
-        )
-    except ValueError as exc:
-        raise ValueError(f"Некорректные параметры поиска: {exc}") from exc
-    return params, chosen
+# parse_search_params, _parse_price_input, _form_flag, MAX_DATE_SPAN_DAYS — вынесены
+# в web_forms.py (P1-c 2026-06), чтобы web_jobs мог импортировать их без обратной
+# зависимости. Сохраняем алиасы и реэкспорт под старыми именами для совместимости
+# с тестами и Jinja-форм-обработчиком ниже.
+from toursearch.web_forms import (  # noqa: E402 — после длинного блока импортов специально
+    MAX_DATE_SPAN_DAYS, parse_price_input, parse_search_params,
+)
+__all__ = ["create_app", "MAX_DATE_SPAN_DAYS", "parse_search_params"]
 
 
 # --- сериализация отчёта в JSON для React-дашборда ---
@@ -548,7 +508,7 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
                 operators=ops,
                 charter_only=charter_only,
                 direct_only=direct_only,
-                price_max=_parse_price_input(price_max),
+                price_max=parse_price_input(price_max),
             )
         except ValueError as exc:
             ctx = _form_ctx()
