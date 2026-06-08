@@ -1,7 +1,7 @@
 """Тесты слоя хранения (Фаза 1)."""
 
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 from toursearch import auth
@@ -490,6 +490,83 @@ def test_notifications_crud_and_owner(tmp_path):
     assert storage.count_unread_notifications(uid) == 1
     storage.mark_all_notifications_read(uid)
     assert storage.count_unread_notifications(uid) == 0
+    storage.close()
+
+
+def test_purge_old_cascades_runs_and_artifacts(tmp_path):
+    """P1-6: purge_old(days) удаляет runs/notifications/anon_usage старше cutoff;
+    каскад FK сам уносит provider_results/offers/hotel_offers/operator_offers."""
+    storage = Storage(tmp_path / "t.db")
+    uid = storage.create_user("u", "p", iters=1000)
+
+    # Старый прогон (200 дней назад) и свежий (сегодня)
+    old = ComparisonReport(
+        params=_report().params,
+        run_at=datetime.now() - timedelta(days=200),
+        results=[ProviderResult(provider="sletat", success=True, duration_seconds=1.0,
+                                offers=[Offer(provider="sletat", operator="X", price=Decimal("1"))])],
+    )
+    fresh = _report()  # run_at в 2026-03-26 — внутри окна, не должен удаляться cutoff=90
+    fresh.run_at = datetime.now()
+    old_rid = storage.save_report(old, user_id=uid)
+    fresh_rid = storage.save_report(fresh, user_id=uid)
+
+    # Старое уведомление и свежее
+    storage.add_notification(uid, "batch_done", "старое", job_id=1)
+    storage._conn.execute(
+        "UPDATE notifications SET created_at = ? WHERE id = ?",
+        ((datetime.now() - timedelta(days=200)).isoformat(timespec="seconds"), 1))
+    storage._conn.commit()
+    storage.add_notification(uid, "batch_done", "свежее", job_id=2)
+
+    # Гость с устаревшей строкой и активный гость
+    storage._conn.execute(
+        "INSERT INTO anon_usage (device, ip, used, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        ("old-dev", "1.1.1.1", 2,
+         (datetime.now() - timedelta(days=200)).isoformat(timespec="seconds"),
+         (datetime.now() - timedelta(days=200)).isoformat(timespec="seconds")))
+    storage._conn.execute(
+        "INSERT INTO anon_usage (device, ip, used, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        ("new-dev", "2.2.2.2", 1,
+         datetime.now().isoformat(timespec="seconds"),
+         datetime.now().isoformat(timespec="seconds")))
+    storage._conn.commit()
+
+    counts = storage.purge_old(days=90)
+    assert counts == {"runs": 1, "notifications": 1, "anon_usage": 1}
+
+    # Старый прогон ушёл — вместе с его provider_results/offers (каскад FK)
+    pr_left = storage._conn.execute(
+        "SELECT COUNT(*) FROM provider_results WHERE run_id = ?", (old_rid,)).fetchone()[0]
+    assert pr_left == 0
+    # Свежие записи на месте
+    assert storage._conn.execute(
+        "SELECT COUNT(*) FROM runs WHERE id = ?", (fresh_rid,)).fetchone()[0] == 1
+    assert storage.count_unread_notifications(uid) == 1   # только свежая
+    assert storage._conn.execute(
+        "SELECT COUNT(*) FROM anon_usage").fetchone()[0] == 1
+    storage.close()
+
+
+def test_purge_old_with_zero_days_is_noop(tmp_path):
+    """Защита от случайного полного wipe: purge_old(0) ничего не делает."""
+    storage = Storage(tmp_path / "t.db")
+    uid = storage.create_user("u", "p", iters=1000)
+    storage.save_report(_report(), user_id=uid)
+    storage.add_notification(uid, "batch_done", "к", job_id=1)
+    assert storage.purge_old(0) == {"runs": 0, "notifications": 0, "anon_usage": 0}
+    assert storage._conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 1
+    assert storage._conn.execute("SELECT COUNT(*) FROM notifications").fetchone()[0] == 1
+    storage.close()
+
+
+def test_vacuum_succeeds_after_purge(tmp_path):
+    """VACUUM не должен падать после purge_old (классическая ловушка: VACUUM в транзакции)."""
+    storage = Storage(tmp_path / "t.db")
+    uid = storage.create_user("u", "p", iters=1000)
+    storage.save_report(_report(), user_id=uid)
+    storage.purge_old(days=1)  # ничего не подходит — но коммит произойдёт
+    storage.vacuum()
     storage.close()
 
 

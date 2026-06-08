@@ -864,3 +864,29 @@ class Storage:
             "DELETE FROM sessions WHERE expires_at <= ?", (auth.utcnow_iso(),))
         self._conn.commit()
         return cur.rowcount
+
+    def purge_old(self, days: int) -> dict[str, int]:
+        """Каскадная чистка устаревших артефактов (P1-6): runs/notifications/anon_usage
+        старше `days` дней. provider_results/offers/hotel_offers/operator_offers удалятся
+        автоматически через FK ON DELETE CASCADE на runs. Возвращает счётчики удалённого
+        по таблицам — для лога/метрик. Жобы (jobs) не трогаем: они хранят сводный статус
+        батча, runs/notifications связаны с ними по job_id — каскада на jobs нет
+        специально, но при желании можно расширить.
+
+        days <= 0 → ничего не делаем (защита от случайного полного wipe)."""
+        if days <= 0:
+            return {"runs": 0, "notifications": 0, "anon_usage": 0}
+        cutoff = (datetime.fromisoformat(auth.utcnow_iso())
+                  - timedelta(days=days)).isoformat(timespec="seconds")
+        cur_runs = self._conn.execute("DELETE FROM runs WHERE run_at <= ?", (cutoff,))
+        cur_notif = self._conn.execute("DELETE FROM notifications WHERE created_at <= ?", (cutoff,))
+        cur_anon = self._conn.execute("DELETE FROM anon_usage WHERE updated_at <= ?", (cutoff,))
+        self._conn.commit()
+        return {"runs": cur_runs.rowcount, "notifications": cur_notif.rowcount,
+                "anon_usage": cur_anon.rowcount}
+
+    def vacuum(self) -> None:
+        """VACUUM сжимает БД (актуально после массовой purge_old)."""
+        # VACUUM нельзя в транзакции — изолируем коммитом и выполняем отдельно.
+        self._conn.commit()
+        self._conn.execute("VACUUM")

@@ -311,12 +311,31 @@ def _report_dict(report, run_id: int | None = None) -> dict:
 
 def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastAPI:
     import logging
+    from contextlib import asynccontextmanager
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
-    app = FastAPI(title="Tour Search")
+
+    @asynccontextmanager
+    async def _lifespan(_app: FastAPI):
+        # startup: запускаем фоновую retention-задачу, если включена.
+        retention_task: "asyncio.Task | None" = None
+        if getattr(_app.state, "retention_days", 0) > 0:
+            retention_task = asyncio.create_task(_app.state.retention_loop())
+            logging.getLogger("toursearch.retention").info(
+                "retention включена: %s дней", _app.state.retention_days)
+        else:
+            logging.getLogger("toursearch.retention").info(
+                "retention отключена (TOURSEARCH_RETENTION_DAYS=0)")
+        try:
+            yield
+        finally:
+            if retention_task is not None:
+                retention_task.cancel()
+
+    app = FastAPI(title="Tour Search", lifespan=_lifespan)
 
     # Авторизация (3 режима: локальный / legacy-токен / мультиюзер) — middleware и эндпоинты
     # /api/login|logout|me|users живут в web_auth.py.
@@ -338,6 +357,41 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
     # Батч-анализ (Ф1): мульти-направления фоновой задачей. Регистрируем после active_runs —
     # воркер занимает общий слот одновременных поисков (app.state.active_runs).
     register_jobs(app, db_path=db_path, app_state=app.state)
+
+    # Retention (P1-6): фоновая чистка устаревших артефактов. Раз в сутки удаляем
+    # runs/notifications/anon_usage старше N дней (TOURSEARCH_RETENTION_DAYS, по умолчанию 90).
+    # Каждое 7-е срабатывание — VACUUM (сжать БД). Окружения для отключения: =0.
+    retention_days = int(os.environ.get("TOURSEARCH_RETENTION_DAYS") or 90)
+    app.state.retention_days = retention_days
+    _retention_log = logging.getLogger("toursearch.retention")
+
+    async def _retention_loop() -> None:
+        # Период — 24ч; VACUUM раз в 7 итераций (раз в неделю). Сначала 60с задержка,
+        # чтобы старт сервера был быстрым и БД не блокировалась при первом запуске.
+        cycle = 0
+        while True:
+            try:
+                await asyncio.sleep(60.0 if cycle == 0 else 24 * 3600)
+                with Storage(db_path) as s:
+                    counts = s.purge_old(retention_days)
+                if any(counts.values()):
+                    _retention_log.info("purge_old(%sd): %s", retention_days, counts)
+                if cycle > 0 and cycle % 7 == 0:
+                    with Storage(db_path) as s:
+                        s.vacuum()
+                    _retention_log.info("vacuum выполнен")
+                cycle += 1
+            except asyncio.CancelledError:
+                return
+            except Exception:  # noqa: BLE001
+                _retention_log.exception("retention-цикл упал, перезапускаю через 1ч")
+                try:
+                    await asyncio.sleep(3600)
+                except asyncio.CancelledError:
+                    return
+
+    # Lifespan стартует retention_loop из app.state (выше определён _lifespan).
+    app.state.retention_loop = _retention_loop
 
     @app.middleware("http")
     async def _security_headers(request: Request, call_next):
