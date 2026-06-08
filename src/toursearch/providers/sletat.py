@@ -189,6 +189,10 @@ class SletatProvider:
             )
             page = await context.new_page()
             page.set_default_timeout(self.timeout_ms)
+            # Навигации даём больше времени, чем ожиданиям элементов: первая загрузка
+            # b2b-страницы тяжёлая (много JS), при разовых тормозах сети/сайта 20 с —
+            # впритык и весь поиск падает на goto. Элементы при этом ждём быстро (timeout_ms).
+            page.set_default_navigation_timeout(max(self.timeout_ms, 45_000))
             pump = start_frame_pump(self.name, page, self.on_frame)
             start = time.monotonic()
             try:
