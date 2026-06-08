@@ -8,20 +8,81 @@ echo ============================================
 echo    Tour Search - запуск сайта
 echo ============================================
 echo.
-rem --- проверка окружения ---
+
+rem ============================================================
+rem  ПЕРВЫЙ ЗАПУСК: если проект ещё не установлен - ставим сами.
+rem  Нужно один раз и занимает несколько минут (скачивание
+rem  зависимостей Python и браузера для поиска).
+rem ============================================================
 if exist ".venv\Scripts\toursearch.exe" goto :envok
-echo [!] Не найдено окружение .venv\Scripts\toursearch.exe
-echo     Проект ещё не установлен (см. инструкцию по первому запуску).
+
+echo [Первый запуск] Проект ещё не установлен - устанавливаю.
+echo Это нужно сделать ОДИН раз, займёт несколько минут.
+echo НЕ закрывайте это окно до конца установки.
 echo.
-pause
-exit /b 1
+
+rem --- ищем Python (сначала лаунчер py, потом python) ---
+set "PYEXE="
+where py >nul 2>&1 && set "PYEXE=py -3"
+if not defined PYEXE (
+  where python >nul 2>&1 && set "PYEXE=python"
+)
+if not defined PYEXE (
+  echo [!] Python не найден на компьютере.
+  echo     Установите Python 3.12 или новее: https://www.python.org/downloads/
+  echo     При установке ОБЯЗАТЕЛЬНО отметьте галочку "Add python.exe to PATH",
+  echo     затем запустите start.bat снова.
+  echo.
+  pause
+  exit /b 1
+)
+
+echo [1/4] Создаю виртуальное окружение .venv ...
+%PYEXE% -m venv .venv
+if not exist ".venv\Scripts\python.exe" (
+  echo [!] Не удалось создать окружение .venv. Проверьте установку Python.
+  echo.
+  pause
+  exit /b 1
+)
+
+echo [2/4] Устанавливаю зависимости Python (несколько минут) ...
+".venv\Scripts\python.exe" -m pip install --upgrade pip
+".venv\Scripts\python.exe" -m pip install -e ".[web,browser]"
+if errorlevel 1 (
+  echo [!] Установка зависимостей не удалась - смотрите ошибки выше.
+  echo.
+  pause
+  exit /b 1
+)
+
+echo [3/4] Скачиваю браузер для поиска (Playwright Chromium) ...
+".venv\Scripts\python.exe" -m playwright install chromium
+if errorlevel 1 (
+  echo [!] Браузер Playwright не установился. Сайт откроется, но поиск может не работать.
+  echo     Позже доустановить: .venv\Scripts\python.exe -m playwright install chromium
+)
+
+if not exist ".venv\Scripts\toursearch.exe" (
+  echo [!] Установка завершилась с ошибкой - toursearch.exe не создан. Прерываю.
+  echo.
+  pause
+  exit /b 1
+)
+echo [4/4] Python-часть установлена.
+echo.
+
 :envok
 echo.
-rem --- обновление интерфейса до актуальной версии (если установлен Node) ---
+rem --- интерфейс: первая установка зависимостей (если нужно) + сборка ---
 where npm >nul 2>&1 || goto :skipbuild
 if not exist "frontend\package.json" goto :skipbuild
-echo Обновляю интерфейс, это пара секунд...
 pushd frontend
+if not exist "node_modules" (
+  echo Первая установка интерфейса ^(npm install^) - пара минут ...
+  call npm install
+)
+echo Обновляю интерфейс, это пара секунд...
 call npm run build
 set "BUILD_RC=%errorlevel%"
 popd
