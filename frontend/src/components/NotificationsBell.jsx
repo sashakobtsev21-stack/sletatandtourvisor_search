@@ -18,7 +18,9 @@ export default function NotificationsBell() {
 
   const load = async () => {
     try {
-      const r = await apiFetch("/api/notifications");
+      // P2-y: retry:false на polling — иначе apiFetch ретраит 503 до 3 раз
+      // (~3.5с с backoff), а наш setInterval=30с может зацепить второй вызов.
+      const r = await apiFetch("/api/notifications", { retry: false });
       if (!r.ok) return;
       const j = await r.json();
       setItems(j.items || []);

@@ -34,7 +34,7 @@ from toursearch.storage import Storage
 from toursearch.web_auth import LOCAL_HOSTS, current_user_id, owner_filter, register_auth
 from toursearch.web_billing import register_billing
 from toursearch.web_jobs import register_jobs
-from toursearch.testkit import REGISTRY, run_selected
+from toursearch.web_tests import register_tests_panel
 
 _TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -809,147 +809,8 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
         )
 
     # ---------------- Автотесты ----------------
-    pending: dict[str, list[str]] = {}
-
-    def _category(group: str) -> str:
-        """Категория группы тестов — по СМЫСЛУ.
-
-        Не-live: fast (быстрая логика) и healthcheck (целостность форм) — на фронте
-        объединены в один раздел «Health-check». Live делятся по назначению:
-        smoke / positive (сверка фильтров) / hotels (режим «Отели») /
-        coverage (направления·составы) / negative (границы) / e2e (персоны·срез) /
-        ui (элементы формы и выдачи)."""
-        g = group.lower()
-        if g.startswith("health"):
-            return "healthcheck"
-        if not g.startswith("live"):
-            return "fast"
-        if "смоук" in g:
-            return "smoke"
-        if "границ" in g or "негатив" in g:
-            return "negative"
-        if "сценарий" in g:  # «Live: Сценарий — …»
-            if any(k in g for k in ("направлен", "города", "состав")):
-                return "coverage"
-            if "отели" in g:
-                return "hotels"
-            if "персон" in g:
-                return "e2e"
-            return "positive"  # звёзды/рейтинг/цена/курорт/оператор/питание/ночи/рейсы/валюта/pairwise
-        if "срез сценариев" in g:
-            return "e2e"
-        return "ui"  # прочие «Live: …» — проверки элементов формы/выдачи
-
-    # Порядок прогона/показа (быстрые и health — первыми; live — по смыслу).
-    _CAT_ORDER = {
-        "fast": 0, "healthcheck": 1, "smoke": 2, "ui": 3,
-        "positive": 4, "hotels": 5, "coverage": 6, "negative": 7, "e2e": 8,
-    }
-
-    def _ordered_groups():
-        grouped = REGISTRY.grouped()
-        # сортируем по категории (fast → healthcheck → live), внутри — по имени
-        keys = sorted(grouped, key=lambda g: (_CAT_ORDER[_category(g)], g))
-        return [(g, REGISTRY.group_description(g), grouped[g]) for g in keys]
-
-    def _healthcheck_anchors() -> dict[str, list[dict]]:
-        """Якоря health-check обеих площадок (что проверяем и каким селектором)."""
-        from toursearch.providers import get_provider, load_browser_providers
-
-        load_browser_providers()
-        out: dict[str, list[dict]] = {}
-        for name in list_providers():
-            try:
-                anchors = getattr(get_provider(name), "HEALTH_ANCHORS", {}) or {}
-                out[name] = [{"label": k, "selector": v} for k, v in anchors.items()]
-            except Exception:  # noqa: BLE001
-                out[name] = []
-        return out
-
-    @app.get("/api/tests/screenshot/{filename}")
-    async def api_test_screenshot(request: Request, filename: str):
-        """Скриншот теста. Permission `tests.view` уже проверен middleware (см.
-        _required_permission в web_auth). filename берётся как имя без пути — даже если
-        кто-то засабмитит `../`, Path(...).name его срежет. Дополнительно проверяем,
-        что файл реально внутри screenshots/ — на случай экзотики."""
-        name = Path(filename).name
-        if not name or name != filename:
-            raise HTTPException(status_code=404, detail="Скриншот не найден")
-        shot = (screenshots_dir / name).resolve()
-        try:
-            shot.relative_to(screenshots_dir)
-        except ValueError:
-            raise HTTPException(status_code=404, detail="Скриншот не найден") from None
-        if not shot.is_file():
-            raise HTTPException(status_code=404, detail="Скриншот не найден")
-        return FileResponse(shot, media_type="image/png")
-
-    @app.get("/api/tests/catalog")
-    async def api_tests_catalog():
-        groups = [
-            {
-                "group": g, "description": desc, "category": _category(g),
-                "cases": [
-                    {"id": c.id, "name": c.name, "live": c.live, "description": c.description}
-                    for c in cases
-                ],
-            }
-            for g, desc, cases in _ordered_groups()
-        ]
-        return {
-            "groups": groups,
-            "total": REGISTRY.count(),
-            "healthcheck_anchors": _healthcheck_anchors(),
-        }
-
-    @app.get("/tests", response_class=HTMLResponse)
-    async def tests_page(request: Request):
-        return _TEMPLATES.TemplateResponse(
-            request, "tests.html",
-            {"groups": _ordered_groups(), "total": REGISTRY.count()},
-        )
-
-    @app.post("/tests/prepare")
-    async def tests_prepare(payload: dict):
-        req = [i for i in payload.get("ids", []) if REGISTRY.get(i)]
-        cat = lambda i: _category(REGISTRY.get(i).group)  # noqa: E731
-
-        ids = list(req)
-        # Если выбран хоть один health-check — ВСЕГДА сначала гоняем все быстрые тесты
-        # (убедиться, что логика обработки не сломана, прежде чем лезть на сайт).
-        if any(cat(i) == "healthcheck" for i in req):
-            fast_ids = [c.id for c in REGISTRY.cases() if _category(c.group) == "fast"]
-            ids = fast_ids + req
-
-        # Порядок прогона: быстрые → health-check → live; дубликаты убираем (стабильно).
-        seen: set[str] = set()
-        uniq = [i for i in ids if not (i in seen or seen.add(i))]
-        uniq.sort(key=lambda i: _CAT_ORDER[cat(i)])
-
-        token = uuid.uuid4().hex
-        pending[token] = uniq
-        _cap_tokens(pending)
-        return {"token": token, "count": len(uniq)}
-
-    @app.get("/tests/stream")
-    async def tests_stream(token: str):
-        ids = pending.pop(token, [])
-
-        async def gen():
-            queue: asyncio.Queue = asyncio.Queue()
-
-            async def emit(event: dict) -> None:
-                await queue.put(event)
-
-            task = asyncio.create_task(run_selected(ids, emit))
-            while True:
-                event = await queue.get()
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-                if event.get("type") == "end":
-                    break
-            await task
-
-        return StreamingResponse(gen(), media_type="text/event-stream")
+    # Панель «Автотесты» (/tests, /api/tests/*) вынесена в web_tests.py (P3-y).
+    register_tests_panel(app, screenshots_dir=screenshots_dir, templates=_TEMPLATES)
 
     return app
 

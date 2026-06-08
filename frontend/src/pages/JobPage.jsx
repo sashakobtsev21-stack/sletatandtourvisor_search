@@ -30,7 +30,12 @@ export default function JobPage({ jobId }) {
     const schedule = () => { timerRef.current = setTimeout(tick, 3000); };
     const tick = async () => {
       try {
-        const r = await apiFetch(`/api/jobs/${jobId}`);
+        // P2-y: явно retry:false на polling-вызовах. У apiFetch retry для GET
+        // включён по умолчанию (до 3 попыток с backoff на 503/504) — это
+        // мультиплицировалось с нашим polling-timer (3с): один тик мог занять
+        // до ~7с, и наш счётчик fails ошибался. На polling один запрос = один
+        // тик; ретрай делает следующий цикл setTimeout(3000).
+        const r = await apiFetch(`/api/jobs/${jobId}`, { retry: false });
         if (r.status === 404 || r.status === 403) {  // постоянная ошибка (нет/чужой) → сразу
           if (alive) setError(`HTTP ${r.status}`);
           return;
