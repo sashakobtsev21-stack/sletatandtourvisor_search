@@ -157,6 +157,7 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
         request.state.auth_mode = "local"
         request.state.user = None
         request.state.legacy_ok = False
+        request.state.legacy_via_bearer = False  # api-клиент по Bearer → CSRF не требуется
         with Storage(db_path) as s:
             if s.has_any_user():
                 request.state.auth_mode = "multiuser"
@@ -166,10 +167,14 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
                     s.touch_session(tok)  # скользящее продление (дросселировано внутри)
             elif auth_token:
                 request.state.auth_mode = "legacy"
-                supplied = (request.cookies.get("ts_auth")
-                            or _bearer(request.headers.get("authorization"))
+                bearer = _bearer(request.headers.get("authorization"))
+                supplied = (request.cookies.get("ts_auth") or bearer
                             or request.query_params.get("auth") or "")
                 request.state.legacy_ok = hmac.compare_digest(supplied, auth_token)
+                # Bearer-аутентификация = чистый API-клиент: браузеры Authorization сами не шлют,
+                # значит CSRF неприменим — пропускаем CSRF-чек, чтобы curl/скрипты не ломались.
+                request.state.legacy_via_bearer = bool(
+                    bearer and hmac.compare_digest(bearer, auth_token))
         mode = request.state.auth_mode
 
         # id устройства (cookie ts_device) — для учёта анонимных бесплатных поисков. Заводим
@@ -180,9 +185,15 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
             device = auth.new_session_token()
             request.state.device_new = True
         request.state.device = device
-        # CSRF-токен гостю (мультиюзер без входа), если ещё нет — для double-submit на мутациях.
+        # CSRF-токен: выдаём гостю в multiuser (для double-submit на мутациях) и в legacy
+        # cookie-режиме (для защиты от cross-site POST). В local-режиме нет «жертвы» с
+        # куки-сессией, CSRF неприменим — пропускаем.
         request.state.csrf_set = None
-        if mode == "multiuser" and request.state.user is None and not request.cookies.get("ts_csrf"):
+        need_csrf_cookie = (
+            (mode == "multiuser" and request.state.user is None)
+            or mode == "legacy"
+        )
+        if need_csrf_cookie and not request.cookies.get("ts_csrf"):
             request.state.csrf_set = auth.new_session_token()
 
         # 2) Вход/выход/«кто я»: creds резолвлены, доступ не требуем (хендлер сам решит).
@@ -197,8 +208,15 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
         # закрывает в т.ч. локальный режим от кросс-сайтового создания пользователя).
         if request.method in _UNSAFE_METHODS and not _origin_ok(request):
             return JSONResponse({"error": "Неверный источник запроса."}, status_code=403)
-        if mode == "legacy" and not request.state.legacy_ok:
-            return JSONResponse({"error": "Требуется авторизация (TOURSEARCH_TOKEN)."}, status_code=401)
+        if mode == "legacy":
+            if not request.state.legacy_ok:
+                return JSONResponse({"error": "Требуется авторизация (TOURSEARCH_TOKEN)."}, status_code=401)
+            # CSRF на мутациях даже в legacy: если токен пришёл cookie/query (браузер) —
+            # требуем double-submit. Bearer-клиент (curl/скрипт) проходит без CSRF.
+            if (request.method in _UNSAFE_METHODS
+                    and not request.state.legacy_via_bearer
+                    and not _csrf_ok(request)):
+                return JSONResponse({"error": "CSRF-проверка не пройдена."}, status_code=403)
         if mode == "multiuser":
             if request.state.user is None:
                 # Анонимный гость: ограниченный доступ (поиск/справочники) с лимитом ANON_CREDITS.

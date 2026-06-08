@@ -318,6 +318,54 @@ def test_history_owner_isolation(tmp_path):
     assert len(admin_cli.get("/api/runs").json()) == 2  # admin видит все
 
 
+# --------------------------- legacy-режим: CSRF на cookie-auth (P1-2) ---------------------------
+
+
+def test_legacy_cookie_auth_requires_csrf_on_unsafe(tmp_path, monkeypatch):
+    """Регрессия (P1-2): в legacy-режиме (TOURSEARCH_TOKEN задан, юзеров нет) cookie-вход
+    через ?auth= открывал унаследованную сессию для CSRF-подобной атаки <form>: браузер
+    жертвы POST'ит /search/prepare со своими cookie. Теперь требуем double-submit CSRF
+    на всех мутациях — без X-CSRF-Token middleware отвечает 403."""
+    monkeypatch.setenv("TOURSEARCH_TOKEN", "L3GACY-TOKEN")
+    db = str(tmp_path / "w.db")  # ВАЖНО: без пользователей → mode==legacy
+    client = TestClient(create_app(db_path=db))
+    # cookie-вход через query — middleware пишет ts_auth + выдаёт ts_csrf
+    me = client.get("/api/me?auth=L3GACY-TOKEN")
+    assert me.status_code == 200 and me.json()["mode"] == "legacy"
+    assert client.cookies.get("ts_auth") == "L3GACY-TOKEN"
+    assert client.cookies.get("ts_csrf"), "legacy mode должен выдавать ts_csrf для double-submit"
+
+    # POST без X-CSRF-Token — 403, даже несмотря на валидную cookie-сессию
+    r = client.post("/search/prepare", data=_FORM)
+    assert r.status_code == 403 and "CSRF" in r.json().get("error", "")
+
+    # POST с правильным X-CSRF-Token — проходит
+    r = client.post("/search/prepare", data=_FORM,
+                    headers={"X-CSRF-Token": client.cookies.get("ts_csrf")})
+    assert r.status_code == 200 and "token" in r.json()
+
+
+def test_legacy_bearer_api_client_bypasses_csrf(tmp_path, monkeypatch):
+    """API-клиент с Authorization: Bearer (curl/скрипт) — НЕ браузер, CSRF неприменим;
+    пропускаем без double-submit, чтобы не ломать программный доступ."""
+    monkeypatch.setenv("TOURSEARCH_TOKEN", "L3GACY-TOKEN")
+    db = str(tmp_path / "w.db")
+    client = TestClient(create_app(db_path=db))
+    r = client.post("/search/prepare", data=_FORM,
+                    headers={"Authorization": "Bearer L3GACY-TOKEN"})
+    assert r.status_code == 200 and "token" in r.json()
+
+
+def test_legacy_wrong_token_still_blocked(tmp_path, monkeypatch):
+    """Старый контракт: неверный токен → 401, независимо от наличия CSRF-заголовка."""
+    monkeypatch.setenv("TOURSEARCH_TOKEN", "L3GACY-TOKEN")
+    db = str(tmp_path / "w.db")
+    client = TestClient(create_app(db_path=db))
+    r = client.post("/search/prepare", data=_FORM,
+                    headers={"Authorization": "Bearer WRONG", "X-CSRF-Token": "anything"})
+    assert r.status_code == 401
+
+
 # --------------------------- secure-cookie вне localhost (Ф3) ---------------------------
 
 def test_secure_cookie_on_nonlocal_host(tmp_path):
