@@ -52,6 +52,77 @@ async def test_run_health_check_parallel_and_isolates_failures(monkeypatch):
     assert gate_passed(results) is False  # одна сломана → гейт красный
 
 
+async def test_health_check_caches_all_ok_result(monkeypatch):
+    """B: повторный вызов с тем же набором площадок возвращает кэш без повторного
+    запуска check_provider — раньше каждое /search/prepare поднимало 5 браузеров."""
+    import toursearch.healthcheck as hc
+    hc._clear_health_cache()
+
+    calls = {"n": 0}
+
+    async def fake_check(name, headless=True, timeout_ms=15_000):
+        calls["n"] += 1
+        return ProviderHealth(provider=name, ok=True)
+
+    monkeypatch.setattr(hc, "check_provider", fake_check)
+    monkeypatch.setattr(hc, "load_browser_providers", lambda: None)
+
+    r1 = await hc.run_health_check(providers=["sletat", "tourvisor"])
+    assert all(p.ok for p in r1.values())
+    n_after_first = calls["n"]
+
+    r2 = await hc.run_health_check(providers=["sletat", "tourvisor"])
+    assert all(p.ok for p in r2.values())
+    assert calls["n"] == n_after_first, "повторный вызов должен прийти из TTL-кэша"
+
+
+async def test_health_check_does_not_cache_failures(monkeypatch):
+    """Красный результат НЕ кэшируется: как только сайт починили — сразу повторно
+    запускаем, а не ждём TTL=60с."""
+    import toursearch.healthcheck as hc
+    hc._clear_health_cache()
+    calls = {"n": 0}
+
+    async def fake_check(name, headless=True, timeout_ms=15_000):
+        calls["n"] += 1
+        return ProviderHealth(provider=name, ok=False, missing=["x"])
+
+    monkeypatch.setattr(hc, "check_provider", fake_check)
+    monkeypatch.setattr(hc, "load_browser_providers", lambda: None)
+
+    await hc.run_health_check(providers=["sletat"])
+    await hc.run_health_check(providers=["sletat"])
+    assert calls["n"] == 2, "красный результат должен перепроверяться без кэша"
+
+
+async def test_health_check_coalesces_parallel_calls(monkeypatch):
+    """10 параллельных запросов с тем же набором → один прогон check_provider.
+    Защита от «громового стада» когда несколько стримов одновременно идут в гейт."""
+    import asyncio as _asyncio
+    import toursearch.healthcheck as hc
+    hc._clear_health_cache()
+    calls = {"n": 0}
+    gate = _asyncio.Event()
+
+    async def slow_check(name, headless=True, timeout_ms=15_000):
+        calls["n"] += 1
+        await gate.wait()                      # ждём, чтобы все вызовы успели присоединиться
+        return ProviderHealth(provider=name, ok=True)
+
+    monkeypatch.setattr(hc, "check_provider", slow_check)
+    monkeypatch.setattr(hc, "load_browser_providers", lambda: None)
+
+    async def go():
+        return await hc.run_health_check(providers=["sletat"])
+
+    tasks = [_asyncio.create_task(go()) for _ in range(10)]
+    await _asyncio.sleep(0.05)                # все попали в inflight
+    gate.set()
+    results = await _asyncio.gather(*tasks)
+    assert all(r["sletat"].ok for r in results)
+    assert calls["n"] == 1, "должны слиться в один прогон"
+
+
 @pytest.mark.e2e
 async def test_healthcheck_live_sites_pass():
     """Живая проверка: якоря обеих форм на месте (ловит редизайн сайтов).

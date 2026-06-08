@@ -76,6 +76,30 @@ def _params_json(providers=("sletat",)) -> str:
 
 # --------------------------- HTTP-контракт ---------------------------
 
+def test_batch_destinations_cap(tmp_path, monkeypatch):
+    """A: DoS-cap на /api/jobs — больше MAX_DESTINATIONS_PER_JOB направлений → 400.
+    Раньше admin/vip-юзер мог отправить 10 000 направлений (нет кредит-гейта)."""
+    from toursearch.web_jobs import MAX_DESTINATIONS_PER_JOB
+    _patch_search(monkeypatch)
+    db = _seed(tmp_path, [("admin", "secret1", "admin")])
+    cli = TestClient(create_app(db_path=db))
+    _login(cli, "admin", "secret1")
+    too_many = {**_BATCH_FORM,
+                "destination": [f"Страна-{i}" for i in range(MAX_DESTINATIONS_PER_JOB + 1)]}
+    r = cli.post("/api/jobs", data=too_many, headers=_csrf(cli))
+    assert r.status_code == 400 and "не более" in r.json()["error"]
+
+
+def test_request_body_size_limit(tmp_path, monkeypatch):
+    """A: middleware режет Content-Length > MAX_BODY_BYTES (по умолчанию 256KB).
+    Без него любой эндпоинт принимал бы многомегабайтные тела (memory bloat)."""
+    monkeypatch.setenv("TOURSEARCH_MAX_BODY_BYTES", "1024")     # для теста: 1KB
+    cli = TestClient(create_app(db_path=_seed(tmp_path, [("u", "secret1", "user")])))
+    huge = "x" * 4096
+    r = cli.post("/api/login", data={"username": "u", "password": huge})
+    assert r.status_code == 413 and "слишком велико" in r.json()["error"]
+
+
 def test_batch_blocked_for_guest(tmp_path, monkeypatch):
     _patch_search(monkeypatch)
     client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))

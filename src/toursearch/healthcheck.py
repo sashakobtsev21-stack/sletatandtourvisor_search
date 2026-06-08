@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import time
 
 from pydantic import BaseModel
 from playwright.async_api import async_playwright
@@ -99,6 +101,26 @@ async def check_provider(name: str, headless: bool = True, timeout_ms: int = 30_
             await browser.close()
 
 
+# TTL-кэш результата health-check: каждое /search/prepare поднимало 5 браузеров
+# (~30с), а параллельные стримы дублировали работу. Хороший результат живёт TTL_S,
+# плохой не кэшируется (хочется чтобы пользователь сразу узнал, когда сайт починили).
+# Ключ кэша — frozenset(names): порядок не важен, разные подмножества — независимые.
+# Лок предотвращает «громовое стадо»: 10 одновременных запросов запустят один гейт.
+HEALTH_CACHE_TTL_S = float(os.environ.get("TOURSEARCH_HEALTHCHECK_TTL_S") or 60.0)
+_health_cache: dict[frozenset[str], tuple[float, dict[str, ProviderHealth]]] = {}
+_health_inflight: dict[frozenset[str], asyncio.Future] = {}
+_health_cache_lock = asyncio.Lock()
+
+
+def _cache_is_all_ok(results: dict[str, ProviderHealth]) -> bool:
+    return bool(results) and all(r.ok for r in results.values())
+
+
+def _clear_health_cache() -> None:
+    """Только для тестов / админ-команды «пересдать health»."""
+    _health_cache.clear()
+
+
 async def run_health_check(
     providers: list[str] | None = None, headless: bool = True
 ) -> dict[str, ProviderHealth]:
@@ -107,23 +129,66 @@ async def run_health_check(
     Площадки проверяются ПАРАЛЛЕЛЬНО (asyncio.gather): каждая поднимает свой
     браузер, поэтому последовательный прогон удваивал задержку перед каждым
     поиском. Падение одной проверки не валит остальные (превращается в ok=False).
+
+    Результат «всё зелено» кэшируется на HEALTH_CACHE_TTL_S (по умолчанию 60с),
+    параллельные запросы за одинаковым набором дожидаются одной задачи — не
+    плодим 5 браузеров на каждое /search/prepare (P1 perf).
     """
     load_browser_providers()
     # providers=None → набор по умолчанию (экспериментальные площадки не гейтим).
     names = providers or default_providers()
-    raw = await asyncio.gather(
-        *(check_provider(name, headless=headless) for name in names),
-        return_exceptions=True,
-    )
-    results: dict[str, ProviderHealth] = {}
-    for name, res in zip(names, raw):
-        if isinstance(res, BaseException):
-            results[name] = ProviderHealth(
-                provider=name, ok=False, error=f"{type(res).__name__}: {res}"
-            )
+    key = frozenset(names)
+    now = time.monotonic()
+
+    # TTL-hit: возвращаем кэш без лока (read атомарен у dict-snapshot).
+    cached = _health_cache.get(key)
+    if cached and now - cached[0] < HEALTH_CACHE_TTL_S:
+        return dict(cached[1])
+
+    # Coalesce: один раннер на key, остальные ждут future. Лок только на
+    # резолв «я раннер или ждущий», await вне лока — чтобы не блокировать.
+    async with _health_cache_lock:
+        cached = _health_cache.get(key)
+        if cached and time.monotonic() - cached[0] < HEALTH_CACHE_TTL_S:
+            return dict(cached[1])
+        inflight = _health_inflight.get(key)
+        if inflight is None:
+            inflight = asyncio.get_event_loop().create_future()
+            _health_inflight[key] = inflight
+            is_runner = True
         else:
-            results[name] = res
-    return results
+            is_runner = False
+
+    if not is_runner:
+        # Кто-то уже считает — ждём его результат
+        return dict(await inflight)
+
+    # Мы — раннер; считаем и публикуем в future для всех ждущих.
+    try:
+        raw = await asyncio.gather(
+            *(check_provider(name, headless=headless) for name in names),
+            return_exceptions=True,
+        )
+        results: dict[str, ProviderHealth] = {}
+        for name, res in zip(names, raw):
+            if isinstance(res, BaseException):
+                results[name] = ProviderHealth(
+                    provider=name, ok=False, error=f"{type(res).__name__}: {res}"
+                )
+            else:
+                results[name] = res
+        # Кэшируем только если ВСЁ зелено: красный должен сразу проходить заново,
+        # как только сайт починили (TTL=60с задержки на «всё снова работает» нет).
+        if _cache_is_all_ok(results):
+            _health_cache[key] = (time.monotonic(), dict(results))
+        inflight.set_result(results)
+        return results
+    except BaseException as exc:
+        inflight.set_exception(exc)
+        raise
+    finally:
+        async with _health_cache_lock:
+            _health_inflight.pop(key, None)
 
 
 def format_health(results: dict[str, ProviderHealth]) -> str:

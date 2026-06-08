@@ -31,6 +31,11 @@ from toursearch.web_auth import current_user_id, owner_filter
 
 logger = logging.getLogger("toursearch.jobs")
 
+# Верхний предел числа направлений в одном батче (защита от DoS: admin/vip-юзер
+# не ограничен кредитами и мог отправить 10 000 направлений → воркер занят часами,
+# многомегабайтный JSON в БД). 50 — щедро для реального туроператора.
+MAX_DESTINATIONS_PER_JOB = 50
+
 
 def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
     _bg: set[asyncio.Task] = set()  # удержать фоновые задачи от сборки мусора
@@ -153,6 +158,10 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
         if len(destinations) < 2:
             return JSONResponse({"error": "Выберите минимум 2 направления для батч-анализа."},
                                 status_code=400)
+        if len(destinations) > MAX_DESTINATIONS_PER_JOB:                # DoS-cap
+            return JSONResponse(
+                {"error": f"В одном мультипоиске не более {MAX_DESTINATIONS_PER_JOB} направлений "
+                          f"(прислано {len(destinations)})."}, status_code=400)
         try:  # страна-плейсхолдер destinations[0]; воркер подставит каждую
             base, providers = parse_search_params(f, destination_country=destinations[0])
         except ValueError as exc:

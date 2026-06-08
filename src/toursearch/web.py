@@ -15,7 +15,9 @@ from decimal import Decimal
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -393,6 +395,26 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
 
     # Lifespan стартует retention_loop из app.state (выше определён _lifespan).
     app.state.retention_loop = _retention_loop
+
+    # Лимит размера тела запроса (защита от memory-bloat / slowloris-style abuse).
+    # 256 KB достаточно для самых больших валидных форм (мультипоиск 50 направлений +
+    # параметры ≈ 5 KB). Не применяется к multipart (для будущей загрузки файлов
+    # стоит ослабить точечно); сейчас на проекте файловых аплоадов нет.
+    max_body_bytes = max(1024, int(os.environ.get("TOURSEARCH_MAX_BODY_BYTES") or 256 * 1024))
+
+    @app.middleware("http")
+    async def _body_size_limit(request: Request, call_next):
+        cl = request.headers.get("content-length")
+        if cl is not None:
+            try:
+                size = int(cl)
+            except ValueError:
+                return JSONResponse({"error": "Некорректный Content-Length."}, status_code=400)
+            if size > max_body_bytes:
+                return JSONResponse(
+                    {"error": f"Тело запроса слишком велико ({size} > {max_body_bytes} байт)."},
+                    status_code=413)
+        return await call_next(request)
 
     @app.middleware("http")
     async def _security_headers(request: Request, call_next):
