@@ -86,7 +86,13 @@ class CreditSession:
         self._done: bool = False
 
     def consume(self) -> bool:
-        """Списать кредит (только для ctx.consumes==True). Возвращает True если хватило."""
+        """Списать кредит (только для ctx.consumes==True). Возвращает True если хватило.
+
+        Идемпотентен: повторный вызов на уже consumed-сессии — no-op (возвращает True
+        вместо повторного try_consume — защита от silent double-debit, если caller
+        случайно вызовет consume дважды)."""
+        if self.consumed:                   # защита от двойного списания
+            return True
         if not self._ctx.consumes:
             self.consumed = True            # для admin/vip/подписки технически «успех»
             return True
@@ -109,6 +115,9 @@ class CreditSession:
                 with Storage(self._db_path) as s:
                     self._ctx.refund(s)
             except Exception:                # noqa: BLE001
+                # logger.exception сам приложит трассу актуальной refund-ошибки
+                # из sys.exc_info(); в формате логируем КОНТЕКСТ (кто/что), но не exc —
+                # `exc` тут это причина выхода из with-блока (outer_exc), а не сбой refund.
                 _log.exception(
-                    "refund failed: user_id=%s device=%s exc=%s",
+                    "refund failed: user_id=%s device=%s outer_exc=%s",
                     self._ctx.user_id, self._ctx.device, exc)
