@@ -608,8 +608,13 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
                     elif session.user_id is not None:   # обычный юзер — кредит
                         s.refund_search(session.user_id)
                 session.consumed = False
-            except Exception:
-                pass
+            except Exception:  # noqa: BLE001
+                # P2-3: раньше глотали тихо — пользователь терял поиск без следа.
+                # Теперь логируем с контекстом (run_token + user/device), чтобы
+                # админ мог найти и восстановить вручную.
+                logging.getLogger("toursearch.web").exception(
+                    "Возврат поиска не удался (token=%s user_id=%s device=%s)",
+                    token, session.user_id, session.device)
 
         try:
             _emit(session, {"type": "log", "level": "INFO", "msg": "Проверяю формы площадок (health-check)…"})

@@ -356,6 +356,24 @@ def test_legacy_bearer_api_client_bypasses_csrf(tmp_path, monkeypatch):
     assert r.status_code == 200 and "token" in r.json()
 
 
+def test_logout_clears_all_session_cookies_with_attributes(tmp_path):
+    """Регрессия P2-3: delete_cookie без атрибутов Secure/SameSite Chrome игнорирует —
+    cookie в браузере остаётся (хоть серверно сессия и убита). Атрибуты в Set-Cookie
+    при удалении должны совпадать с теми, что были при выдаче (Max-Age=0 + samesite=lax)."""
+    db = _seed(tmp_path, [("admin", "secret1", "admin")])
+    client = TestClient(create_app(db_path=db))
+    _login(client, "admin", "secret1")
+    r = client.post("/api/logout", headers=_csrf(client))
+    assert r.status_code == 200
+    cookies = [v for k, v in r.headers.multi_items() if k.lower() == "set-cookie"]
+    # должны быть очищающие Set-Cookie для всех трёх и с явным samesite=lax
+    names_cleared = {c.split("=", 1)[0].strip() for c in cookies}
+    assert {"ts_session", "ts_csrf", "ts_device"} <= names_cleared
+    for c in cookies:
+        if any(c.startswith(n + "=") for n in ("ts_session", "ts_csrf", "ts_device")):
+            assert "samesite=lax" in c.lower(), f"missing samesite on: {c}"
+
+
 def test_legacy_wrong_token_still_blocked(tmp_path, monkeypatch):
     """Старый контракт: неверный токен → 401, независимо от наличия CSRF-заголовка."""
     monkeypatch.setenv("TOURSEARCH_TOKEN", "L3GACY-TOKEN")

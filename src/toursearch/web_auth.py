@@ -333,8 +333,13 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
             with Storage(db_path) as storage:
                 storage.delete_session(token)
         resp = JSONResponse({"ok": True})
-        resp.delete_cookie("ts_session")
-        resp.delete_cookie("ts_csrf")
+        # P2-3: атрибуты должны совпадать с _set_session_cookies, иначе Chrome
+        # не «увидит» эту cookie как ту же и не удалит её в браузере (серверная
+        # инвалидация через delete_session уже сработала — ниже только UX в браузере).
+        # ts_device тоже сбрасываем — иначе устройство-cookie переживает logout и
+        # связывает анонимный гостевой период с залогиненным аккаунтом.
+        for name in ("ts_session", "ts_csrf", "ts_device"):
+            resp.delete_cookie(name, samesite="lax", secure=secure_cookies)
         return resp
 
     @app.get("/api/me")
