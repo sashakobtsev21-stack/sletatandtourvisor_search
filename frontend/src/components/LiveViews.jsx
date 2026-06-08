@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Radio, MonitorPlay, Loader2, CheckCircle2 } from "lucide-react";
 import GlassCard from "./ui/GlassCard.jsx";
@@ -16,7 +17,7 @@ import { providerLabel } from "../lib/format.js";
  * Если кадр пришёл — показываем картинку. Иначе рисуем состояние по фазе,
  * чтобы окно «жило» и не висело вечно на «ожидании».
  */
-export default function LiveViews({ providers = [], frames = {}, phases = {}, active = false }) {
+function LiveViewsImpl({ providers = [], frames = {}, phases = {}, active = false }) {
   return (
     <motion.div
       variants={staggerContainer}
@@ -165,3 +166,8 @@ function MockSnapshot({ loading = false }) {
     </div>
   );
 }
+
+// React.memo (P3-a): кадры приходят каждые ~1.4с — без memo родитель пересчитывал
+// поддерево и при изменениях phases/active мы ре-рендерились вхолостую.
+const LiveViews = memo(LiveViewsImpl);
+export default LiveViews;

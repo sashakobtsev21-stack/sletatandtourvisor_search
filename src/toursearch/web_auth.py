@@ -445,8 +445,17 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
                 storage.delete_user_sessions(user_id)
                 changes.append("password_changed")
             if changes:
-                # Audit-log: «кто, что, кому» — без значения пароля. Раньше admin-мутации
-                # выполнялись полностью без следа в логах.
+                # Audit-log: «кто, что, кому» — в logger И в БД (compliance, для
+                # разбора инцидентов и истории изменений ролей/блокировок).
+                joined = ",".join(changes)
                 _audit.info("user_patch actor=%s target=%s#%d changes=%s",
-                            actor_label, user["username"], user_id, ",".join(changes))
+                            actor_label, user["username"], user_id, joined)
+                storage.add_audit(
+                    actor_id=actor.get("id"),
+                    actor_name=actor.get("username"),
+                    action="user_patch",
+                    target_user_id=user_id,
+                    target_label=f"{user['username']}#{user_id}",
+                    details=joined,
+                )
             return _user_public(storage.get_user_by_id(user_id))

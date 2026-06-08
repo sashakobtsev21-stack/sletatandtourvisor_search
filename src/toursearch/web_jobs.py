@@ -14,7 +14,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 
@@ -22,6 +21,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from toursearch import auth, billing
+from toursearch.billing_runner import BillingContext, CreditSession
 from toursearch.healthcheck import gate_passed, run_health_check
 from toursearch.models import SearchParams
 from toursearch.orchestrator import run_search
@@ -39,7 +39,8 @@ MAX_DESTINATIONS_PER_JOB = 50
 
 
 def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
-    _bg: set[asyncio.Task] = set()  # удержать фоновые задачи от сборки мусора
+    # Фоновые batch-задачи регистрируются в общем app_state.bg_tasks
+    # (lifespan корректно отменит их на shutdown — раньше был свой _bg-set).
 
     # На старте сервера: незавершённые задания (одно-процессный воркер умер с процессом) →
     # interrupted, чтобы они не висели «running» вечно.
@@ -85,35 +86,39 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
             interrupted = False
             total = len(destinations)
             for country in destinations:
-                consumed = False
                 # Списание считаем по СВЕЖЕМУ пользователю каждый раз: за длинный батч могли
                 # оформить подписку / сменить роль — тогда кредиты больше не списываем.
+                # P2-c: один CreditSession на направление; refund при exit без mark_done.
                 if user_id is not None:
                     with Storage(db_path) as s:
-                        if billing.consumes_credit(s.get_user_by_id(user_id)):
-                            consumed = s.try_consume_search(user_id)
-                            if not consumed:          # кредиты кончились — частичный результат
-                                s.update_job(job_id, error=f"Кредиты закончились: выполнено {done} из {total}.")
-                                interrupted = True
-                                break
-                # Атомарно дождаться свободного слота и занять (asyncio.Lock внутри).
-                await active.acquire_wait()
-                success = False
-                try:
-                    sp = base.model_copy(update={"destination_country": country})
-                    report = await run_search(sp, providers=providers, headless=True)
-                    with Storage(db_path) as s:
-                        s.save_report(report, user_id=user_id, job_id=job_id)
-                    success = True
-                except Exception as exc:  # noqa: BLE001 — одно направление не должно ронять весь батч
-                    logger.warning("батч #%s, направление %s: %s", job_id, country, exc)
-                    failures += 1
-                    if consumed:
+                        fresh_user = s.get_user_by_id(user_id)
+                    b_ctx = BillingContext(user_id=user_id, user=fresh_user)
+                else:
+                    b_ctx = BillingContext()
+                with CreditSession(db_path, b_ctx) as cs:
+                    if b_ctx.consumes and not cs.consume():
                         with Storage(db_path) as s:
-                            s.refund_search(user_id)  # направление не сделано — вернуть кредит
-                finally:
-                    await active.release()
-                    prune_screenshots()
+                            s.update_job(job_id,
+                                         error=f"Кредиты закончились: выполнено {done} из {total}.")
+                        interrupted = True
+                        break
+                    # Атомарно дождаться свободного слота и занять (asyncio.Lock внутри).
+                    await active.acquire_wait()
+                    success = False
+                    try:
+                        sp = base.model_copy(update={"destination_country": country})
+                        report = await run_search(sp, providers=providers, headless=True)
+                        with Storage(db_path) as s:
+                            s.save_report(report, user_id=user_id, job_id=job_id)
+                        success = True
+                        cs.mark_done()                                # работа сделана — refund не нужен
+                    except Exception as exc:  # noqa: BLE001 — одно направление не валит весь батч
+                        logger.warning("батч #%s, направление %s: %s", job_id, country, exc)
+                        failures += 1
+                        # mark_done НЕ вызываем → CreditSession сам сделает refund на exit
+                    finally:
+                        await active.release()
+                        prune_screenshots()
                 if success:
                     done += 1
                     with Storage(db_path) as s:
@@ -180,9 +185,7 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
             ensure_ascii=False)
         with Storage(db_path) as s:
             job_id = s.create_job(current_user_id(request), params_json, destinations)
-        task = asyncio.create_task(_run_job(job_id))
-        _bg.add(task)
-        task.add_done_callback(_bg.discard)
+        app_state.bg_tasks.spawn(_run_job(job_id), name=f"batch-job:{job_id}")
         return {"job_id": job_id, "total": n}
 
     @app.get("/api/jobs")

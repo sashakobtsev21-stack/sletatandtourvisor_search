@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Terminal, CircleStop, CheckCircle2, AlertTriangle, Info, Loader2 } from "lucide-react";
 import GlassCard from "./ui/GlassCard.jsx";
@@ -22,7 +22,7 @@ const LEVELS = {
  *  - status: "idle" | "running" | "done" | "error" | "cancelled"
  *  - onCancel(): обработчик кнопки «Остановить»
  */
-export default function SearchTerminal({ logs = [], progress = 0, status = "idle", onCancel }) {
+function SearchTerminalImpl({ logs = [], progress = 0, status = "idle", onCancel }) {
   const scrollRef = useRef(null);
 
   // Плавный автоскролл вниз при каждом новом сообщении.
@@ -156,6 +156,13 @@ export default function SearchTerminal({ logs = [], progress = 0, status = "idle
     </GlassCard>
   );
 }
+
+// React.memo: при стабильных ссылках pushLog/onCancel из SearchPage не пере-рендеримся
+// каждый раз, когда родитель меняет несвязанные с нами поля (frames/phases).
+// Кастомный equality: сравнение по длине logs (append-only массив; новые элементы → новая ссылка
+// массива даже при одинаковой длине только когда был setLogs, что и есть наш триггер ре-рендера).
+const SearchTerminal = memo(SearchTerminalImpl);
+export default SearchTerminal;
 
 /** Бейдж статуса под заголовком терминала. */
 function StatusBadge({ status }) {

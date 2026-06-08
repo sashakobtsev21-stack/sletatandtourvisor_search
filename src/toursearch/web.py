@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from toursearch import billing, refdata
+from toursearch.billing_runner import BillingContext, CreditSession
 from toursearch.healthcheck import gate_passed, run_health_check
 from toursearch.models import SearchParams, is_not_applicable_error
 from toursearch.orchestrator import run_search
@@ -275,30 +276,42 @@ def _report_dict(report, run_id: int | None = None) -> dict:
 def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastAPI:
     import logging
     from contextlib import asynccontextmanager
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    from toursearch.bg_tasks import BackgroundRegistry
+    from toursearch.logging_setup import configure_logging
+
+    # JSON-формат логов включается через TOURSEARCH_LOG_FORMAT=json (для прода);
+    # без env — человекочитаемый формат, как раньше.
+    configure_logging(logging.INFO)
 
     @asynccontextmanager
     async def _lifespan(_app: FastAPI):
-        # startup: запускаем фоновую retention-задачу, если включена.
-        retention_task: "asyncio.Task | None" = None
+        # startup: запускаем фоновую retention-задачу через единый реестр
+        # (graceful shutdown ниже отменит ВСЕ фоновые задачи: retention, batch-jobs,
+        # session-cleanup — раньше отменялся только retention).
+        bg = _app.state.bg_tasks
         if getattr(_app.state, "retention_days", 0) > 0:
-            retention_task = asyncio.create_task(_app.state.retention_loop())
+            bg.spawn(_app.state.retention_loop(), name="retention-loop")
             logging.getLogger("toursearch.retention").info(
                 "retention включена: %s дней", _app.state.retention_days)
         else:
             logging.getLogger("toursearch.retention").info(
                 "retention отключена (TOURSEARCH_RETENTION_DAYS=0)")
+        # Reverse-proxy sanity-check: secure_cookies стоит, но --proxy-headers
+        # uvicorn не выставил → за прокси все запросы будут с 127.0.0.1, что
+        # сломает IP-rate-limit (DoS на login) и анти-брутфорс. Предупреждаем громко.
+        if secure_cookies and os.environ.get("TOURSEARCH_BEHIND_PROXY") != "1":
+            logging.getLogger("toursearch.web").warning(
+                "secure_cookies включены (вне localhost / TOURSEARCH_SECURE_COOKIES=1), "
+                "но не выставлен TOURSEARCH_BEHIND_PROXY=1. Если за reverse-proxy — "
+                "запустите uvicorn с --proxy-headers --forwarded-allow-ips=<IP_прокси>, "
+                "иначе IP-rate-limit и анти-брутфорс ВНУТРЕННО ВИДЯТ ВСЕХ как 127.0.0.1.")
         try:
             yield
         finally:
-            if retention_task is not None:
-                retention_task.cancel()
+            await bg.cancel_all(timeout=5.0)
 
     app = FastAPI(title="Tour Search", lifespan=_lifespan)
+    app.state.bg_tasks = BackgroundRegistry()
 
     # Авторизация (3 режима: локальный / legacy-токен / мультиюзер) — middleware и эндпоинты
     # /api/login|logout|me|users живут в web_auth.py.
@@ -523,42 +536,31 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
             ctx["error"] = (f"Сейчас выполняется максимум поисков ({max_concurrent_searches}). "
                             "Повторите чуть позже.")
             return _TEMPLATES.TemplateResponse(request, "index.html", ctx)
-        # Списываем поиск (обычный юзер; middleware уже отсёк нулевой остаток 402-м, но
-        # списываем атомарно здесь). Возврат — при гейте/сбое (work не сделана).
+        # Списываем поиск через единый CreditSession: refund при exit без mark_done
+        # — автоматический, без копирования логики (P2-c, было 3 копии в трёх местах).
         u = request.state.user if hasattr(request.state, "user") else None
         uid = current_user_id(request)
-        consumed = False
-        if billing.consumes_credit(u):  # обычный юзер без активной подписки
-            with Storage(db_path) as storage:
-                consumed = storage.try_consume_search(uid)
-            if not consumed:
-                await active_runs.release()           # слот ещё ничей — отпускаем сразу
-                ctx = _form_ctx()
-                ctx["error"] = "Закончились поиски — пополните на странице «Подписка»."
-                return _TEMPLATES.TemplateResponse(request, "index.html", ctx)
-
+        b_ctx = BillingContext(user_id=uid, user=u)
         try:
-            # Жёсткий health-check гейт перед прогоном
-            health = await run_health_check(providers=chosen, headless=True)
-            if not gate_passed(health):
-                if consumed:
-                    with Storage(db_path) as storage:
-                        storage.refund_search(uid)
-                return _TEMPLATES.TemplateResponse(
-                    request, "gate_failed.html", {"health": health}
-                )
-
-            report = await run_search(params, providers=chosen, headless=True)
-            with Storage(db_path) as storage:
-                run_id = storage.save_report(report, user_id=uid)
-            return _TEMPLATES.TemplateResponse(
-                request, "results.html", {"report": report, "run_id": run_id}
-            )
-        except Exception:
-            if consumed:
+            with CreditSession(db_path, b_ctx) as cs:
+                if b_ctx.consumes and not cs.consume():
+                    ctx = _form_ctx()
+                    ctx["error"] = "Закончились поиски — пополните на странице «Подписка»."
+                    return _TEMPLATES.TemplateResponse(request, "index.html", ctx)
+                # Жёсткий health-check гейт перед прогоном
+                health = await run_health_check(providers=chosen, headless=True)
+                if not gate_passed(health):
+                    # exit без mark_done → CreditSession сам сделает refund
+                    return _TEMPLATES.TemplateResponse(
+                        request, "gate_failed.html", {"health": health}
+                    )
+                report = await run_search(params, providers=chosen, headless=True)
                 with Storage(db_path) as storage:
-                    storage.refund_search(uid)
-            raise
+                    run_id = storage.save_report(report, user_id=uid)
+                cs.mark_done()                                       # работа сделана — refund НЕ нужен
+                return _TEMPLATES.TemplateResponse(
+                    request, "results.html", {"report": report, "run_id": run_id}
+                )
         finally:
             await active_runs.release()
 
@@ -568,20 +570,18 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
     # Вернулись и переподключились → отдаём «переигровку» накопленного (полное состояние)
     # и продолжение в реальном времени. Токен живёт в сессии и не «расходуется».
     _searches: dict[str, _SearchSession] = {}
-    _bg_tasks: set[asyncio.Task] = set()  # удержать фоновые задачи от сборки мусора
 
     def _schedule_session_cleanup(token: str, delay: float = 180.0) -> None:
         """Убрать сессию через ~3 мин после финала: даём вернувшемуся клиенту время
-        переподключиться и получить итог (done/run_id); сам прогон уже сохранён в истории."""
+        переподключиться и получить итог (done/run_id); сам прогон уже сохранён в истории.
+        Регистрируется в общем app.state.bg_tasks — на shutdown lifespan корректно отменит."""
         async def _later() -> None:
             try:
                 await asyncio.sleep(delay)
             except asyncio.CancelledError:
                 return  # таймер отменён (выключение/смена loop) — сессию НЕ трогаем
             _searches.pop(token, None)
-        t = asyncio.create_task(_later())
-        _bg_tasks.add(t)
-        t.add_done_callback(_bg_tasks.discard)
+        app.state.bg_tasks.spawn(_later(), name=f"session-cleanup:{token[:8]}")
 
     async def _run_search_task(token: str, session: _SearchSession) -> None:
         # Помечаем прогон токеном: задачи поиска унаследуют его, и лог-хендлер отберёт
@@ -594,24 +594,22 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
         async def on_frame(name: str, data: str) -> None:
             _emit_frame(session, name, data)
 
+        # P2-c: рефанд через BillingContext.refund (общий код с web_jobs и do_search).
+        # Списание для SSE уже сделано в search_stream (атомарно перед стартом задачи),
+        # поэтому здесь только возврат при не-success завершении.
         def _refund() -> None:
-            # Вернуть списанный поиск, если работа не была сделана (гейт/сбой/отмена). При
-            # штатном done НЕ зовём: «туров нет» = поиск отработал, попытка израсходована.
             if not session.consumed:
                 return
             try:
                 with Storage(db_path) as s:
-                    if session.device is not None:      # гость — возврат по устройству
-                        s.refund_anon(session.device)
-                    elif session.user_id is not None:   # обычный юзер — кредит
-                        s.refund_search(session.user_id)
+                    BillingContext(
+                        user_id=session.user_id, device=session.device,
+                        user=None  # admin/vip-юзеры через consumes_credit() — не applicable, refund — no-op
+                    ).refund(s)
                 session.consumed = False
             except Exception:  # noqa: BLE001
-                # P2-3: раньше глотали тихо — пользователь терял поиск без следа.
-                # Теперь логируем с контекстом (run_token + user/device), чтобы
-                # админ мог найти и восстановить вручную.
-                logging.getLogger("toursearch.web").exception(
-                    "Возврат поиска не удался (token=%s user_id=%s device=%s)",
+                logging.getLogger("toursearch.billing").exception(
+                    "refund failed (sse token=%s user_id=%s device=%s)",
                     token, session.user_id, session.device)
 
         try:
@@ -786,38 +784,39 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
     async def api_runs(request: Request, limit: int = 50):
         owner = owner_filter(request)  # своя история (user) или вся (admin/legacy/local)
         with Storage(db_path) as storage:
-            out = []
-            # Один проход: list_reports уже реконструирует каждый прогон ровно один
-            # раз (раньше list_runs + повторный get_report делали это дважды).
-            for run_id, rep in storage.list_reports(limit=limit, owner_id=owner):
-                p = rep.params
-                cheapest = rep.cheapest
-                out.append({
-                    "run_id": run_id, "run_at": rep.run_at.isoformat(),
-                    "cheapest_label": cheapest.label if cheapest else None,
-                    "cheapest_price": str(cheapest.price) if cheapest else None,
-                    "cheapest_provider": cheapest.provider if cheapest else None,
-                    "fastest_provider": rep.fastest_provider,
-                    # статус площадок — чтобы помечать прогоны с ошибками
-                    "provider_status": [
-                        {"provider": res.provider, "ok": res.success, "error": res.error}
-                        for res in rep.results
-                    ],
-                    # параметры прогона — для заголовка истории и кнопки «Повторить»
-                    "params": {
-                        "search_mode": p.search_mode,
-                        "departure_city": p.departure_city,
-                        "destination_country": p.destination_country,
-                        "date_from": p.date_from.isoformat(),
-                        "date_to": p.date_to.isoformat(),
-                        "nights_min": p.nights_min, "nights_max": p.nights_max,
-                        "adults": p.adults, "children_ages": p.children_ages,
-                        "operators": p.operators,
-                        "charter_only": p.charter_only, "direct_only": p.direct_only,
-                        "price_max": str(p.price_max) if p.price_max is not None else None,
-                        "providers": [res.provider for res in rep.results],
-                    },
-                })
+            # P2-d: list_runs_with_status тянет только агрегаты и статусы площадок
+            # (БЕЗ offers/hotel_offers/operator_offers). Раньше list_reports тянул
+            # весь граф ради заголовков списка — десятки тысяч строк впустую.
+            rows = storage.list_runs_with_status(limit=limit, owner_id=owner)
+        out = []
+        for r in rows:
+            params_data = json.loads(r["params_json"])
+            providers = [s["provider"] for s in r["provider_status"]]
+            out.append({
+                "run_id": r["id"],
+                "run_at": r["run_at"],
+                "cheapest_label": r["cheapest_label"],
+                "cheapest_price": r["cheapest_price"],
+                "cheapest_provider": r["cheapest_provider"],
+                "fastest_provider": r["fastest_provider"],
+                "provider_status": r["provider_status"],
+                "params": {
+                    "search_mode": params_data.get("search_mode", "tours"),
+                    "departure_city": params_data.get("departure_city"),
+                    "destination_country": params_data.get("destination_country"),
+                    "date_from": params_data.get("date_from"),
+                    "date_to": params_data.get("date_to"),
+                    "nights_min": params_data.get("nights_min"),
+                    "nights_max": params_data.get("nights_max"),
+                    "adults": params_data.get("adults"),
+                    "children_ages": params_data.get("children_ages", []),
+                    "operators": params_data.get("operators", []),
+                    "charter_only": params_data.get("charter_only", False),
+                    "direct_only": params_data.get("direct_only", False),
+                    "price_max": params_data.get("price_max"),
+                    "providers": providers,
+                },
+            })
         return out
 
     @app.get("/api/runs/{run_id}")

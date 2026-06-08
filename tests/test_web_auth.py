@@ -398,6 +398,25 @@ def test_admin_patch_logs_audit_changes(tmp_path, caplog):
                and "role:user->vip" in m for m in msgs)
 
 
+def test_admin_patch_writes_audit_to_db(tmp_path):
+    """P2-b: PATCH /api/users должен оставить след в audit_log таблице (а не только в логах)."""
+    db = _seed(tmp_path, [("admin", "secret1", "admin"), ("u", "secret1", "user")])
+    cli = TestClient(create_app(db_path=db))
+    _login(cli, "admin", "secret1")
+    uid = next(x["id"] for x in cli.get("/api/users").json() if x["username"] == "u")
+    cli.patch(f"/api/users/{uid}", json={"role": "vip", "is_active": False},
+              headers=_csrf(cli))
+    with Storage(db) as s:
+        rows = s.list_audit(target_user_id=uid)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["action"] == "user_patch"
+    assert row["actor_name"] == "admin"
+    assert row["target_label"].startswith("u#")
+    assert "role:user->vip" in (row["details"] or "")
+    assert "is_active:True->False" in (row["details"] or "")
+
+
 def test_logout_clears_all_session_cookies_with_attributes(tmp_path):
     """Регрессия P2-3: delete_cookie без атрибутов Secure/SameSite Chrome игнорирует —
     cookie в браузере остаётся (хоть серверно сессия и убита). Атрибуты в Set-Cookie

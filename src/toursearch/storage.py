@@ -54,10 +54,17 @@ def _jlist(row: sqlite3.Row, key: str) -> list[str]:
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS runs (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_at      TEXT NOT NULL,
-    params_json TEXT NOT NULL,
-    user_id     INTEGER        -- владелец прогона; NULL = системный/CLI (или до миграции)
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_at            TEXT NOT NULL,
+    params_json       TEXT NOT NULL,
+    user_id           INTEGER,        -- владелец прогона; NULL = системный/CLI (или до миграции)
+    -- P2-d денормализация (2026-06): агрегаты для /api/runs и /history без загрузки графа.
+    -- Раньше list_runs → list_reports собирал offers/hotel_offers/operator_offers для каждого
+    -- прогона (десятки тысяч строк ради «дешевле всех у площадки X за N₽»).
+    cheapest_price    TEXT,           -- Decimal-как-строка; None если нет priced_items
+    cheapest_label    TEXT,           -- «Coral» или «Mert ★3» — что показать пользователю
+    cheapest_provider TEXT,           -- площадка с минимальной ценой
+    fastest_provider  TEXT            -- площадка, которая успешно отработала быстрее всех
 );
 CREATE TABLE IF NOT EXISTS provider_results (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -199,6 +206,24 @@ CREATE TABLE IF NOT EXISTS notifications (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, is_read);
+
+-- Audit log: чувствительные административные действия (смена роли/блокировка/смена
+-- пароля любого юзера, ручное начисление кредитов, retention runs) — для разбора
+-- инцидентов и compliance (P2-b 2026-06). В отличие от logger.info (теряется в
+-- ротации) — переживает рестарт и индексируется по target_user_id.
+CREATE TABLE IF NOT EXISTS audit_log (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    actor_id        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    actor_name      TEXT,                          -- денормализовано: actor мог быть удалён
+    action          TEXT NOT NULL,                 -- user_role_change / user_blocked / password_changed / ...
+    target_user_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    target_label    TEXT,                          -- человекочитаемая ссылка («u#5 → vip»)
+    details         TEXT,                          -- свободное поле (без секретов!)
+    created_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_target ON audit_log(target_user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action, created_at);
 """
 
 
@@ -312,6 +337,11 @@ class Storage:
         if "job_id" not in run_cols:  # привязка прогона к батч-заданию (Ф1 батч-анализа)
             self._conn.execute("ALTER TABLE runs ADD COLUMN job_id INTEGER")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_job ON runs(job_id)")
+        # P2-d денормализация: агрегаты прогона (для быстрого /api/runs без загрузки графа).
+        # Старые прогоны останутся с NULL — list_runs показывает «—», новые заполняются save_report.
+        for col in ("cheapest_price", "cheapest_label", "cheapest_provider", "fastest_provider"):
+            if col not in run_cols:
+                self._conn.execute(f"ALTER TABLE runs ADD COLUMN {col} TEXT")
         # подписка (SaaS): тариф + срок у пользователя
         user_cols = {row[1] for row in self._conn.execute("PRAGMA table_info(users)")}
         if user_cols:  # таблица users могла ещё не существовать на самых старых БД — её создаст _SCHEMA
@@ -383,10 +413,20 @@ class Storage:
     def save_report(self, report: ComparisonReport, user_id: int | None = None,
                     job_id: int | None = None) -> int:
         """Сохранить отчёт целиком и вернуть id прогона. `user_id` — владелец прогона
-        (None для CLI/системных), `job_id` — батч-задание, если прогон его часть."""
+        (None для CLI/системных), `job_id` — батч-задание, если прогон его часть.
+
+        P2-d: денормализуем cheapest_* + fastest_provider прямо в `runs`, чтобы
+        /api/runs и /history не подтягивали весь граф офферов для агрегатов."""
+        cheapest = report.cheapest
         cur = self._conn.execute(
-            "INSERT INTO runs (run_at, params_json, user_id, job_id) VALUES (?, ?, ?, ?)",
-            (report.run_at.isoformat(), report.params.model_dump_json(), user_id, job_id),
+            "INSERT INTO runs (run_at, params_json, user_id, job_id, "
+            "cheapest_price, cheapest_label, cheapest_provider, fastest_provider) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (report.run_at.isoformat(), report.params.model_dump_json(), user_id, job_id,
+             str(cheapest.price) if cheapest else None,
+             cheapest.label if cheapest else None,
+             cheapest.provider if cheapest else None,
+             report.fastest_provider),
         )
         run_id = int(cur.lastrowid)
         for result in report.results:
@@ -564,20 +604,87 @@ class Storage:
         reports = self._assemble(rows)
         return [(int(r["id"]), reports[int(r["id"])]) for r in rows]
 
+    def list_runs_with_status(self, limit: int = 50, owner_id: int | None = None) -> list[dict]:
+        """Для /api/runs (React-дашборд): агрегаты прогона + статусы площадок,
+        БЕЗ загрузки offers/hotel_offers/operator_offers.
+
+        P2-d: раньше list_reports тянул весь граф (десятки тысяч строк офферов
+        ради того, чтобы показать список из 50 прогонов с заголовками).
+        Теперь — два SELECT на список: один по runs (агрегаты денормализованы),
+        второй по provider_results (только success/error/provider — для бейджей).
+        """
+        if owner_id is None:
+            runs = self._conn.execute(
+                "SELECT id, run_at, params_json, cheapest_price, cheapest_label, "
+                "cheapest_provider, fastest_provider "
+                "FROM runs ORDER BY datetime(run_at) DESC, id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        else:
+            runs = self._conn.execute(
+                "SELECT id, run_at, params_json, cheapest_price, cheapest_label, "
+                "cheapest_provider, fastest_provider "
+                "FROM runs WHERE user_id = ? ORDER BY datetime(run_at) DESC, id DESC LIMIT ?",
+                (owner_id, limit),
+            ).fetchall()
+        if not runs:
+            return []
+        run_ids = [int(r["id"]) for r in runs]
+        # Один пакетный SELECT по provider_results: статус каждой площадки + успех.
+        placeholders = ",".join("?" * len(run_ids))
+        pr_rows = self._conn.execute(
+            f"SELECT run_id, provider, success, error "
+            f"FROM provider_results WHERE run_id IN ({placeholders})",  # noqa: S608
+            run_ids,
+        ).fetchall()
+        by_run: dict[int, list[dict]] = defaultdict(list)
+        for r in pr_rows:
+            by_run[int(r["run_id"])].append(
+                {"provider": r["provider"], "ok": bool(r["success"]), "error": r["error"]})
+        return [
+            {
+                "id": int(r["id"]),
+                "run_at": r["run_at"],
+                "params_json": r["params_json"],
+                "cheapest_price": r["cheapest_price"],
+                "cheapest_label": r["cheapest_label"],
+                "cheapest_provider": r["cheapest_provider"],
+                "fastest_provider": r["fastest_provider"],
+                "provider_status": by_run.get(int(r["id"]), []),
+            }
+            for r in runs
+        ]
+
     def list_runs(self, limit: int = 50, owner_id: int | None = None) -> list[RunSummary]:
         """Список последних прогонов (свежие сверху) с краткой сводкой.
-        `owner_id` (если задан) ограничивает выборку прогонами этого владельца."""
+        `owner_id` (если задан) ограничивает выборку прогонами этого владельца.
+
+        P2-d: читаем агрегаты из денормализованных колонок `runs`, не собирая
+        весь граф provider_results/offers (раньше /api/runs тянул десятки тысяч
+        строк ради cheapest_label и fastest_provider; теперь — один SELECT)."""
+        if owner_id is None:
+            rows = self._conn.execute(
+                "SELECT id, run_at, params_json, cheapest_price, cheapest_label, "
+                "cheapest_provider, fastest_provider "
+                "FROM runs ORDER BY datetime(run_at) DESC, id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                "SELECT id, run_at, params_json, cheapest_price, cheapest_label, "
+                "cheapest_provider, fastest_provider "
+                "FROM runs WHERE user_id = ? ORDER BY datetime(run_at) DESC, id DESC LIMIT ?",
+                (owner_id, limit),
+            ).fetchall()
         summaries: list[RunSummary] = []
-        for run_id, report in self.list_reports(limit=limit, owner_id=owner_id):
-            cheapest = report.cheapest
+        for r in rows:
+            price_s = r["cheapest_price"]
             summaries.append(
                 RunSummary(
-                    run_id=run_id,
-                    run_at=report.run_at,
-                    cheapest_label=cheapest.label if cheapest else None,
-                    cheapest_price=cheapest.price if cheapest else None,
-                    cheapest_provider=cheapest.provider if cheapest else None,
-                    fastest_provider=report.fastest_provider,
+                    run_id=int(r["id"]),
+                    run_at=datetime.fromisoformat(r["run_at"]),
+                    cheapest_label=r["cheapest_label"],
+                    cheapest_price=Decimal(price_s) if price_s else None,
+                    cheapest_provider=r["cheapest_provider"],
+                    fastest_provider=r["fastest_provider"],
                 )
             )
         return summaries
@@ -905,6 +1012,37 @@ class Storage:
     def delete_user_sessions(self, user_id: int) -> None:
         self._conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
         self._conn.commit()
+
+    # --- Audit log (P2-b) -------------------------------------------------------
+
+    def add_audit(self, *, actor_id: "int | None", actor_name: "str | None",
+                  action: str, target_user_id: "int | None" = None,
+                  target_label: "str | None" = None, details: "str | None" = None) -> int:
+        """Записать административное действие. НИКОГДА не клади в details значения
+        паролей/токенов/секретов — таблица доступна админу через /api/audit (когда)."""
+        cur = self._conn.execute(
+            "INSERT INTO audit_log (actor_id, actor_name, action, target_user_id, "
+            "target_label, details, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (actor_id, actor_name, action, target_user_id, target_label, details,
+             auth.utcnow_iso()))
+        self._conn.commit()
+        return cur.lastrowid or 0
+
+    def list_audit(self, *, limit: int = 100, target_user_id: "int | None" = None,
+                   actor_id: "int | None" = None) -> list[dict]:
+        """Последние N записей. Фильтры — точечно по цели и/или по актору."""
+        sql = "SELECT * FROM audit_log WHERE 1=1"
+        args: list = []
+        if target_user_id is not None:
+            sql += " AND target_user_id = ?"
+            args.append(target_user_id)
+        if actor_id is not None:
+            sql += " AND actor_id = ?"
+            args.append(actor_id)
+        sql += " ORDER BY id DESC LIMIT ?"
+        args.append(limit)
+        rows = self._conn.execute(sql, args).fetchall()
+        return [dict(r) for r in rows]
 
     def purge_expired_sessions(self) -> int:
         cur = self._conn.execute(

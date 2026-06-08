@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import DashboardLayout from "../components/DashboardLayout.jsx";
 import SearchForm from "../components/SearchForm.jsx";
 import SearchTerminal from "../components/SearchTerminal.jsx";
@@ -71,9 +71,12 @@ export default function SearchPage() {
     statusRef.current = status;
   }, [status]);
 
-  const pushLog = (msg, level = "info") =>
-    setLogs((prev) => [...prev, { id: ++logSeq, msg, level, ts: now() }]);
-  const setPhase = (p, phase) => setPhases((prev) => ({ ...prev, [p]: phase }));
+  // P3-a: useCallback стабилизирует ссылки → дочерние React.memo-компоненты
+  // (SearchForm, SearchTerminal, LiveViews) не пере-рендерятся на каждое SSE-событие.
+  const pushLog = useCallback((msg, level = "info") =>
+    setLogs((prev) => [...prev, { id: ++logSeq, msg, level, ts: now() }]), []);
+  const setPhase = useCallback((p, phase) =>
+    setPhases((prev) => ({ ...prev, [p]: phase })), []);
 
   const handleSubmit = (payload) => {
     if (status === "running") return;
