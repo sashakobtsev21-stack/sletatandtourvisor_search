@@ -174,6 +174,7 @@ export default function ResultsPage({ runId }) {
       <AnimatePresence>
         {shot && (
           <motion.div
+            role="dialog" aria-modal="true" aria-label={shot.cap}
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             onClick={() => setShot(null)}
             className="fixed inset-0 z-50 overflow-auto bg-black/90 p-4"

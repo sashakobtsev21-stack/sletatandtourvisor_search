@@ -135,6 +135,9 @@ toursearch grant-sub --username bob --days 30         # выдать/продл�
 | `TOURSEARCH_PROVIDER_TIMEOUT_S` | `180` | Жёсткий таймаут на одну площадку. |
 | `TOURSEARCH_PROVIDER_RETRIES` | `1` | Повтор площадки при случайном сбое (детерминированные отказы не повторяются). |
 | `TOURSEARCH_TEST_CONCURRENCY` | `4` | Параллелизм live‑прогона автотестов. |
+| `TOURSEARCH_RETENTION_DAYS` | `90` | Хранить прогоны/уведомления/гостевой расход N дней (0 = не удалять). Фоновая чистка раз в сутки + `VACUUM` раз в неделю. |
+| `TOURSEARCH_MAX_BODY_BYTES` | `262144` | Лимит размера HTTP‑тела (защита от memory‑bloat). 256 KB достаточно для любых валидных форм. |
+| `TOURSEARCH_HEALTHCHECK_TTL_S` | `60.0` | TTL‑кэш «всё зелено» health‑check (red результаты не кэшируются — сразу перепроверяются). |
 
 ### CLI
 
@@ -207,10 +210,69 @@ docs/                планы фаз, разбор для любителя, г
 
 ## Безопасность
 
-PBKDF2‑HMAC‑SHA256 пароли (stdlib); серверные сессии (в БД только sha256 токена, cookie httponly);
-CSRF (double‑submit + Origin); Secure‑cookie и HSTS вне localhost; анти‑брутфорс входа (rate‑limit
-по IP + лок‑аут по `username|ip` + анти‑enumeration); заголовки безопасности (CSP, X‑Frame‑Options
-DENY, nosniff, Referrer‑Policy); предохранитель от старта наружу без TLS. Подробно — `docs/AUTH_PLAN.md`.
+- **Пароли:** PBKDF2‑HMAC‑SHA256 600k итераций (OWASP 2023, stdlib), constant‑time compare.
+- **Сессии:** серверные (в БД только sha256 токена), cookie `httponly` + `samesite=lax`;
+  `Secure` и HSTS вне localhost. На logout очищаются `ts_session`/`ts_csrf`/`ts_device`
+  с теми же атрибутами (иначе Chrome не удаляет cookie в браузере).
+- **CSRF:** double‑submit (`X‑CSRF‑Token` ≡ cookie `ts_csrf`) + `Origin`‑проверка во ВСЕХ
+  режимах — multiuser, legacy cookie‑auth, гость. Bearer‑клиент (`Authorization: Bearer …`
+  в legacy‑режиме) освобождён от CSRF: браузеры Bearer автоматически не шлют, значит API‑скрипт
+  не CSRF‑вектор; этот путь оставлен для curl/CI без double‑submit.
+- **Анти‑брутфорс:** rate‑limit на IP + лок‑аут по `username|ip` + анти‑enumeration
+  (равное время ответа для несуществующего/неверного логина).
+- **Скриншоты выдачи (IDOR закрыт):** раздаются только через owner‑checked эндпоинты
+  `GET /api/runs/{run_id}/screenshot/{provider}` (только владелец прогона/admin) и
+  `GET /api/tests/screenshot/{filename}` (право `tests.view`). Прямой `/screenshots/*`
+  убран — раньше любой залогиненный/гость мог перебором микросекунд скачивать чужие выдачи.
+- **Owner‑check на SSE‑стриме поиска:** `/search/stream` и `/search/cancel` проверяют
+  владельца сессии — утёкший uuid токен сам по себе бесполезен.
+- **DoS‑caps:** ограничение размера тела HTTP (`TOURSEARCH_MAX_BODY_BYTES`, 256 KB по умолчанию)
+  + предел числа направлений в одном мультипоиске (50).
+- **Заголовки:** CSP, `X‑Frame‑Options: DENY`, `X‑Content‑Type‑Options: nosniff`, `Referrer‑Policy`.
+- **Предохранитель** от старта наружу без TLS.
+- **Зависимости:** CI‑гейты `pip-audit` (Python) и `npm audit --audit-level=high` (фронт) на
+  каждый push/PR — критические CVE не пропускают в `main`.
+
+Подробно — `docs/AUTH_PLAN.md`.
+
+### Деплой за reverse‑proxy
+
+При выставлении за nginx/HAProxy/прочее обязательно запускать uvicorn с
+`--proxy-headers --forwarded-allow-ips=<IP_прокси>`, иначе:
+- все запросы будут с `127.0.0.1` → IP‑rate‑limit на login заблочит ВСЕХ при первой же атаке;
+- без `--forwarded-allow-ips` (или с `*`) — `X-Forwarded-For` можно подделать → обход лимитов.
+
+Также рекомендуется выставить `TOURSEARCH_SECURE_COOKIES=1` (форс `Secure` cookie на 127.0.0.1
+если TLS терминируется в прокси). Минимальный пример nginx:
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:8000;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    client_max_body_size 1m;     # дублирует TOURSEARCH_MAX_BODY_BYTES в первой линии защиты
+}
+```
+
+### Liveness/Readiness probes
+
+- `GET /healthz` — процесс жив, event loop отвечает (без auth, без БД).
+- `GET /readyz` — БД доступна (`SELECT 1`). 503 если SQLite залочена/недоступна.
+
+### Резервная копия БД
+
+Все данные в одном файле SQLite (`toursearch.db`). Backup:
+
+```bash
+sqlite3 toursearch.db ".backup /backup/toursearch-$(date +%F).db"
+```
+
+Восстановление — простая замена файла при остановленном сервере. Учтите, что
+`TOURSEARCH_RETENTION_DAYS` удаляет старые прогоны/уведомления — после восстановления
+из старого бэкапа фоновый цикл может их удалить, если старше N дней; временно
+поставьте `TOURSEARCH_RETENTION_DAYS=0` для разбора.
 
 ## Тесты
 

@@ -81,7 +81,15 @@ export default function SearchTerminal({ logs = [], progress = 0, status = "idle
           {pct}%
         </motion.b>
       </div>
-      <div className="relative mb-5 h-2.5 overflow-hidden rounded-full bg-white/[0.06]">
+      <div
+        role="progressbar"
+        aria-label="Прогресс поиска"
+        aria-valuenow={Math.round(clamped)}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-busy={isRunning || undefined}
+        className="relative mb-5 h-2.5 overflow-hidden rounded-full bg-white/[0.06]"
+      >
         <motion.span
           className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-brand-deep via-brand to-ocean"
           initial={{ width: 0 }}
@@ -91,15 +99,19 @@ export default function SearchTerminal({ logs = [], progress = 0, status = "idle
         {/* бегущий блик поверх заполненной части, пока идёт поиск */}
         {isRunning && (
           <span
+            aria-hidden="true"
             className="absolute inset-y-0 left-0 animate-shimmer rounded-full bg-[length:200%_100%] bg-gradient-to-r from-transparent via-white/40 to-transparent"
             style={{ width: `${clamped}%` }}
           />
         )}
       </div>
 
-      {/* Терминал логов */}
+      {/* Терминал логов — aria-live=polite, чтобы screen reader зачитывал новые строки */}
       <div
         ref={scrollRef}
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions"
         className="relative flex-1 overflow-y-auto rounded-xl bg-[#070b1c]/80 p-3 font-mono text-xs leading-relaxed shadow-inset-terminal"
       >
         {logs.length === 0 ? (

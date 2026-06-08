@@ -37,8 +37,13 @@ export default function NotificationsBell() {
   useEffect(() => {
     if (!open) return;
     const onDoc = (e) => { if (!ref.current?.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if (e.key === "Escape") setOpen(false); };  // a11y: Esc закрывает
     document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
   }, [open]);
 
   const toggle = () => {
@@ -66,24 +71,32 @@ export default function NotificationsBell() {
     <div className="relative" ref={ref}>
       <button
         onClick={toggle}
+        aria-label={`Уведомления${unread > 0 ? ` (непрочитанных: ${unread})` : ""}`}
+        aria-haspopup="dialog"
+        aria-expanded={open}
         title="Уведомления"
-        className="relative flex items-center rounded-lg px-2.5 py-2 text-muted transition-colors hover:bg-white/5 hover:text-ink"
+        className="relative flex items-center rounded-lg px-2.5 py-2 text-muted transition-colors hover:bg-white/5 hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand"
       >
-        <Bell className="size-5" />
+        <Bell aria-hidden="true" className="size-5" />
         {unread > 0 && (
-          <span className="absolute -right-0.5 -top-0.5 grid min-w-[1.1rem] place-items-center rounded-full bg-brand px-1 text-[10px] font-bold text-white">
+          <span aria-hidden="true" className="absolute -right-0.5 -top-0.5 grid min-w-[1.1rem] place-items-center rounded-full bg-brand px-1 text-[10px] font-bold text-white">
             {unread > 9 ? "9+" : unread}
           </span>
         )}
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full z-50 mt-2 w-80 overflow-hidden rounded-xl border border-white/10 bg-[#0b1026] shadow-2xl ring-1 ring-black/40">
+        <div
+          role="dialog"
+          aria-modal="false"
+          aria-labelledby="notif-dialog-title"
+          className="absolute right-0 top-full z-50 mt-2 w-80 overflow-hidden rounded-xl border border-white/10 bg-[#0b1026] shadow-2xl ring-1 ring-black/40"
+        >
           <div className="flex items-center justify-between border-b border-white/10 px-4 py-2.5">
-            <span className="text-sm font-semibold text-ink">Уведомления</span>
+            <span id="notif-dialog-title" className="text-sm font-semibold text-ink">Уведомления</span>
             {items.some((n) => !n.is_read) && (
               <button onClick={markAll} className="flex items-center gap-1 text-xs text-muted transition-colors hover:text-ink">
-                <CheckCheck className="size-3.5" /> прочитать все
+                <CheckCheck aria-hidden="true" className="size-3.5" /> прочитать все
               </button>
             )}
           </div>
@@ -100,11 +113,14 @@ export default function NotificationsBell() {
                     n.is_read ? "opacity-60" : "",
                   ].join(" ")}
                 >
-                  <span className={`mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg ${
-                    n.kind === "batch_failed" ? "bg-rose-500/15 text-rose-300"
-                    : n.kind === "batch_partial" ? "bg-amber-500/15 text-amber-300"
-                    : "bg-emerald-500/15 text-emerald-300"
-                  }`}>
+                  <span
+                    aria-hidden="true"
+                    className={`mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg ${
+                      n.kind === "batch_failed" ? "bg-rose-500/15 text-rose-300"
+                      : n.kind === "batch_partial" ? "bg-amber-500/15 text-amber-300"
+                      : "bg-emerald-500/15 text-emerald-300"
+                    }`}
+                  >
                     <Layers className="size-3.5" />
                   </span>
                   <span className="min-w-0 flex-1">

@@ -359,6 +359,7 @@ export default function TestsPage() {
       {/* Лайтбокс: зум скриншота сайта */}
       {lightbox && (
         <div
+          role="dialog" aria-modal="true" aria-label="Скриншот сайта"
           onClick={() => setLightbox(null)}
           className="fixed inset-0 z-50 flex cursor-zoom-out items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
         >

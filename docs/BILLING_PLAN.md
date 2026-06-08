@@ -18,7 +18,7 @@
 ## Архитектура
 - **`users.searches_left`** (DEFAULT 5) — остаток. `payments(... credits ...)` — покупки (идемпотентность).
 - **`billing.py`:** `has_search_access(user)` (admin ИЛИ >0), `searches_left(user)` (None=безлимит),
-  `PLANS`, `FREE_CREDITS=5`, `ANON_CREDITS=3`, `PROVIDER`.
+  `PLANS`, `FREE_CREDITS=5`, `ANON_CREDITS=2`, `PROVIDER`.
 - **`storage`:** `try_consume_search` (атомарно, `WHERE searches_left>0`), `refund_search`, `add_credits`,
   `create/complete_payment` (succeeded → `add_credits` один раз).
 - **Гейт:** middleware `web_auth` — `search.run` без остатка → **402** (кроме `/search/cancel`). Списание —
