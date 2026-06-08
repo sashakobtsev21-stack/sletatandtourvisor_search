@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import AppShell from "./components/AppShell.jsx";
+import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import SearchPage from "./pages/SearchPage.jsx";
 import LoginPage from "./pages/LoginPage.jsx";
 import LandingPage from "./pages/LandingPage.jsx";
@@ -70,9 +71,14 @@ export default function App() {
   else if (route.startsWith("/tests")) page = <TestsPage />;
   else page = <SearchPage />;
 
+  // ErrorBoundary поверх Suspense: ловит throw из любой лениво-загруженной страницы
+  // (раньше → белый экран). resetKey=route → при переходе на другой маршрут показанная
+  // ошибка сбрасывается, пользователь не залипает в fallback-UI после смены страницы.
   return (
     <AppShell route={route}>
-      <Suspense fallback={<PageFallback />}>{page}</Suspense>
+      <ErrorBoundary resetKey={route}>
+        <Suspense fallback={<PageFallback />}>{page}</Suspense>
+      </ErrorBoundary>
     </AppShell>
   );
 }
