@@ -5,6 +5,12 @@
 from toursearch.web_tests import CAT_ORDER, category, ordered_groups
 
 
+def test_category_empty_string_falls_back_to_fast():
+    """Регрессия (audit-gap): пустая строка не начинается с health/live → fast.
+    Поведение тихое — без теста никто бы не узнал, что эта ветка достигается."""
+    assert category("") == "fast"
+
+
 def test_category_fast_for_non_live():
     assert category("Дата") == "fast"
     assert category("Питание") == "fast"

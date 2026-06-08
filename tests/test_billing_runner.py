@@ -77,6 +77,48 @@ def test_no_refund_for_admin_pseudo_consume(tmp_path):
 
 # --------- refund failure logging формат ---------
 
+# --------- device-path (гостевой расход) ---------
+
+def test_credit_session_device_path_consume_and_refund(tmp_path):
+    """Регрессия (test-coverage audit): гость через CreditSession.
+    consume → exit без mark_done → refund_anon возвращает использование."""
+    db = str(tmp_path / "br.db")
+    # Прогреваем БД (создание Storage инициализирует схему)
+    with Storage(db) as s:
+        s.try_consume_anon("dev1", "1.1.1.1", device_limit=3)  # used=1
+    ctx = BillingContext(device="dev1", ip="1.1.1.1")
+    assert ctx.consumes is True
+    with CreditSession(db, ctx) as cs:
+        assert cs.consume() is True            # used=2
+        # mark_done НЕ вызываем → exit делает refund_anon
+    with Storage(db) as s:
+        row = s._conn.execute("SELECT used FROM anon_usage WHERE device = ?", ("dev1",)).fetchone()
+    assert int(row[0]) == 1, "после refund used должен вернуться к 1 (было до consume)"
+
+
+def test_credit_session_device_path_mark_done_keeps_consumption(tmp_path):
+    """гость + mark_done → расход остаётся (refund не делается)."""
+    db = str(tmp_path / "br.db")
+    with Storage(db) as s:
+        s.try_consume_anon("dev2", "2.2.2.2", device_limit=3)  # used=1
+    ctx = BillingContext(device="dev2", ip="2.2.2.2")
+    with CreditSession(db, ctx) as cs:
+        assert cs.consume() is True            # used=2
+        cs.mark_done()                          # успех → НЕ возвращаем
+    with Storage(db) as s:
+        row = s._conn.execute("SELECT used FROM anon_usage WHERE device = ?", ("dev2",)).fetchone()
+    assert int(row[0]) == 2, "после mark_done расход должен сохраниться"
+
+
+def test_billing_context_refund_no_op_when_nothing_set(tmp_path):
+    """BillingContext() (без device и user_id) — refund должен быть no-op, не падать."""
+    db = str(tmp_path / "br.db")
+    ctx = BillingContext()
+    # просто не должно бросить — никаких side-effects
+    with Storage(db) as s:
+        ctx.refund(s)
+
+
 def test_refund_failure_logged_with_outer_exc_label(tmp_path, monkeypatch, caplog):
     """P1 из ревью: при сбое refund в __exit__ exc в format string — это причина
     выхода (outer_exc), а не сама refund-ошибка. После фикса формат явно говорит

@@ -570,6 +570,48 @@ def test_vacuum_succeeds_after_purge(tmp_path):
     storage.close()
 
 
+def test_list_runs_with_status_handles_null_aggregates(tmp_path):
+    """Регрессия (audit-gap): прогон, где НИ ОДНОЙ priced_items не нашлось
+    (всё упало), сохраняется с cheapest_* = NULL. list_runs_with_status
+    должен корректно вернуть None в этих полях, а не упасть."""
+    storage = Storage(tmp_path / "t.db")
+    uid = storage.create_user("u", "p", iters=1000)
+    rep = ComparisonReport(
+        params=_report().params,
+        run_at=datetime.now(),
+        results=[ProviderResult(provider="sletat", success=False, duration_seconds=1.0,
+                                error="всё упало")],
+    )
+    rid = storage.save_report(rep, user_id=uid)
+    rows = storage.list_runs_with_status(limit=10, owner_id=uid)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["id"] == rid
+    assert r["cheapest_price"] is None
+    assert r["cheapest_label"] is None
+    assert r["cheapest_provider"] is None
+    assert r["fastest_provider"] is None
+    # статус площадок — должен быть один с ok=False
+    assert len(r["provider_status"]) == 1
+    assert r["provider_status"][0]["ok"] is False
+    storage.close()
+
+
+def test_audit_log_with_null_actor(tmp_path):
+    """Регрессия (audit-gap): системное действие без actor (cron retention, init)
+    должно записываться с actor_id=None / actor_name=None."""
+    storage = Storage(tmp_path / "t.db")
+    aid = storage.add_audit(actor_id=None, actor_name=None, action="system_purge",
+                            target_user_id=None, target_label=None,
+                            details="purge_old: 50 runs")
+    assert aid > 0
+    rows = storage.list_audit()              # без фильтров — последние N
+    assert len(rows) == 1
+    assert rows[0]["actor_id"] is None and rows[0]["actor_name"] is None
+    assert rows[0]["action"] == "system_purge"
+    storage.close()
+
+
 def test_jobs_interrupted_sweep(tmp_path):
     storage = Storage(tmp_path / "t.db")
     uid = storage.create_user("u", "p", iters=1000)

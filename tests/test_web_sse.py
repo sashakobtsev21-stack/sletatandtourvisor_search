@@ -82,6 +82,13 @@ def test_emit_frame_fanouts_to_subscribers():
     assert ev["type"] == "frame" and ev["provider"] == "sletat" and ev["data"] == "DATA"
 
 
+def test_cap_tokens_limit_zero_clears_all():
+    """Регрессия (audit-gap): cap_tokens(store, limit=0) очищает всё (while > 0)."""
+    store = {"a": 1, "b": 2, "c": 3}
+    cap_tokens(store, limit=0)
+    assert store == {}
+
+
 def test_cap_tokens_drops_oldest():
     """cap_tokens сохраняет ПОСЛЕДНИЕ N токенов, выкидывает старые (FIFO по insert order)."""
     store = {f"t{i}": SearchSession(params=_params(), chosen=["sletat"]) for i in range(70)}

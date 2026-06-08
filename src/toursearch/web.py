@@ -127,7 +127,7 @@ _TEMPLATES.env.filters["price"] = _fmt_price
 # зависимости. Сохраняем алиасы и реэкспорт под старыми именами для совместимости
 # с тестами и Jinja-форм-обработчиком ниже.
 from toursearch.web_forms import (  # noqa: E402 — после длинного блока импортов специально
-    MAX_DATE_SPAN_DAYS, parse_price_input, parse_search_params,
+    MAX_DATE_SPAN_DAYS, parse_price_input, parse_search_params, safe_screenshot_path,
 )
 __all__ = ["create_app", "MAX_DATE_SPAN_DAYS", "parse_search_params"]
 
@@ -652,15 +652,17 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
                     session.done = True
                     _schedule_session_cleanup(token)
                 else:
-                    # Списываем 1 поиск АТОМАРНО (только обычный юзер). Если не осталось — не
-                    # запускаем (страховка от гонки / прямого обращения мимо prepare-проверки).
+                    # Списываем 1 поиск АТОМАРНО через BillingContext — единая логика с
+                    # do_search / _run_job (раньше было 3 копии: try_consume_anon/search/__).
+                    # CreditSession здесь НЕ используется: его __exit__ авто-refund сработал
+                    # бы при выходе из этого синхронного блока — а реальный refund нужен в
+                    # _run_search_task (background task), который ещё не стартовал. Поэтому
+                    # consume/refund разнесены руками: try_consume — здесь, refund — там.
                     if session.consume:
+                        b_ctx = BillingContext(user_id=session.user_id, device=session.device,
+                                               ip=session.ip)
                         with Storage(db_path) as s:
-                            if session.device is not None:        # гость — расход по устройству (анонимно)
-                                session.consumed = s.try_consume_anon(
-                                    session.device, session.ip or "", device_limit=billing.ANON_CREDITS)
-                            else:                                  # обычный юзер — кредит из остатка
-                                session.consumed = s.try_consume_search(session.user_id)
+                            session.consumed = b_ctx.try_consume(s)
                     if session.consume and not session.consumed:
                         await active_runs.release()      # задача не стартовала — отпускаем слот
                         _emit(session, {"type": "error",
@@ -764,12 +766,10 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
         pr = next((r for r in report.results if r.provider == provider), None)
         if pr is None or not pr.screenshot_path:
             raise HTTPException(status_code=404, detail="Скриншот не найден")
-        shot = Path(pr.screenshot_path).resolve()
-        try:
-            shot.relative_to(screenshots_dir)
-        except ValueError:                                     # путь вне screenshots/ — отбой
-            raise HTTPException(status_code=404, detail="Скриншот не найден") from None
-        if not shot.is_file():
+        # Доверяем строке из БД, но проверяем что файл реально внутри screenshots_dir
+        # (защита от повреждённой записи в БД).
+        shot = safe_screenshot_path(screenshots_dir, pr.screenshot_path, strict_basename=False)
+        if shot is None:
             raise HTTPException(status_code=404, detail="Скриншот не найден")
         return FileResponse(shot, media_type="image/png")
 

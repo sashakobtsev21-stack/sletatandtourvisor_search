@@ -1,4 +1,4 @@
-"""Разбор HTML-формы поиска в SearchParams + общие константы для веб-слоя.
+"""Разбор HTML-формы поиска в SearchParams + общие веб-утилиты.
 
 Вынесено из web.py (P1-c 2026-06), чтобы разорвать обратную зависимость:
 раньше web_jobs.py делал `from toursearch.web import parse_search_params`
@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from datetime import date
 from decimal import Decimal
+from pathlib import Path
 
 from toursearch.models import SearchParams
 
@@ -71,3 +72,35 @@ def parse_search_params(
     except ValueError as exc:
         raise ValueError(f"Некорректные параметры поиска: {exc}") from exc
     return params, chosen
+
+
+def safe_screenshot_path(base_dir: Path, name: str, *, strict_basename: bool = True) -> Path | None:
+    """Path-traversal-безопасное резолвинг файла внутри `base_dir`.
+
+    Возвращает резолвленный Path, если файл существует И лежит внутри `base_dir`;
+    иначе None. До этого та же 3-шаговая логика была продублирована в двух местах:
+    - `web.py:api_run_screenshot` (по записи из БД, доверяем строке);
+    - `web_tests.py:api_test_screenshot` (filename из URL, strict_basename=True
+      чтобы отбить `../` и url-encoded слеши).
+
+    `strict_basename=True` — `name != Path(name).name` отбивается сразу: filename
+    не должен содержать ни `/`, ни `\\`, ни компоненты пути после decode.
+    """
+    if strict_basename:
+        clean = Path(name).name
+        if not clean or clean != name:
+            return None
+        target = base_dir / clean
+    else:
+        target = Path(name)
+    try:
+        resolved = target.resolve()
+    except (OSError, RuntimeError):
+        return None
+    try:
+        resolved.relative_to(base_dir)
+    except ValueError:
+        return None
+    if not resolved.is_file():
+        return None
+    return resolved

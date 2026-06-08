@@ -49,6 +49,29 @@ async def test_storage_op_returns_value(tmp_path):
     assert rep.params.destination_country == "Турция"
 
 
+async def test_storage_op_rejects_async_function(tmp_path):
+    """Регрессия (self-review P1): async-функция переданная в storage_op возвращает
+    coroutine, которая молча отбрасывается (None вместо результата). Теперь явный TypeError."""
+    db = str(tmp_path / "t.db")
+
+    async def boom(s):
+        return 42  # никогда не запустится
+
+    with pytest.raises(TypeError, match="async-функция"):
+        await storage_op(db, boom)
+
+
+async def test_storage_op_propagates_exception_from_sync_fn(tmp_path):
+    """Sync-функция бросает → storage_op пробрасывает наружу через await."""
+    db = str(tmp_path / "t.db")
+
+    def kaboom(s):
+        raise RuntimeError("sync explosion")
+
+    with pytest.raises(RuntimeError, match="sync explosion"):
+        await storage_op(db, kaboom)
+
+
 async def test_storage_op_does_not_block_event_loop(tmp_path):
     """Пока save_report выполняется в worker-thread, другая корутина продолжает крутиться.
     Если бы blocked event loop — counter застрял бы до завершения write."""

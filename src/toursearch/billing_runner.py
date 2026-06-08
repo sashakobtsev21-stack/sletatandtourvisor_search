@@ -33,10 +33,10 @@ class BillingContext:
     * иначе `user_id` + `user` — обычный юзер (admin/vip/подписка → consumes=False);
     * `ip` нужен только гостю (для cap по IP при сбросе device-cookie).
     """
-    user_id: "int | None" = None
-    device: "str | None" = None
-    user: "dict | None" = None
-    ip: "str | None" = None
+    user_id: int | None = None
+    device: str | None = None
+    user: dict | None = None
+    ip: str | None = None
 
     @property
     def consumes(self) -> bool:
@@ -46,12 +46,21 @@ class BillingContext:
         return billing.consumes_credit(self.user)
 
     def try_consume(self, storage: Storage) -> bool:
-        """Атомарное списание. True — списано (нужен парный refund при сбое)."""
+        """Атомарное списание. True — списано (нужен парный refund при сбое).
+
+        Семантика `self.user`:
+        * передан и НЕ обычный юзер (admin/vip/подписка) → псевдо-успех (refund=no-op);
+        * передан и обычный юзер → пытаемся списать;
+        * НЕ передан (user=None) при user_id != None → доверяем caller'у, который уже
+          принял решение «списываем» (как делает SSE через session.consume).
+        """
         if self.device is not None:
             return storage.try_consume_anon(
                 self.device, self.ip or "", device_limit=billing.ANON_CREDITS)
-        if not billing.consumes_credit(self.user):
-            return True            # admin/vip/подписка — псевдо-успех, refund не нужен
+        if self.user_id is None:
+            return True            # нечего списывать (нет ни device, ни user)
+        if self.user is not None and not billing.consumes_credit(self.user):
+            return True            # admin/vip/подписка — псевдо-успех
         return storage.try_consume_search(self.user_id)
 
     def refund(self, storage: Storage) -> None:

@@ -25,6 +25,7 @@ from fastapi.templating import Jinja2Templates
 
 from toursearch.providers import list_providers
 from toursearch.testkit import REGISTRY, run_selected
+from toursearch.web_forms import safe_screenshot_path
 from toursearch.web_sse import cap_tokens
 
 # Порядок прогона/показа: быстрые и health — первыми; live — по смыслу.
@@ -91,29 +92,24 @@ def register_tests_panel(
     *,
     screenshots_dir: Path,
     templates: Jinja2Templates,
+    pending: dict[str, list[str]] | None = None,
 ) -> None:
     """Навесить эндпоинты тестовой панели на приложение.
 
     `screenshots_dir` — резолвленная папка для path-traversal-защиты;
-    `templates` — Jinja-окружение (для legacy-страницы `/tests`).
+    `templates` — Jinja-окружение (для legacy-страницы `/tests`);
+    `pending` — опциональный inject для тестов (по умолчанию свежий dict).
     """
-    pending: dict[str, list[str]] = {}
+    if pending is None:
+        pending = {}
 
     @app.get("/api/tests/screenshot/{filename}")
     async def api_test_screenshot(request: Request, filename: str):
         """Скриншот теста. Permission `tests.view` уже проверен middleware (см.
-        _required_permission в web_auth). filename берётся как имя без пути — даже если
-        кто-то засабмитит `../`, Path(...).name его срежет. Дополнительно проверяем,
-        что файл реально внутри screenshots/ — на случай экзотики."""
-        name = Path(filename).name
-        if not name or name != filename:
-            raise HTTPException(status_code=404, detail="Скриншот не найден")
-        shot = (screenshots_dir / name).resolve()
-        try:
-            shot.relative_to(screenshots_dir)
-        except ValueError:
-            raise HTTPException(status_code=404, detail="Скриншот не найден") from None
-        if not shot.is_file():
+        _required_permission в web_auth). filename отбивается через strict_basename:
+        даже после url-decode `../` или слешей внутри — отбой."""
+        shot = safe_screenshot_path(screenshots_dir, filename, strict_basename=True)
+        if shot is None:
             raise HTTPException(status_code=404, detail="Скриншот не найден")
         return FileResponse(shot, media_type="image/png")
 
@@ -176,7 +172,14 @@ def register_tests_panel(
             async def emit(event: dict) -> None:
                 await queue.put(event)
 
-            task = asyncio.create_task(run_selected(ids, emit))
+            # Регистрируем через app.state.bg_tasks — на shutdown lifespan
+            # корректно отменит (раньше был bare asyncio.create_task → orphan-task
+            # на abrupt-shutdown во время длинного тестового прогона).
+            bg = getattr(app.state, "bg_tasks", None)
+            if bg is not None:
+                task = bg.spawn(run_selected(ids, emit), name=f"tests-stream:{token[:8]}")
+            else:                                              # fallback для тестов без lifespan
+                task = asyncio.create_task(run_selected(ids, emit))
             while True:
                 event = await queue.get()
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"

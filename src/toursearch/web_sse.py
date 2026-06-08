@@ -74,16 +74,16 @@ class SearchSession:
     """
 
     params: SearchParams
-    chosen: "list[str] | None"
-    user_id: "int | None" = None                     # владелец прогона (для истории по юзеру)
+    chosen: list[str] | None
+    user_id: int | None = None                       # владелец прогона (для истории по юзеру)
     consume: bool = False                             # списывать ли поиск (обычный юзер; не admin/локально)
     consumed: bool = False                            # списали ли (для возврата при сбое)
-    device: "str | None" = None                       # id устройства гостя → анонимный расход
-    ip: "str | None" = None                           # ip гостя (мягкий анти-абьюз при сбросе cookie)
+    device: str | None = None                         # id устройства гостя → анонимный расход
+    ip: str | None = None                             # ip гостя (мягкий анти-абьюз при сбросе cookie)
     events: list = field(default_factory=list)        # все НЕ-кадровые события (для переигровки)
     frames: dict = field(default_factory=dict)        # провайдер → последний кадр трансляции
     subscribers: set = field(default_factory=set)     # очереди активных SSE-соединений
-    task: "asyncio.Task | None" = None
+    task: asyncio.Task | None = None
     done: bool = False
     started: bool = False
 

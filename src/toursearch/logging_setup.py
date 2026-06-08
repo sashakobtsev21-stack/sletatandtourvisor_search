@@ -48,20 +48,24 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, ensure_ascii=False)
 
 
-def configure_logging(level: int = logging.INFO) -> None:
+def configure_logging(level: int = logging.INFO, *, fmt: str | None = None) -> None:
     """Идемпотентная настройка корневого логгера (семантика как у logging.basicConfig).
 
     Если на корневом логгере уже есть обработчики (тесты с caplog, повторный вызов
     create_app, embedded usage) — НЕ перетираем их. Это важно для тестового captura.
-    Иначе ставим один stdout-handler с JSON-форматом (если TOURSEARCH_LOG_FORMAT=json)
-    или с человекочитаемым (по умолчанию).
+    Иначе ставим один stdout-handler с JSON-форматом (если TOURSEARCH_LOG_FORMAT=json
+    или передан fmt='json') или с человекочитаемым (по умолчанию).
+
+    `fmt` — явная перегрузка env-переменной для тестов / embedded-конфигурации
+    (allowed: 'text' | 'json'); если None — читаем `TOURSEARCH_LOG_FORMAT`.
     """
     root = logging.getLogger()
     if root.handlers:                          # уже сконфигурировано — не трогаем
         if root.level == 0 or root.level > level:
             root.setLevel(level)
         return
-    fmt = (os.environ.get("TOURSEARCH_LOG_FORMAT") or "text").strip().lower()
+    if fmt is None:
+        fmt = (os.environ.get("TOURSEARCH_LOG_FORMAT") or "text").strip().lower()
     handler = logging.StreamHandler(sys.stdout)
     if fmt == "json":
         handler.setFormatter(JsonFormatter())

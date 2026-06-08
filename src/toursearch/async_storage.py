@@ -15,6 +15,7 @@ same-thread по умолчанию) — поэтому передаём db_path
 from __future__ import annotations
 
 import asyncio
+import inspect
 from typing import Callable, TypeVar
 
 from toursearch.storage import Storage
@@ -29,9 +30,18 @@ async def storage_op(db_path: str, fn: Callable[[Storage], T]) -> T:
 
         run_id = await storage_op(db_path, lambda s: s.save_report(report, user_id=uid))
 
-    Лямбды/callable должны быть синхронными. Если нужна несколько последовательных
-    операций — сложите их в одну функцию (одно открытие Storage, одна транзакция).
+    Лямбды/callable должны быть СИНХРОННЫМИ. async-функции отбиваются TypeError
+    на входе — иначе их возвращаемая coroutine будет молча отброшена, и storage_op
+    вернёт None вместо ожидаемого результата (silent data loss).
+
+    Если нужно несколько последовательных операций — сложите их в одну функцию
+    (одно открытие Storage, одна транзакция).
     """
+    if inspect.iscoroutinefunction(fn):
+        raise TypeError(
+            "storage_op принимает только синхронную функцию (fn(storage) -> T). "
+            f"Передана async-функция {getattr(fn, '__qualname__', fn)!r} — "
+            "её результат был бы потерян (coroutine без await).")
     def _run() -> T:
         with Storage(db_path) as s:
             return fn(s)

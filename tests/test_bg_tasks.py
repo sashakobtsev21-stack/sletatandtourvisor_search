@@ -80,6 +80,76 @@ async def test_list_names_shows_live_only():
     await bg.cancel_all(timeout=1.0)
 
 
+async def test_json_formatter_includes_exception_traceback():
+    """Регрессия (audit-gap): JsonFormatter должен включать exc-field для записей
+    с exc_info (logger.exception). Раньше теста не было — формат мог сломаться тихо."""
+    import io
+    import json
+    import logging
+    from toursearch.logging_setup import JsonFormatter
+
+    log = logging.getLogger("test.json_exc")
+    buf = io.StringIO()
+    h = logging.StreamHandler(buf)
+    h.setFormatter(JsonFormatter())
+    log.addHandler(h)
+    log.setLevel(logging.ERROR)
+    try:
+        try:
+            raise ValueError("boom123")
+        except ValueError:
+            log.exception("failed")
+    finally:
+        log.removeHandler(h)
+    payload = json.loads(buf.getvalue().strip().split("\n")[0])
+    assert payload["level"] == "ERROR"
+    assert payload["msg"] == "failed"
+    assert "exc" in payload
+    assert "ValueError" in payload["exc"] and "boom123" in payload["exc"]
+
+
+async def test_configure_logging_preserves_existing_handlers():
+    """Регрессия (audit-gap): configure_logging НЕ должна перетирать handlers
+    (иначе caplog в тестах перестанет работать). Семантика как у basicConfig."""
+    import logging
+    from toursearch.logging_setup import configure_logging
+
+    root = logging.getLogger()
+    sentinel = logging.NullHandler()
+    root.addHandler(sentinel)
+    before = list(root.handlers)
+    try:
+        configure_logging(level=logging.WARNING)
+        # Тот же самый list of handlers; новые не добавлены
+        assert root.handlers == before
+    finally:
+        root.removeHandler(sentinel)
+
+
+async def test_configure_logging_explicit_fmt_overrides_env(monkeypatch):
+    """P3: явный fmt='json' перегружает env (для embedded-конфигурации/тестов)."""
+    import logging
+    from toursearch.logging_setup import JsonFormatter, configure_logging
+
+    monkeypatch.setenv("TOURSEARCH_LOG_FORMAT", "text")
+    # Очистить корневой логгер чтобы тест прошёл через ветку «нет handlers»
+    root = logging.getLogger()
+    saved = list(root.handlers)
+    for h in saved:
+        root.removeHandler(h)
+    try:
+        configure_logging(fmt="json")
+        added = [h for h in root.handlers if h not in saved]
+        assert added, "должен быть добавлен новый handler"
+        assert isinstance(added[0].formatter, JsonFormatter)
+    finally:
+        for h in list(root.handlers):
+            if h not in saved:
+                root.removeHandler(h)
+        for h in saved:
+            root.addHandler(h)
+
+
 async def test_json_formatter_outputs_object():
     """Smoke на JsonFormatter: каждая запись = валидный JSON с полями ts/level/logger/msg."""
     import io
