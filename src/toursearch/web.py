@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import contextvars
 import json
-import logging
 import os
 import uuid
-from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -21,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from toursearch import billing, refdata
+from toursearch.async_storage import storage_op
 from toursearch.billing_runner import BillingContext, CreditSession
 from toursearch.healthcheck import gate_passed, run_health_check
 from toursearch.models import SearchParams, is_not_applicable_error
@@ -100,94 +98,19 @@ class ConcurrencySlot:
         self._n = n
 
 
-_run_token_ctx: "contextvars.ContextVar[str | None]" = contextvars.ContextVar(
-    "toursearch_run_token", default=None
+# SSE-машинерия (LogEmitHandler, SearchSession, emit/emit_frame, RunTokenCtx, ...)
+# вынесена в web_sse.py (P3-x от 2026-06). Имена с подчёркиванием — алиасы для
+# сохранения существующих внутренних обращений (handlers ссылаются на _SearchSession
+# и т.п.).
+from toursearch.web_sse import (  # noqa: E402 — после длинного блока импортов
+    TERMINAL_EVENTS as _TERMINAL_EVENTS,
+    LogEmitHandler as _LogEmitHandler,
+    RunTokenCtx as _run_token_ctx,
+    SearchSession as _SearchSession,
+    cap_tokens as _cap_tokens,
+    emit as _emit,
+    emit_frame as _emit_frame,
 )
-
-
-class _LogEmitHandler(logging.Handler):
-    """Перехватывает записи логов toursearch.* СВОЕГО прогона и отдаёт их через колбэк.
-
-    Хендлер висит на общем логгере `toursearch`, поэтому при параллельных поисках их
-    несколько. Чтобы логи не перетекали между прогонами, пишем только записи, помеченные
-    нашим токеном (через `_run_token_ctx`, выставленный в задаче поиска). Колбэк кладёт
-    событие в буфер прогона и рассылает его активным SSE-подписчикам.
-    """
-
-    def __init__(self, emit_cb, token: str) -> None:
-        super().__init__()
-        self.emit_cb = emit_cb
-        self.token = token
-
-    def emit(self, record: logging.LogRecord) -> None:
-        if _run_token_ctx.get() != self.token:
-            return
-        try:
-            self.emit_cb({"type": "log", "level": record.levelname, "msg": record.getMessage()})
-        except Exception:
-            pass
-
-
-def _cap_tokens(store: dict, limit: int = 64) -> None:
-    """Ограничить рост словаря токенов: если клиент сделал /prepare, но так и не
-    подключил стрим, запись иначе висела бы вечно. Держим последние `limit`
-    (обычный dict сохраняет порядок вставки → выкидываем самые старые)."""
-    while len(store) > limit:
-        store.pop(next(iter(store)), None)
-
-
-# --- Сессия живого поиска: переживает обрыв SSE-соединения (увод вкладки). ---
-@dataclass
-class _SearchSession:
-    """Состояние одного прогона поиска, НЕ привязанное к SSE-соединению.
-
-    Поиск идёт фоновой задачей и пишет события в `events` (+ последний кадр трансляции на
-    площадку — в `frames`), одновременно рассылая их активным подписчикам (`subscribers`).
-    Клиент, который переподключился (вернулся на вкладку), получает «переигровку»
-    events/frames — полное состояние на «сейчас» — и затем продолжение в реальном времени.
-    """
-
-    params: SearchParams
-    chosen: "list[str] | None"
-    user_id: "int | None" = None                     # владелец прогона (для истории по юзеру)
-    consume: bool = False                             # списывать ли поиск (обычный юзер; не admin/локально)
-    consumed: bool = False                            # списали ли (для возврата при сбое)
-    device: "str | None" = None                       # id устройства гостя → анонимный расход (не по юзеру)
-    ip: "str | None" = None                           # ip гостя (мягкий анти-абьюз очистки cookie)
-    events: list = field(default_factory=list)      # все НЕ-кадровые события (для переигровки)
-    frames: dict = field(default_factory=dict)       # провайдер → последний кадр трансляции
-    subscribers: set = field(default_factory=set)    # очереди активных SSE-соединений
-    task: "asyncio.Task | None" = None
-    done: bool = False
-    started: bool = False
-
-
-_TERMINAL_EVENTS = {"done", "error", "cancelled", "gate_failed"}
-_MAX_LOG_EVENTS = 1000  # кап буфера событий: лог прогона невелик, но страхуемся от роста
-
-
-def _emit(session: _SearchSession, event: dict) -> None:
-    """Событие → буфер прогона (для переигровки) + всем активным подписчикам."""
-    session.events.append(event)
-    if len(session.events) > _MAX_LOG_EVENTS:
-        del session.events[: len(session.events) - _MAX_LOG_EVENTS]
-    for q in list(session.subscribers):
-        try:
-            q.put_nowait(event)
-        except Exception:
-            pass
-
-
-def _emit_frame(session: _SearchSession, provider: str, data: str) -> None:
-    """Кадр трансляции площадки: храним только ПОСЛЕДНИЙ по площадке (чтобы буфер не
-    распухал от base64-картинок) и рассылаем активным подписчикам."""
-    session.frames[provider] = data
-    ev = {"type": "frame", "provider": provider, "data": data}
-    for q in list(session.subscribers):
-        try:
-            q.put_nowait(ev)
-        except Exception:
-            pass
 
 
 def _fmt_price(value) -> str:
@@ -344,17 +267,16 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
     async def _retention_loop() -> None:
         # Период — 24ч; VACUUM раз в 7 итераций (раз в неделю). Сначала 60с задержка,
         # чтобы старт сервера был быстрым и БД не блокировалась при первом запуске.
+        # purge_old (каскадные DELETE) и VACUUM — тяжёлые, через worker-thread.
         cycle = 0
         while True:
             try:
                 await asyncio.sleep(60.0 if cycle == 0 else 24 * 3600)
-                with Storage(db_path) as s:
-                    counts = s.purge_old(retention_days)
+                counts = await storage_op(db_path, lambda s: s.purge_old(retention_days))
                 if any(counts.values()):
                     _retention_log.info("purge_old(%sd): %s", retention_days, counts)
                 if cycle > 0 and cycle % 7 == 0:
-                    with Storage(db_path) as s:
-                        s.vacuum()
+                    await storage_op(db_path, lambda s: s.vacuum())
                     _retention_log.info("vacuum выполнен")
                 cycle += 1
             except asyncio.CancelledError:
@@ -555,8 +477,8 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
                         request, "gate_failed.html", {"health": health}
                     )
                 report = await run_search(params, providers=chosen, headless=True)
-                with Storage(db_path) as storage:
-                    run_id = storage.save_report(report, user_id=uid)
+                # Heavy write — в worker-thread, чтобы не блокировать event loop под нагрузкой
+                run_id = await storage_op(db_path, lambda s: s.save_report(report, user_id=uid))
                 cs.mark_done()                                       # работа сделана — refund НЕ нужен
                 return _TEMPLATES.TemplateResponse(
                     request, "results.html", {"report": report, "run_id": run_id}
@@ -622,8 +544,9 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
                 return
             _emit(session, {"type": "log", "level": "INFO", "msg": "Гейт пройден. Запускаю поиск на площадках…"})
             report = await run_search(session.params, providers=session.chosen, headless=True, on_frame=on_frame)
-            with Storage(db_path) as storage:
-                run_id = storage.save_report(report, user_id=session.user_id)
+            # Heavy write — в worker-thread (раньше блокировал event loop SSE-стрима)
+            run_id = await storage_op(
+                db_path, lambda s: s.save_report(report, user_id=session.user_id))
             done_ev = {"type": "done", "run_id": run_id}
             if session.device is not None:  # гостю нет доступа к /api/runs — отдаём отчёт прямо в событии
                 done_ev["report"] = _report_dict(report, run_id)

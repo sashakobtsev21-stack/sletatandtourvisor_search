@@ -21,6 +21,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from toursearch import auth, billing
+from toursearch.async_storage import storage_op
 from toursearch.billing_runner import BillingContext, CreditSession
 from toursearch.healthcheck import gate_passed, run_health_check
 from toursearch.models import SearchParams
@@ -108,8 +109,11 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
                     try:
                         sp = base.model_copy(update={"destination_country": country})
                         report = await run_search(sp, providers=providers, headless=True)
-                        with Storage(db_path) as s:
-                            s.save_report(report, user_id=user_id, job_id=job_id)
+                        # Heavy write — worker-thread (раньше save_report блокировал loop
+                        # на N×M INSERT'ов внутри батч-цикла, влияло на параллельные стримы).
+                        await storage_op(
+                            db_path,
+                            lambda s, r=report: s.save_report(r, user_id=user_id, job_id=job_id))
                         success = True
                         cs.mark_done()                                # работа сделана — refund не нужен
                     except Exception as exc:  # noqa: BLE001 — одно направление не валит весь батч
