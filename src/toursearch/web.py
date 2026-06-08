@@ -481,6 +481,22 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
             "max_date_span_days": MAX_DATE_SPAN_DAYS,
         }
 
+    @app.get("/healthz")
+    async def healthz():
+        """Liveness probe для оркестратора (Kubernetes/systemd/uptime-monitor).
+        Без auth, без БД — отвечаем что процесс жив и event loop отвечает."""
+        return {"ok": True}
+
+    @app.get("/readyz")
+    async def readyz():
+        """Readiness probe: дополнительно проверяем доступность БД (быстрый SELECT 1)."""
+        try:
+            with Storage(db_path) as s:
+                s._conn.execute("SELECT 1").fetchone()
+            return {"ok": True}
+        except Exception as exc:                                # noqa: BLE001
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=503)
+
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request):
         # Единый вход — React-дашборд (если собран). Простая Jinja-форма остаётся

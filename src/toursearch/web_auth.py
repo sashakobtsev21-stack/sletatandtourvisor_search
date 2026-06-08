@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -16,6 +17,16 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from toursearch import auth, billing
 from toursearch.ratelimit import SlidingWindow
 from toursearch.storage import Storage
+
+# Логгер auth-домена: 401/403/429 + успешные входы + admin-мутации (audit log).
+# Раньше middleware и эндпоинты входа были полностью немыми — оператор не видел
+# ни брутфорс-попыток, ни кто и когда менял роли (P1 observability).
+_log = logging.getLogger("toursearch.auth")
+_audit = logging.getLogger("toursearch.audit")
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "?"
 
 # Анти-enumeration: на неизвестном логине всё равно гоняем PBKDF2 против фиктивного хеша,
 # чтобы время ответа не выдавало существование аккаунта. Хеш считаем лениво один раз.
@@ -37,7 +48,7 @@ LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
 # `/api/tests/screenshot/{filename}` (только с правом `tests.view`). Прямой статик-маршрут
 # удалён — было IDOR, любой авторизованный/гость мог скачивать чужие выдачи перебором.
 _AUTH_SKIP_PREFIXES = ("/app", "/assets")
-_AUTH_SKIP_EXACT = ("/", "/favicon.ico", "/openapi.json", "/docs", "/redoc")
+_AUTH_SKIP_EXACT = ("/", "/favicon.ico", "/openapi.json", "/docs", "/redoc", "/healthz", "/readyz")
 # Пути, где creds резолвятся, но доступ НЕ требуется (вход / регистрация / выход / «кто я»).
 _AUTH_EXEMPT_EXACT = ("/api/login", "/api/register", "/api/logout", "/api/me")
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -200,6 +211,7 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
         #    На мутирующих — лёгкая защита от login-CSRF через Origin.
         if path in _AUTH_EXEMPT_EXACT:
             if request.method in _UNSAFE_METHODS and not _origin_ok(request):
+                _log.warning("origin reject (exempt %s): ip=%s", path, _client_ip(request))
                 return JSONResponse({"error": "Неверный источник запроса."}, status_code=403)
             return _finalize(request, await call_next(request))
 
@@ -207,15 +219,18 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
         # анти-CSRF: скрипты/тесты без Origin не страдают, кросс-сайт из браузера — режется;
         # закрывает в т.ч. локальный режим от кросс-сайтового создания пользователя).
         if request.method in _UNSAFE_METHODS and not _origin_ok(request):
+            _log.warning("origin reject %s %s: ip=%s", request.method, path, _client_ip(request))
             return JSONResponse({"error": "Неверный источник запроса."}, status_code=403)
         if mode == "legacy":
             if not request.state.legacy_ok:
+                _log.warning("legacy auth reject %s %s: ip=%s", request.method, path, _client_ip(request))
                 return JSONResponse({"error": "Требуется авторизация (TOURSEARCH_TOKEN)."}, status_code=401)
             # CSRF на мутациях даже в legacy: если токен пришёл cookie/query (браузер) —
             # требуем double-submit. Bearer-клиент (curl/скрипт) проходит без CSRF.
             if (request.method in _UNSAFE_METHODS
                     and not request.state.legacy_via_bearer
                     and not _csrf_ok(request)):
+                _log.warning("csrf reject (legacy) %s %s: ip=%s", request.method, path, _client_ip(request))
                 return JSONResponse({"error": "CSRF-проверка не пройдена."}, status_code=403)
         if mode == "multiuser":
             if request.state.user is None:
@@ -223,20 +238,28 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
                 if not _anon_allowed(path):
                     if request.method == "GET" and "text/html" in (request.headers.get("accept") or ""):
                         return RedirectResponse(url="/app/")   # навигация браузера → SPA (вход/гость)
+                    _log.info("auth required (guest) %s %s: ip=%s", request.method, path, _client_ip(request))
                     return JSONResponse({"error": "Требуется вход."}, status_code=401)
                 if request.method in _UNSAFE_METHODS and not _csrf_ok(request):  # CSRF и для гостя
+                    _log.warning("csrf reject (guest) %s %s: ip=%s", request.method, path, _client_ip(request))
                     return JSONResponse({"error": "CSRF-проверка не пройдена."}, status_code=403)
                 if path == "/search/prepare":                  # вход в поиск — гейт лимита гостя
                     with Storage(db_path) as s:                 # (жёсткое списание — на старте стрима)
                         if s.anon_used(request.state.device) >= billing.ANON_CREDITS:
+                            _log.info("guest quota exhausted: device=%s ip=%s",
+                                      request.state.device[:8], _client_ip(request))
                             return JSONResponse(
                                 {"error": "Бесплатные поиски закончились — зарегистрируйтесь, "
                                           "5 поисков бесплатно."}, status_code=402)
             else:
                 if request.method in _UNSAFE_METHODS and not _csrf_ok(request):  # Origin уже проверён
+                    _log.warning("csrf reject user=%s %s %s: ip=%s",
+                                 request.state.user["username"], request.method, path, _client_ip(request))
                     return JSONResponse({"error": "CSRF-проверка не пройдена."}, status_code=403)
                 perm = _required_permission(path)
                 if perm and not auth.has_permission(request.state.user["role"], perm):
+                    _log.warning("forbidden: user=%s role=%s perm=%s path=%s",
+                                 request.state.user["username"], request.state.user["role"], perm, path)
                     return JSONResponse({"error": "Недостаточно прав."}, status_code=403)
                 # Запуск анализа требует остатка поисков (admin — без ограничений). Отмену
                 # (/search/cancel) не гейтим: остаток мог обнулиться уже запущенным поиском.
@@ -269,13 +292,15 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
     @app.post("/api/login")
     async def api_login(request: Request, username: str = Form(...), password: str = Form(...),
                         remember: bool = Form(False)):
-        ip = request.client.host if request.client else "?"
+        ip = _client_ip(request)
         if not _login_rate.hit(ip):  # шквал попыток с IP → притормозить
+            _log.warning("login rate-limit: ip=%s", ip)
             return JSONResponse({"error": "Слишком много попыток входа — подождите немного."},
                                 status_code=429)
         uname = (username or "").strip()
         fail_key = f"{uname}|{ip}"
         if _login_fails.count(fail_key) >= 5:  # серия неудач по этому логину с этого IP → лок
+            _log.warning("login lockout: user=%r ip=%s", uname, ip)
             return JSONResponse({"error": "Слишком много неудачных попыток. Попробуйте позже."},
                                 status_code=429)
         with Storage(db_path) as storage:
@@ -288,6 +313,9 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
                 if user is None:
                     _dummy_verify(password)  # равное время ответа → не выдаём существование логина
                 _login_fails.add(fail_key)
+                _log.warning("login fail: user=%r ip=%s reason=%s", uname, ip,
+                             "unknown_user" if user is None else
+                             "inactive" if user and not user["is_active"] else "bad_password")
                 return JSONResponse({"error": "Неверный логин или пароль."}, status_code=401)
             _login_fails.clear(fail_key)       # успех → сбрасываем счётчик неудач
             token = auth.new_session_token()   # новый токен на каждый вход → нет session fixation
@@ -295,6 +323,7 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
             storage.touch_last_login(user["id"])
             if auth.needs_rehash(user["password_hash"]):
                 storage.update_password(user["id"], password)  # тихо усилить хеш
+        _log.info("login ok: user=%s role=%s ip=%s remember=%s", uname, user["role"], ip, bool(remember))
         resp = JSONResponse({"username": user["username"], "role": user["role"],
                              "permissions": auth.permissions_for(user["role"])})
         _set_session_cookies(resp, token, auth.new_session_token(), remember=bool(remember))
@@ -384,7 +413,9 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
             return _user_public(storage.get_user_by_id(uid))
 
     @app.patch("/api/users/{user_id}")
-    async def api_users_update(user_id: int, payload: dict):
+    async def api_users_update(request: Request, user_id: int, payload: dict):
+        actor = _current_user(request) or {}
+        actor_label = f"{actor.get('username','?')}#{actor.get('id','?')}"
         with Storage(db_path) as storage:
             user = storage.get_user_by_id(user_id)
             if user is None:
@@ -394,16 +425,28 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
             blocking = "is_active" in payload and not payload["is_active"]
             if user["role"] == "admin" and (demoting or blocking) and storage.count_admins() <= 1:
                 return JSONResponse({"error": "Нельзя убрать последнего админа."}, status_code=409)
+            changes: list[str] = []   # для audit log: что именно поменяли
             if "role" in payload:
                 if payload["role"] not in auth.ROLES:
                     return JSONResponse({"error": "Неизвестная роль."}, status_code=400)
+                if payload["role"] != user["role"]:
+                    changes.append(f"role:{user['role']}->{payload['role']}")
                 storage.set_role(user_id, payload["role"])
                 storage.delete_user_sessions(user_id)  # права сменились → перелогин
             if "is_active" in payload:
-                storage.set_user_active(user_id, bool(payload["is_active"]))
+                new_active = bool(payload["is_active"])
+                if new_active != bool(user["is_active"]):
+                    changes.append(f"is_active:{bool(user['is_active'])}->{new_active}")
+                storage.set_user_active(user_id, new_active)
             if payload.get("password"):
                 if len(payload["password"]) < 6:
                     return JSONResponse({"error": "Пароль слишком короткий."}, status_code=400)
                 storage.update_password(user_id, payload["password"])
                 storage.delete_user_sessions(user_id)
+                changes.append("password_changed")
+            if changes:
+                # Audit-log: «кто, что, кому» — без значения пароля. Раньше admin-мутации
+                # выполнялись полностью без следа в логах.
+                _audit.info("user_patch actor=%s target=%s#%d changes=%s",
+                            actor_label, user["username"], user_id, ",".join(changes))
             return _user_public(storage.get_user_by_id(user_id))

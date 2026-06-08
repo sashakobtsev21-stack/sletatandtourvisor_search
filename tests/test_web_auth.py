@@ -356,6 +356,48 @@ def test_legacy_bearer_api_client_bypasses_csrf(tmp_path, monkeypatch):
     assert r.status_code == 200 and "token" in r.json()
 
 
+def test_healthz_and_readyz_open(tmp_path):
+    """D: /healthz и /readyz доступны без auth (для оркестратора)."""
+    cli = TestClient(create_app(db_path=str(tmp_path / "w.db")))
+    assert cli.get("/healthz").status_code == 200 and cli.get("/healthz").json() == {"ok": True}
+    assert cli.get("/readyz").status_code == 200 and cli.get("/readyz").json()["ok"] is True
+
+
+def test_auth_logs_login_failure(tmp_path, caplog):
+    """D: web_auth теперь логирует неудачный вход (раньше middleware был немой)."""
+    import logging
+    caplog.set_level(logging.WARNING, logger="toursearch.auth")
+    db = _seed(tmp_path, [("admin", "secret1", "admin")])
+    cli = TestClient(create_app(db_path=db))
+    cli.post("/api/login", data={"username": "admin", "password": "WRONG"})
+    msgs = [r.getMessage() for r in caplog.records if r.name == "toursearch.auth"]
+    assert any("login fail" in m and "admin" in m for m in msgs)
+
+
+def test_auth_logs_login_success(tmp_path, caplog):
+    import logging
+    caplog.set_level(logging.INFO, logger="toursearch.auth")
+    db = _seed(tmp_path, [("u", "secret1", "user")])
+    cli = TestClient(create_app(db_path=db))
+    cli.post("/api/login", data={"username": "u", "password": "secret1"})
+    msgs = [r.getMessage() for r in caplog.records if r.name == "toursearch.auth"]
+    assert any("login ok" in m and "user=u" in m for m in msgs)
+
+
+def test_admin_patch_logs_audit_changes(tmp_path, caplog):
+    """D: PATCH /api/users пишет в toursearch.audit «кто, что, кому»."""
+    import logging
+    caplog.set_level(logging.INFO, logger="toursearch.audit")
+    db = _seed(tmp_path, [("admin", "secret1", "admin"), ("u", "secret1", "user")])
+    cli = TestClient(create_app(db_path=db))
+    _login(cli, "admin", "secret1")
+    uid = next(x["id"] for x in cli.get("/api/users").json() if x["username"] == "u")
+    cli.patch(f"/api/users/{uid}", json={"role": "vip"}, headers=_csrf(cli))
+    msgs = [r.getMessage() for r in caplog.records if r.name == "toursearch.audit"]
+    assert any("user_patch" in m and "actor=admin" in m and "u#" in m
+               and "role:user->vip" in m for m in msgs)
+
+
 def test_logout_clears_all_session_cookies_with_attributes(tmp_path):
     """Регрессия P2-3: delete_cookie без атрибутов Secure/SameSite Chrome игнорирует —
     cookie в браузере остаётся (хоть серверно сессия и убита). Атрибуты в Set-Cookie

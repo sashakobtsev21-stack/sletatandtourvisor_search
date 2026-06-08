@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -212,6 +213,24 @@ class RunSummary(BaseModel):
     fastest_provider: str | None = None
 
 
+# Schema + миграции — один раз на процесс на путь БД (раньше каждое открытие
+# вызывало executescript(_SCHEMA) + _migrate, ~3-5мс sync I/O на каждом запросе).
+# При 10 пользователях это ~30-50мс/с заблокированного event loop. После init на путь
+# дальнейшие открытия идут только connect + per-connection PRAGMA.
+# Тесты с tmp_path / "x.db" получают уникальный путь и триггерят init на каждый тест.
+_init_lock = threading.Lock()
+_initialized_db_paths: set[str] = set()
+
+
+def reset_storage_init_for_test(path: str | Path | None = None) -> None:
+    """Только тесты: сбросить флаг init, чтобы следующая открытие переинициализировало."""
+    with _init_lock:
+        if path is None:
+            _initialized_db_paths.clear()
+        else:
+            _initialized_db_paths.discard(str(path))
+
+
 class Storage:
     """Репозиторий истории прогонов поиска."""
 
@@ -219,25 +238,59 @@ class Storage:
         self.db_path = str(db_path)
         self._conn = sqlite3.connect(self.db_path)
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA foreign_keys = ON")
+        self._conn.execute("PRAGMA foreign_keys = ON")          # per-connection, дешёвый
         # WAL: одновременные читатели + 1 писатель не блокируют друг друга (актуально с auth —
         # middleware открывает Storage на каждый запрос параллельно с записью save_report).
         # busy_timeout: ждать освобождения блокировки до 5с, а не падать «database is locked».
         try:
-            self._conn.execute("PRAGMA journal_mode = WAL")
+            self._conn.execute("PRAGMA journal_mode = WAL")     # per-db, persists; повторно дёшево
             self._conn.execute("PRAGMA busy_timeout = 5000")
         except sqlite3.Error:  # напр. :memory: не поддерживает WAL — не критично
             pass
-        # NB: ~2мс на открытие Storage — это inherent-стоимость подключения к WAL-БД (инициализация
-        # -shm/-wal на первый доступ), НЕ команда PRAGMA. Убирается только переиспользованием
-        # соединений (рискованно при per-request модели). Несущественно: поиск занимает ~60с,
-        # 2мс на коннект — шум. WAL оставляем ради конкурентности (запись отчёта не блокирует чтения).
-        self._conn.executescript(_SCHEMA)
-        self._migrate()
-        self._conn.commit()
+        # Schema + _migrate выполняем РАЗ НА ПРОЦЕСС на путь БД — без этого они
+        # шли на каждый запрос (~3-5мс sync). PRAGMA table_info в _migrate особенно
+        # дорогая. ":memory:" — каждое соединение независимо, всегда инициализируем.
+        is_memory = self.db_path == ":memory:" or self.db_path.startswith("file::memory:")
+        with _init_lock:
+            need_init = is_memory or self.db_path not in _initialized_db_paths
+        if need_init:
+            self._conn.executescript(_SCHEMA)
+            self._migrate()
+            self._conn.commit()
+            if not is_memory:
+                with _init_lock:
+                    _initialized_db_paths.add(self.db_path)
 
     def _migrate(self) -> None:
-        """Добавить недостающие колонки в старых БД (CREATE TABLE IF NOT EXISTS их не меняет)."""
+        """Добавить недостающие колонки в старых БД (CREATE TABLE IF NOT EXISTS их не меняет).
+
+        BEGIN EXCLUSIVE на время колоночных миграций: при multi-process старте (несколько
+        uvicorn workers) без него два процесса могли одновременно выполнить
+        PRAGMA table_info, оба пройти проверку «нет колонки», оба сделать ALTER → второй
+        упадёт с «duplicate column name». EXCLUSIVE сериализует: второй ждёт первого и
+        видит уже мигрированную схему (все if X not in cols → False, миграция — no-op).
+
+        Тяжёлая пересборка users (снятие CHECK для роли 'vip') идёт ПОСЛЕ exclusive-блока
+        и сама управляет транзакцией с PRAGMA foreign_keys = OFF — её нельзя вкладывать."""
+        try:
+            self._conn.execute("BEGIN EXCLUSIVE")
+        except sqlite3.OperationalError:
+            # БД уже залочена другим процессом — busy_timeout (5с) исчерпан. Повторяем —
+            # обычно к этому моменту первый процесс уже закоммитил миграции.
+            self._conn.execute("BEGIN EXCLUSIVE")
+        try:
+            self._migrate_columns()
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
+        # Проверка/пересборка users: вне EXCLUSIVE, потому что внутри есть PRAGMA + BEGIN.
+        urow = self._conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").fetchone()
+        if urow and urow[0] and "role IN ('admin'" in urow[0] and "'vip'" not in urow[0]:
+            self._rebuild_users_drop_role_check()
+
+    def _migrate_columns(self) -> None:
         cols = {row[1] for row in self._conn.execute("PRAGMA table_info(provider_results)")}
         if "search_mode" not in cols:
             self._conn.execute("ALTER TABLE provider_results ADD COLUMN search_mode TEXT DEFAULT 'tours'")
@@ -276,13 +329,7 @@ class Storage:
                 self._conn.execute("ALTER TABLE payments ADD COLUMN kind TEXT NOT NULL DEFAULT 'credits'")
             if "days" not in pay_cols:                   # срок подписки
                 self._conn.execute("ALTER TABLE payments ADD COLUMN days INTEGER NOT NULL DEFAULT 0")
-        self._conn.commit()
-        # Роль 'vip': старые БД имеют CHECK (role IN ('admin','user')), который не пускает 'vip'.
-        # Снимаем CHECK безопасным пересозданием users (роли валидируются в приложении, auth.ROLES).
-        urow = self._conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='users'").fetchone()
-        if urow and urow[0] and "role IN ('admin'" in urow[0] and "'vip'" not in urow[0]:
-            self._rebuild_users_drop_role_check()
+        # commit делает внешний _migrate в exclusive-блоке; здесь не вызываем.
 
     def _rebuild_users_drop_role_check(self) -> None:
         """Снять CHECK с users.role (чтобы хранить роль 'vip') без потери данных.
