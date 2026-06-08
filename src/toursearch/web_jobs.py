@@ -45,8 +45,7 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
     async def _run_job(job_id: int) -> None:
         """Фоновый воркер батча: health один раз → по направлениям run_search с учётом
         общего предела одновременных поисков; кредиты списываем/возвращаем как в одиночном."""
-        active = app_state.active_runs
-        max_conc = app_state.max_concurrent_searches
+        active = app_state.active_runs  # ConcurrencySlot (asyncio.Lock внутри)
         with Storage(db_path) as s:
             job = s.get_job(job_id)
             if job is None:
@@ -72,8 +71,6 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
                 return
             done = 0
             for country in destinations:
-                while active["n"] >= max_conc:        # ждать слот общего предела (не отклонять)
-                    await asyncio.sleep(0.5)
                 consumed = False
                 # Списание считаем по СВЕЖЕМУ пользователю каждый раз: за длинный батч могли
                 # оформить подписку / сменить роль — тогда кредиты больше не списываем.
@@ -85,7 +82,8 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
                                 s.update_job(job_id, error=f"Кредиты закончились: выполнено {done} "
                                                            f"из {len(destinations)}.")
                                 break
-                active["n"] += 1
+                # Атомарно дождаться свободного слота и занять (asyncio.Lock внутри).
+                await active.acquire_wait()
                 try:
                     sp = base.model_copy(update={"destination_country": country})
                     report = await run_search(sp, providers=providers, headless=True)
@@ -97,7 +95,7 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
                         with Storage(db_path) as s:
                             s.refund_search(user_id)  # направление не сделано — вернуть кредит
                 finally:
-                    active["n"] = max(0, active["n"] - 1)
+                    await active.release()
                     prune_screenshots()
                 done += 1
                 with Storage(db_path) as s:

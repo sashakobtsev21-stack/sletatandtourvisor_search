@@ -57,6 +57,47 @@ _CSP = (
 
 # Токен текущего прогона — наследуется задачами поиска (asyncio копирует контекст
 # при создании), поэтому позволяет хендлеру отличать логи СВОЕГО прогона от чужих.
+class ConcurrencySlot:
+    """Защищённый asyncio.Lock-ом счётчик одновременных поисков. Атомарно проверяет
+    лимит и инкрементирует — без TOCTOU между check и инкрементом, который был на
+    голом dict `{"n": 0}` (P1-3 от 2026-06)."""
+
+    def __init__(self, limit: int) -> None:
+        self._limit = limit
+        self._n = 0
+        self._lock = asyncio.Lock()
+
+    @property
+    def count(self) -> int:
+        """Снимок текущего числа активных поисков (без блокировки — только для info-вывода)."""
+        return self._n
+
+    @property
+    def limit(self) -> int:
+        return self._limit
+
+    async def try_acquire(self) -> bool:
+        """True → слот занят (вызвать release в finally); False → лимит превышен."""
+        async with self._lock:
+            if self._n >= self._limit:
+                return False
+            self._n += 1
+            return True
+
+    async def acquire_wait(self, poll: float = 0.5) -> None:
+        """Дождаться свободного слота и занять его (для батч-воркера)."""
+        while not await self.try_acquire():
+            await asyncio.sleep(poll)
+
+    async def release(self) -> None:
+        async with self._lock:
+            self._n = max(0, self._n - 1)
+
+    def force_set_for_test(self, n: int) -> None:
+        """Только для тестов: проставить счётчик руками (без lock — тест-сценарий)."""
+        self._n = n
+
+
 _run_token_ctx: "contextvars.ContextVar[str | None]" = contextvars.ContextVar(
     "toursearch_run_token", default=None
 )
@@ -290,7 +331,7 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
     # Защита машины от лавины браузеров (двойной клик, баг-ретрай, лёгкое выставление
     # наружу). Сверх предела новый поиск получает понятный отказ, а не подвешивает ОС.
     max_concurrent_searches = max(1, int(os.environ.get("TOURSEARCH_MAX_CONCURRENT_SEARCHES") or 3))
-    active_runs = {"n": 0}  # сколько поисков сейчас реально крутят браузеры
+    active_runs = ConcurrencySlot(max_concurrent_searches)
     app.state.active_runs = active_runs
     app.state.max_concurrent_searches = max_concurrent_searches
 
@@ -421,8 +462,10 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
             ctx["error"] = str(exc)
             return _TEMPLATES.TemplateResponse(request, "index.html", ctx)
 
-        # Предел одновременных поисков (тот же, что и для SSE-пути)
-        if active_runs["n"] >= max_concurrent_searches:
+        # Предел одновременных поисков: атомарно проверяем+занимаем слот, чтобы
+        # параллельные запросы не проскочили мимо лимита (раньше check и инкремент
+        # шли врозь — TOCTOU). Освобождаем слот в finally.
+        if not await active_runs.try_acquire():
             ctx = _form_ctx()
             ctx["error"] = (f"Сейчас выполняется максимум поисков ({max_concurrent_searches}). "
                             "Повторите чуть позже.")
@@ -436,11 +479,11 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
             with Storage(db_path) as storage:
                 consumed = storage.try_consume_search(uid)
             if not consumed:
+                await active_runs.release()           # слот ещё ничей — отпускаем сразу
                 ctx = _form_ctx()
                 ctx["error"] = "Закончились поиски — пополните на странице «Подписка»."
                 return _TEMPLATES.TemplateResponse(request, "index.html", ctx)
 
-        active_runs["n"] += 1
         try:
             # Жёсткий health-check гейт перед прогоном
             health = await run_health_check(providers=chosen, headless=True)
@@ -464,7 +507,7 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
                     storage.refund_search(uid)
             raise
         finally:
-            active_runs["n"] = max(0, active_runs["n"] - 1)
+            await active_runs.release()
 
     # --- поиск с живым логом (SSE), устойчивый к обрыву соединения (смена вкладки) ---
     # Прогон идёт ФОНОВОЙ задачей и не привязан к SSE-соединению: увели вкладку / сеть
@@ -540,7 +583,7 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
             _emit(session, {"type": "error", "msg": "Внутренняя ошибка поиска. Повторите попытку."})
             _refund()  # системный сбой — поиск возвращаем
         finally:
-            active_runs["n"] = max(0, active_runs["n"] - 1)  # освободить слот (парно к гейту)
+            await active_runs.release()  # освободить слот (парно к try_acquire в SSE)
             tlog.removeHandler(handler)
             session.done = True
             # Разбудить активных подписчиков, чтобы их соединения штатно закрылись.
@@ -606,11 +649,13 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
             # Дальше она живёт сама по себе и не зависит от наличия соединения.
             if not session.started:
                 session.started = True
-                # Предел одновременных поисков: занимаем слот СИНХРОННО (до await/create_task,
-                # чтобы два стрима не проскочили проверку разом), задача освободит его в finally.
-                if active_runs["n"] >= max_concurrent_searches:
+                # Предел одновременных поисков: атомарно проверяем+занимаем слот через
+                # asyncio.Lock — раньше два стрима могли проскочить проверку разом
+                # (TOCTOU). Слот освобождает _run_search_task в finally.
+                acquired = await active_runs.try_acquire()
+                if not acquired:
                     _emit(session, {"type": "error", "msg":
-                          f"Сейчас уже выполняется {active_runs['n']} поиск(ов) — это предел "
+                          f"Сейчас уже выполняется {active_runs.count} поиск(ов) — это предел "
                           f"(TOURSEARCH_MAX_CONCURRENT_SEARCHES={max_concurrent_searches}). "
                           "Дождитесь завершения и повторите."})
                     session.done = True
@@ -626,12 +671,12 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
                             else:                                  # обычный юзер — кредит из остатка
                                 session.consumed = s.try_consume_search(session.user_id)
                     if session.consume and not session.consumed:
+                        await active_runs.release()      # задача не стартовала — отпускаем слот
                         _emit(session, {"type": "error",
                               "msg": "Закончились поиски — пополните на вкладке «Подписка»."})
                         session.done = True
                         _schedule_session_cleanup(token)
                     else:
-                        active_runs["n"] += 1
                         session.task = asyncio.create_task(_run_search_task(token, session))
 
             # Подписываемся и АТОМАРНО (между add и снимком нет await/yield — событийный

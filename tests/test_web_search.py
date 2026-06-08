@@ -199,13 +199,13 @@ def test_stream_rejects_when_at_capacity(tmp_path, monkeypatch):
     monkeypatch.setattr(web, "run_search", _search)
     app = create_app(db_path=str(tmp_path / "w.db"))
     client = TestClient(app)
-    app.state.active_runs["n"] = 2  # как будто уже идёт предел поисков
+    app.state.active_runs.force_set_for_test(2)  # как будто уже идёт предел поисков
     token = client.post("/search/prepare", data=_FORM).json()["token"]
     s = client.get(f"/search/stream?token={token}")
     assert s.status_code == 200
     assert "предел" in s.text and '"type": "error"' in s.text  # понятный отказ
-    assert not ran["search"]                  # реальный поиск (и браузеры) не стартовали
-    assert app.state.active_runs["n"] == 2    # слот не занят и не утёк
+    assert not ran["search"]                            # реальный поиск (и браузеры) не стартовали
+    assert app.state.active_runs.count == 2             # слот не занят и не утёк
 
 
 def test_stream_reclaims_slot_after_run(tmp_path, monkeypatch):
@@ -216,4 +216,4 @@ def test_stream_reclaims_slot_after_run(tmp_path, monkeypatch):
     token = client.post("/search/prepare", data=_FORM).json()["token"]
     s = client.get(f"/search/stream?token={token}")
     assert '"type": "done"' in s.text
-    assert app.state.active_runs["n"] == 0  # слот освобождён после завершения прогона
+    assert app.state.active_runs.count == 0  # слот освобождён после завершения прогона
