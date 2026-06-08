@@ -15,7 +15,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -227,13 +227,17 @@ def _operator_dict(o) -> dict:
     }
 
 
-def _result_dict(r) -> dict:
+def _result_dict(r, run_id: int | None = None) -> dict:
     c = r.cheapest
+    # screenshot_url — owner-checked эндпоинт, который читает screenshot_path из БД
+    # и сверяет владельца прогона. Прямой путь к файлу клиенту не отдаём.
+    screenshot_url = (f"/api/runs/{run_id}/screenshot/{r.provider}"
+                      if run_id is not None and r.screenshot_path else None)
     return {
         "provider": r.provider, "success": r.success,
         "not_applicable": is_not_applicable_error(r.error),
         "duration_seconds": r.duration_seconds, "search_mode": r.search_mode,
-        "error": r.error, "screenshot_path": r.screenshot_path, "search_url": r.search_url,
+        "error": r.error, "screenshot_url": screenshot_url, "search_url": r.search_url,
         "offers": [_offer_dict(o) for o in sorted(r.offers, key=lambda x: x.price)],
         "hotel_offers": [_hotel_dict(h) for h in sorted(r.hotel_offers, key=lambda x: x.price)],
         "operator_offers": [_operator_dict(o) for o in sorted(r.operator_offers, key=lambda x: x.price)],
@@ -257,7 +261,7 @@ def _report_dict(report, run_id: int | None = None) -> dict:
             "nights_min": p.nights_min, "nights_max": p.nights_max,
             "adults": p.adults, "children_ages": p.children_ages,
         },
-        "results": [_result_dict(r) for r in report.results],
+        "results": [_result_dict(r, run_id=run_id) for r in report.results],
         "best": ({"price": str(best.price), "label": best.label, "provider": best.provider} if best else None),
         "fastest_provider": report.fastest_provider,
         "slowest_provider": report.slowest_provider,
@@ -307,9 +311,12 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
             resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         return resp
 
-    Path("screenshots").mkdir(exist_ok=True)
+    # Папка скриншотов: создаём и периодически чистим, но НЕ монтируем как статику.
+    # Раздача — через owner-checked /api/runs/{id}/screenshot/{provider} и
+    # /api/tests/screenshot/{filename} (см. ниже). Прямой /screenshots/* убран — был IDOR.
+    screenshots_dir = Path("screenshots").resolve()
+    screenshots_dir.mkdir(exist_ok=True)
     prune_screenshots()  # на старте подчистить накопившиеся скриншоты прогонов
-    app.mount("/screenshots", StaticFiles(directory="screenshots"), name="screenshots")
     # Собранный React-дашборд (frontend/dist) раздаём под /app, если он существует.
     # API (/search, /run, ...) тот же origin → проксирование в проде не нужно.
     # Сборка: cd frontend && npm install && npm run build.
@@ -707,6 +714,28 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
                 raise HTTPException(status_code=404, detail=f"Прогон #{run_id} не найден")
         return _report_dict(report, run_id)
 
+    @app.get("/api/runs/{run_id}/screenshot/{provider}")
+    async def api_run_screenshot(request: Request, run_id: int, provider: str):
+        """Скриншот выдачи конкретной площадки одного прогона. Owner-checked: если в
+        мультиюзере прогон чужой — 404 (как и /api/runs/{id}). Файл должен лежать в
+        screenshots/ (защита от path-traversal на случай повреждённой записи в БД)."""
+        with Storage(db_path) as storage:
+            try:
+                report = storage.get_report(run_id, owner_id=owner_filter(request))
+            except KeyError:
+                raise HTTPException(status_code=404, detail="Скриншот не найден")
+        pr = next((r for r in report.results if r.provider == provider), None)
+        if pr is None or not pr.screenshot_path:
+            raise HTTPException(status_code=404, detail="Скриншот не найден")
+        shot = Path(pr.screenshot_path).resolve()
+        try:
+            shot.relative_to(screenshots_dir)
+        except ValueError:                                     # путь вне screenshots/ — отбой
+            raise HTTPException(status_code=404, detail="Скриншот не найден") from None
+        if not shot.is_file():
+            raise HTTPException(status_code=404, detail="Скриншот не найден")
+        return FileResponse(shot, media_type="image/png")
+
     @app.get("/api/refdata")
     async def api_refdata():
         """Справочники формы — единый источник правды (refdata.py). React-дашборд
@@ -799,6 +828,24 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
             except Exception:  # noqa: BLE001
                 out[name] = []
         return out
+
+    @app.get("/api/tests/screenshot/{filename}")
+    async def api_test_screenshot(request: Request, filename: str):
+        """Скриншот теста. Permission `tests.view` уже проверен middleware (см.
+        _required_permission в web_auth). filename берётся как имя без пути — даже если
+        кто-то засабмитит `../`, Path(...).name его срежет. Дополнительно проверяем,
+        что файл реально внутри screenshots/ — на случай экзотики."""
+        name = Path(filename).name
+        if not name or name != filename:
+            raise HTTPException(status_code=404, detail="Скриншот не найден")
+        shot = (screenshots_dir / name).resolve()
+        try:
+            shot.relative_to(screenshots_dir)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Скриншот не найден") from None
+        if not shot.is_file():
+            raise HTTPException(status_code=404, detail="Скриншот не найден")
+        return FileResponse(shot, media_type="image/png")
 
     @app.get("/api/tests/catalog")
     async def api_tests_catalog():

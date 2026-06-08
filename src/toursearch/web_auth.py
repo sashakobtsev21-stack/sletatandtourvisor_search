@@ -32,16 +32,18 @@ def _dummy_verify(password: str) -> None:
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
 
 # Пути, где middleware не делает НИЧЕГО (статика SPA, docs, корень-редирект).
-# `/screenshots` НЕ здесь намеренно: скриншоты выдачи — данные прогонов, в мультиюзере их
-# гейтит вход (<img> шлёт cookie сам). В локальном режиме они по-прежнему открыты.
+# `/screenshots` ВЫНЕСЕН: скриншоты выдачи раздаются только через owner-checked эндпоинт
+# `/api/runs/{run_id}/screenshot/{provider}` (мультиюзер: только владелец прогона/admin) или
+# `/api/tests/screenshot/{filename}` (только с правом `tests.view`). Прямой статик-маршрут
+# удалён — было IDOR, любой авторизованный/гость мог скачивать чужие выдачи перебором.
 _AUTH_SKIP_PREFIXES = ("/app", "/assets")
 _AUTH_SKIP_EXACT = ("/", "/favicon.ico", "/openapi.json", "/docs", "/redoc")
 # Пути, где creds резолвятся, но доступ НЕ требуется (вход / регистрация / выход / «кто я»).
 _AUTH_EXEMPT_EXACT = ("/api/login", "/api/register", "/api/logout", "/api/me")
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 # Пути, доступные анонимному гостю (мультиюзер, без входа): сам поиск + справочники/статус.
-# Лимит ANON_CREDITS на устройство; история/тесты/пользователи — только после входа.
-_ANON_ALLOWED_PREFIXES = ("/search/", "/screenshots/")  # поиск + скриншоты выдачи (нужны гостю для показа результата)
+# Лимит ANON_CREDITS на устройство; история/тесты/пользователи/скриншоты — только после входа.
+_ANON_ALLOWED_PREFIXES = ("/search/",)
 _ANON_ALLOWED_EXACT = ("/api/refdata", "/api/billing/status")
 
 
@@ -71,7 +73,7 @@ def _csrf_ok(request: Request) -> bool:
 
 def _required_permission(path: str) -> "str | None":
     """Право, нужное для пути в мультиюзер-режиме. None — достаточно быть авторизованным."""
-    if path == "/api/tests/catalog" or path == "/tests":
+    if path == "/api/tests/catalog" or path == "/tests" or path.startswith("/api/tests/screenshot/"):
         return "tests.view"
     if path.startswith("/tests/"):                       # /tests/prepare, /tests/stream
         return "tests.run"

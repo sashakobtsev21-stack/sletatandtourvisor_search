@@ -330,10 +330,106 @@ def test_secure_cookie_on_nonlocal_host(tmp_path):
     assert set_cookies and all("secure" in v.lower() for v in set_cookies)
 
 
-def test_screenshots_open_to_guest(tmp_path):
-    # скриншоты выдачи — снимки тур-сайтов (не приватные); доступны и гостю (нужны, чтобы
-    # показать его собственный результат). Middleware пропускает → StaticFiles, 404 на отсутствующий.
+def test_screenshots_static_mount_gone(tmp_path):
+    # Регрессия (P1-1): прямой /screenshots/* раздавал ЛЮБОЙ файл любому пришедшему — IDOR.
+    # Маршрут полностью убран; скриншоты доступны только через owner-checked
+    # /api/runs/{id}/screenshot/{provider} и /api/tests/screenshot/{filename}.
     client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")])))
-    assert client.get("/screenshots/none.png").status_code != 401   # гость не режется middleware
+    # гостю — 401 (middleware: путь не в anon-allowed)
+    assert client.get("/screenshots/any.png").status_code == 401
     _login(client, "admin", "secret1")
-    assert client.get("/screenshots/none.png").status_code != 401   # и залогиненный тоже
+    # admin — 404 (роут не существует)
+    assert client.get("/screenshots/any.png").status_code == 404
+
+
+def test_run_screenshot_owner_isolation(tmp_path):
+    """Скриншот прогона отдаётся только владельцу/админу; чужой получает 404."""
+    db = _seed(tmp_path, [("admin", "secret1", "admin"),
+                          ("alice", "secret1", "user"),
+                          ("bob", "secret1", "user")])
+    # alice пишет прогон со скриншотом, который реально лежит на диске
+    shot_dir = tmp_path / "screenshots"
+    shot_dir.mkdir()
+    shot_path = shot_dir / "sletat_alice.png"
+    shot_path.write_bytes(b"\x89PNG\r\n\x1a\n alice")
+    rep = ComparisonReport(
+        params=SearchParams(departure_city="Москва", destination_country="Турция",
+                            date_from=date(2026, 7, 1), date_to=date(2026, 7, 8),
+                            nights_min=7, nights_max=10, adults=2),
+        results=[ProviderResult(provider="sletat", success=True, duration_seconds=1.0,
+                                screenshot_path=str(shot_path))],
+    )
+    with Storage(db) as s:
+        alice_id = s.get_user_by_username("alice")["id"]
+        rid = s.save_report(rep, user_id=alice_id)
+
+    # сервер ищет скриншоты в CWD/screenshots — chdir на временный каталог, иначе путь
+    # к файлу выйдет за пределы CWD/screenshots и сработает path-traversal-защита.
+    import os
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        # bob — НЕ владелец → 404 (не отличает «нет такого прогона» от «не твой»)
+        bob_cli = TestClient(create_app(db_path=db))
+        _login(bob_cli, "bob", "secret1")
+        assert bob_cli.get(f"/api/runs/{rid}/screenshot/sletat").status_code == 404
+
+        # alice — владелец → файл
+        alice_cli = TestClient(create_app(db_path=db))
+        _login(alice_cli, "alice", "secret1")
+        r = alice_cli.get(f"/api/runs/{rid}/screenshot/sletat")
+        assert r.status_code == 200
+        assert r.content == b"\x89PNG\r\n\x1a\n alice"
+        assert r.headers["content-type"] == "image/png"
+
+        # admin — видит чужие
+        admin_cli = TestClient(create_app(db_path=db))
+        _login(admin_cli, "admin", "secret1")
+        assert admin_cli.get(f"/api/runs/{rid}/screenshot/sletat").status_code == 200
+
+        # неизвестный провайдер на своём прогоне — 404
+        assert alice_cli.get(f"/api/runs/{rid}/screenshot/tourvisor").status_code == 404
+
+        # анонимный гость — 401 (не пускается даже до проверки владельца)
+        guest_cli = TestClient(create_app(db_path=db))
+        assert guest_cli.get(f"/api/runs/{rid}/screenshot/sletat").status_code == 401
+    finally:
+        os.chdir(cwd)
+
+
+def test_run_screenshot_path_traversal_blocked(tmp_path):
+    """Если в БД оказался путь вне screenshots/ — отдаём 404, не файл."""
+    db = _seed(tmp_path, [("u", "secret1", "user")])
+    # положим «вредный» путь — куда-то выше screenshots/
+    secret = tmp_path / "secret.txt"
+    secret.write_text("S3CR3T")
+    rep = ComparisonReport(
+        params=SearchParams(departure_city="Москва", destination_country="Турция",
+                            date_from=date(2026, 7, 1), date_to=date(2026, 7, 8),
+                            nights_min=7, nights_max=10, adults=2),
+        results=[ProviderResult(provider="sletat", success=True, duration_seconds=1.0,
+                                screenshot_path=str(secret))],
+    )
+    with Storage(db) as s:
+        uid = s.get_user_by_username("u")["id"]
+        rid = s.save_report(rep, user_id=uid)
+    import os
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        cli = TestClient(create_app(db_path=db))
+        _login(cli, "u", "secret1")
+        # путь вне CWD/screenshots → 404, не утечка содержимого файла
+        assert cli.get(f"/api/runs/{rid}/screenshot/sletat").status_code == 404
+    finally:
+        os.chdir(cwd)
+
+
+def test_test_screenshot_filename_strict(tmp_path):
+    """/api/tests/screenshot/<filename> принимает только plain-имя; / и .. отбиваются."""
+    db = _seed(tmp_path, [("admin", "secret1", "admin")])
+    cli = TestClient(create_app(db_path=db))
+    _login(cli, "admin", "secret1")
+    # 404 (роут не сматчит из-за слешей/escape), но главное — НЕ читает чужой файл
+    assert cli.get("/api/tests/screenshot/..%2F..%2Fetc%2Fpasswd").status_code == 404
+    assert cli.get("/api/tests/screenshot/missing.png").status_code == 404

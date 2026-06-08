@@ -32,7 +32,7 @@
         <td>{% if r.cheapest %}{{ r.cheapest.price|price }}{% else %}—{% endif %}</td>
         <td>{% if r.success %}{{ r.cheapest.label if r.cheapest else "нет результатов" }}{% else %}<span class="worst">{{ r.error or "ошибка" }}</span>{% endif %}</td>
         <td>
-          {% if r.screenshot_path %}<a href="#" class="shot" data-shot="/{{ r.screenshot_path }}" data-cap="{{ r.provider }} — выдача">скриншот</a>{% else %}<span class="muted">—</span>{% endif %}
+          {% if r.screenshot_path and run_id is not none %}<a href="#" class="shot" data-shot="/api/runs/{{ run_id }}/screenshot/{{ r.provider }}" data-cap="{{ r.provider }} — выдача">скриншот</a>{% else %}<span class="muted">—</span>{% endif %}
           {% if r.search_url %} · <a href="{{ r.search_url }}" target="_blank" rel="noopener" class="golink">поиск</a>{% endif %}
         </td>
       </tr>

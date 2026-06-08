@@ -95,10 +95,10 @@ export default function ResultsPage({ runId }) {
               <h3 className="text-base font-bold capitalize text-white">{providerLabel(r.provider)}</h3>
               {r.success && <span className="text-xs text-muted">{r.duration_seconds.toFixed(1)} с</span>}
               <div className="ml-auto flex items-center gap-3 text-xs">
-                {r.screenshot_path && (
+                {r.screenshot_url && (
                   <button
                     type="button"
-                    onClick={() => { setZoom(false); setShot({ src: `/${r.screenshot_path}`, cap: `${providerLabel(r.provider)} — выдача` }); }}
+                    onClick={() => { setZoom(false); setShot({ src: r.screenshot_url, cap: `${providerLabel(r.provider)} — выдача` }); }}
                     className="flex items-center gap-1 text-ocean transition-colors hover:text-brand-soft"
                   >
                     <ImageIcon className="size-3.5" /> скриншот
