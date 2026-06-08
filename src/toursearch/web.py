@@ -679,21 +679,33 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
         session = _searches.get(token)
         if session is None:
             return {"cancelled": False}
-        # Отменять можно только СВОЙ прогон (uuid4-токен неугадываем, но проверяем владельца):
-        # по user_id (залогинен) или device (гость); в локальном режиме владельца нет.
-        uid = current_user_id(request)
-        device = getattr(request.state, "device", None)
-        owns = ((session.user_id is not None and session.user_id == uid)
-                or (session.device is not None and session.device == device)
-                or (session.user_id is None and session.device is None))
-        if owns and session.task is not None and not session.task.done():
+        # Отменять можно только СВОЙ прогон — проверка владельца через _owns_session
+        # (та же логика что и у /search/stream). uuid4-токен неугадываем, но защита
+        # от утечки токена через Referer/прокси-логи.
+        if _owns_session(request, session) and session.task is not None and not session.task.done():
             session.task.cancel()
             return {"cancelled": True}
         return {"cancelled": False}
 
+    def _owns_session(request: Request, session) -> bool:
+        """Истинно — текущий запрос имеет право на этот SearchSession (по user_id для
+        залогиненного, по device-cookie для гостя). В local/legacy режиме (где у сессии
+        нет ни user_id, ни device) — пускаем всех (одно-юзерный сценарий). Используется
+        и /search/cancel, и /search/stream — раньше у stream проверки не было (P2-2)."""
+        uid = current_user_id(request)
+        device = getattr(request.state, "device", None)
+        return ((session.user_id is not None and session.user_id == uid)
+                or (session.device is not None and session.device == device)
+                or (session.user_id is None and session.device is None))
+
     @app.get("/search/stream")
-    async def search_stream(token: str):
+    async def search_stream(request: Request, token: str):
         session = _searches.get(token)
+        # Owner-check на стриме: знающий чужой uuid (через утечку Referer/прокси-логов/
+        # расширения браузера) больше не получит полный лог чужого поиска + screenshots
+        # (P2-2). uuid4 — 128 бит, угадать нельзя, но если просочился — должен быть бесполезен.
+        if session is not None and not _owns_session(request, session):
+            raise HTTPException(status_code=403, detail="Стрим доступен только владельцу поиска.")
 
         async def gen():
             if session is None:

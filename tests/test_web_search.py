@@ -217,3 +217,69 @@ def test_stream_reclaims_slot_after_run(tmp_path, monkeypatch):
     s = client.get(f"/search/stream?token={token}")
     assert '"type": "done"' in s.text
     assert app.state.active_runs.count == 0  # слот освобождён после завершения прогона
+
+
+# --------------------------- P2-2: owner-check на /search/stream ---------------------------
+
+def _seed(tmp_path, users):
+    """БД с пользователями для multiuser-режима."""
+    from toursearch.storage import Storage
+    db = str(tmp_path / "w.db")
+    with Storage(db) as s:
+        for username, password, role in users:
+            s.create_user(username, password, role=role, iters=1000)
+    return db
+
+
+def test_stream_rejects_foreign_user(tmp_path, monkeypatch):
+    """Регрессия P2-2: alice готовит поиск, bob знает её uuid → 403.
+    Раньше зная токен можно было слушать чужой стрим (утечка через Referer/прокси-логи)."""
+    monkeypatch.setattr(web, "run_health_check", _gate(True))
+    monkeypatch.setattr(web, "run_search", _fake_search)
+    db = _seed(tmp_path, [("alice", "secret1", "user"), ("bob", "secret1", "user")])
+    # КРИТИЧНО: один app — иначе _searches у бoba пустой и сессии «нет», а нам нужно
+    # проверить именно owner-check на ЧУЖОЙ существующей сессии.
+    app = create_app(db_path=db)
+    alice = TestClient(app)
+    alice.post("/api/login", data={"username": "alice", "password": "secret1"})
+    csrf_a = {"X-CSRF-Token": alice.cookies.get("ts_csrf")}
+    token = alice.post("/search/prepare", data=_FORM, headers=csrf_a).json()["token"]
+
+    bob = TestClient(app)
+    bob.post("/api/login", data={"username": "bob", "password": "secret1"})
+    # bob знает чужой token (как будто утёк через Referer) — стрим должен дать 403
+    r = bob.get(f"/search/stream?token={token}")
+    assert r.status_code == 403
+
+
+def test_cancel_rejects_foreign_user(tmp_path, monkeypatch):
+    """Та же owner-проверка для /search/cancel: чужой не отменяет."""
+    monkeypatch.setattr(web, "run_health_check", _gate(True))
+    monkeypatch.setattr(web, "run_search", _fake_search)
+    db = _seed(tmp_path, [("alice", "secret1", "user"), ("bob", "secret1", "user")])
+    app = create_app(db_path=db)
+    alice = TestClient(app)
+    alice.post("/api/login", data={"username": "alice", "password": "secret1"})
+    csrf_a = {"X-CSRF-Token": alice.cookies.get("ts_csrf")}
+    token = alice.post("/search/prepare", data=_FORM, headers=csrf_a).json()["token"]
+
+    bob = TestClient(app)
+    bob.post("/api/login", data={"username": "bob", "password": "secret1"})
+    csrf_b = {"X-CSRF-Token": bob.cookies.get("ts_csrf")}
+    r = bob.post(f"/search/cancel?token={token}", headers=csrf_b)
+    # cancel возвращает 200 с cancelled=False (не раскрываем, что токен был валиден чужой)
+    assert r.status_code == 200 and r.json()["cancelled"] is False
+
+
+def test_stream_allows_owner(tmp_path, monkeypatch):
+    """alice ожидаемо может слушать СВОЙ стрим — owner-check её пропускает."""
+    monkeypatch.setattr(web, "run_health_check", _gate(True))
+    monkeypatch.setattr(web, "run_search", _fake_search)
+    db = _seed(tmp_path, [("alice", "secret1", "user")])
+    app = create_app(db_path=db)
+    cli = TestClient(app)
+    cli.post("/api/login", data={"username": "alice", "password": "secret1"})
+    csrf = {"X-CSRF-Token": cli.cookies.get("ts_csrf")}
+    token = cli.post("/search/prepare", data=_FORM, headers=csrf).json()["token"]
+    r = cli.get(f"/search/stream?token={token}")
+    assert r.status_code == 200 and '"type": "done"' in r.text
