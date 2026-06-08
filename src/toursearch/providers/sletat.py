@@ -37,6 +37,7 @@ from toursearch.providers._formcheck import (
     text_contains,
 )
 from toursearch.providers.base import (
+    DESKTOP_CHROME_UA,
     capture_top as _capture_top,
     register_provider,
     start_frame_pump,
@@ -181,8 +182,11 @@ class SletatProvider:
                 args=["--disable-blink-features=AutomationControlled", "--window-size=1600,1080"],
             )
             # Вьюпорт 1600: сайт целиком по ширине, но крупнее (читабельнее) в live-окне и скриншоте.
+            # Явный desktop-UA: при headless=True Playwright по умолчанию шлёт «HeadlessChrome»,
+            # который антибот-системы могут отбивать. См. base.DESKTOP_CHROME_UA.
             context = await browser.new_context(
-                viewport={"width": 1600, "height": 1080}, permissions=[]
+                viewport={"width": 1600, "height": 1080}, permissions=[],
+                user_agent=DESKTOP_CHROME_UA,
             )
             await context.add_init_script(
                 "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
@@ -490,7 +494,9 @@ class SletatProvider:
         await page.click("#touristSelector .tourist-current-select")
         await page.wait_for_timeout(500)
         label = page.locator(".adult-counter-label")
-        current = int(re.search(r"\d+", await label.inner_text()).group())
+        # None-guard на re.search (см. tourvisor _select_tourists).
+        m = re.search(r"\d+", await label.inner_text())
+        current = int(m.group()) if m else 0
         while current != adults:
             if current < adults:
                 await page.click("button.adult-counter-btn:not(.adult-counter-btn--minus)")

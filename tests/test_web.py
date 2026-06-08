@@ -95,6 +95,17 @@ def test_search_prepare_rejects_bad_price_gracefully(tmp_path):
     assert resp.status_code == 200 and "error" in resp.json()
 
 
+def test_api_runs_limit_capped(tmp_path):
+    """audit-3 P1: ?limit без верхней границы тянул бы всю историю в память.
+    Теперь Query(le=200) — большие значения → 422."""
+    client = TestClient(create_app(db_path=str(tmp_path / "w.db")))
+    assert client.get("/api/runs?limit=100").status_code == 200
+    assert client.get("/api/runs?limit=200").status_code == 200
+    r = client.get("/api/runs?limit=201")
+    assert r.status_code == 422
+    assert client.get("/api/runs?limit=0").status_code == 422
+
+
 def test_api_refdata(tmp_path):
     # Справочники формы отдаются бэкендом (единый источник правды; фронт берёт их отсюда).
     client = TestClient(create_app(db_path=str(tmp_path / "w.db")))

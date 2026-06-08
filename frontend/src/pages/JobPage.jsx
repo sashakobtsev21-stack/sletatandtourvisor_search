@@ -27,15 +27,16 @@ export default function JobPage({ jobId }) {
   useEffect(() => {
     let alive = true;
     let fails = 0;
+    // audit-3 P3: AbortController отменяет in-flight fetch при unmount.
+    // Раньше fetch жил до тайм-аута (~30с) после ухода со страницы — занимал
+    // TCP-соединение впустую, мог тригернуть state-обновление (alive=false спасал
+    // от краша, но не от утечки сокета).
+    const ctrl = new AbortController();
     const schedule = () => { timerRef.current = setTimeout(tick, 3000); };
     const tick = async () => {
       try {
-        // P2-y: явно retry:false на polling-вызовах. У apiFetch retry для GET
-        // включён по умолчанию (до 3 попыток с backoff на 503/504) — это
-        // мультиплицировалось с нашим polling-timer (3с): один тик мог занять
-        // до ~7с, и наш счётчик fails ошибался. На polling один запрос = один
-        // тик; ретрай делает следующий цикл setTimeout(3000).
-        const r = await apiFetch(`/api/jobs/${jobId}`, { retry: false });
+        const r = await apiFetch(`/api/jobs/${jobId}`,
+                                 { retry: false, signal: ctrl.signal });
         if (r.status === 404 || r.status === 403) {  // постоянная ошибка (нет/чужой) → сразу
           if (alive) setError(`HTTP ${r.status}`);
           return;
@@ -48,7 +49,7 @@ export default function JobPage({ jobId }) {
         setJob(j);
         if (j.status === "pending" || j.status === "running") schedule();
       } catch (e) {
-        if (!alive) return;
+        if (!alive || e?.name === "AbortError") return;     // unmount → не state-апдейтим
         // Одна сетевая икота не должна навсегда заморозить прогресс: ретраим, пока не
         // накопится несколько подряд — только тогда показываем ошибку.
         fails += 1;
@@ -60,6 +61,7 @@ export default function JobPage({ jobId }) {
     return () => {
       alive = false;
       clearTimeout(timerRef.current);
+      ctrl.abort();                                          // отменяем in-flight
     };
   }, [jobId]);
 

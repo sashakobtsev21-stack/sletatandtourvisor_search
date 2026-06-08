@@ -334,6 +334,12 @@ class Storage:
         if "user_id" not in run_cols:
             self._conn.execute("ALTER TABLE runs ADD COLUMN user_id INTEGER")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_user ON runs(user_id)")
+        # Composite (user_id, run_at DESC) ускоряет /api/runs + /history
+        # `WHERE user_id=? ORDER BY datetime(run_at) DESC` — без него SQLite делал
+        # filesort при больших историях одного пользователя (audit-3 P2).
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_runs_user_at "
+            "ON runs(user_id, run_at DESC)")
         if "job_id" not in run_cols:  # привязка прогона к батч-заданию (Ф1 батч-анализа)
             self._conn.execute("ALTER TABLE runs ADD COLUMN job_id INTEGER")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_job ON runs(job_id)")
@@ -371,9 +377,14 @@ class Storage:
         self._conn.commit()                              # закрыть текущую транзакцию перед PRAGMA
         self._conn.execute("PRAGMA foreign_keys = OFF")
         try:
-            self._conn.execute("BEGIN")
+            # BEGIN EXCLUSIVE сериализует rebuild между multi-process воркерами:
+            # без него M процессов uvicorn проходили проверку «нет 'vip' в CHECK»,
+            # все пытались CREATE TABLE users_new одновременно → второй падал
+            # «table already exists». IF NOT EXISTS дополнительно делает вторую
+            # попытку no-op (P1 audit-3).
+            self._conn.execute("BEGIN EXCLUSIVE")
             self._conn.execute(
-                """CREATE TABLE users_new (
+                """CREATE TABLE IF NOT EXISTS users_new (
                     id            INTEGER PRIMARY KEY AUTOINCREMENT,
                     username      TEXT UNIQUE NOT NULL,
                     password_hash TEXT NOT NULL,
@@ -418,17 +429,32 @@ class Storage:
         P2-d: денормализуем cheapest_* + fastest_provider прямо в `runs`, чтобы
         /api/runs и /history не подтягивали весь граф офферов для агрегатов."""
         cheapest = report.cheapest
-        cur = self._conn.execute(
-            "INSERT INTO runs (run_at, params_json, user_id, job_id, "
-            "cheapest_price, cheapest_label, cheapest_provider, fastest_provider) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (report.run_at.isoformat(), report.params.model_dump_json(), user_id, job_id,
-             str(cheapest.price) if cheapest else None,
-             cheapest.label if cheapest else None,
-             cheapest.provider if cheapest else None,
-             report.fastest_provider),
-        )
-        run_id = int(cur.lastrowid)
+        # P1 (audit-3): атомарность. До 2026-06 цепочка INSERT'ов делалась без
+        # явной транзакции — kill между runs INSERT и save offers оставлял orphan
+        # `runs`-строку без provider_results. `with self._conn:` коммитит при успехе
+        # и откатывает на любом исключении (sqlite3 connection-context-manager).
+        with self._conn:
+            cur = self._conn.execute(
+                "INSERT INTO runs (run_at, params_json, user_id, job_id, "
+                "cheapest_price, cheapest_label, cheapest_provider, fastest_provider) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (report.run_at.isoformat(), report.params.model_dump_json(), user_id, job_id,
+                 str(cheapest.price) if cheapest else None,
+                 cheapest.label if cheapest else None,
+                 cheapest.provider if cheapest else None,
+                 report.fastest_provider),
+            )
+            run_id = int(cur.lastrowid)
+            self._save_report_children(run_id, report)
+        return run_id
+
+    def _save_report_children(self, run_id: int, report: ComparisonReport) -> None:
+        """Внутренний хелпер: записать provider_results + offers/hotel_offers/operator_offers.
+
+        Выделено из save_report (P1 audit-3): держим всю запись в одной транзакции
+        через `with self._conn`, чтобы при kill посреди операции не было orphan
+        `runs`-строк без детей. Тело каркаса (INSERT runs) выполняется в save_report,
+        этот метод дописывает граф."""
         for result in report.results:
             rcur = self._conn.execute(
                 """INSERT INTO provider_results
@@ -500,8 +526,6 @@ class Storage:
                         oo.raw_label,
                     ),
                 )
-        self._conn.commit()
-        return run_id
 
     def _fetch_in(self, table: str, col: str, ids: list[int]) -> list[sqlite3.Row]:
         """`SELECT * FROM <table> WHERE <col> IN (ids) ORDER BY id` чанками по 900 (лимит

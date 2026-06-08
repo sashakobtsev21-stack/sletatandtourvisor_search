@@ -417,6 +417,26 @@ def test_admin_patch_writes_audit_to_db(tmp_path):
     assert "is_active:True->False" in (row["details"] or "")
 
 
+def test_patch_users_invalid_shape_returns_422(tmp_path):
+    """audit-3 P1: PATCH /api/users теперь принимает UserPatch (pydantic).
+    Bad shape (`is_active: 'yes'`, role=null с дополнительными полями) → 422."""
+    db = _seed(tmp_path, [("admin", "secret1", "admin"), ("u", "secret1", "user")])
+    cli = TestClient(create_app(db_path=db))
+    _login(cli, "admin", "secret1")
+    h = _csrf(cli)
+    uid = next(x["id"] for x in cli.get("/api/users").json() if x["username"] == "u")
+    # is_active как строка — раньше bool("yes")=True проскакивало
+    r = cli.patch(f"/api/users/{uid}", json={"is_active": "yes-please"}, headers=h)
+    assert r.status_code == 422
+    # password короче 6 — теперь pydantic min_length отбивает 422-м
+    r = cli.patch(f"/api/users/{uid}", json={"password": "12"}, headers=h)
+    assert r.status_code == 422
+    # неизвестные поля игнорируются (pydantic strict=False по умолчанию)
+    r = cli.patch(f"/api/users/{uid}", json={"role": "vip", "unknown_field": "x"},
+                  headers=h)
+    assert r.status_code == 200 and r.json()["role"] == "vip"
+
+
 def test_logout_clears_all_session_cookies_with_attributes(tmp_path):
     """Регрессия P2-3: delete_cookie без атрибутов Secure/SameSite Chrome игнорирует —
     cookie в браузере остаётся (хоть серверно сессия и убита). Атрибуты в Set-Cookie

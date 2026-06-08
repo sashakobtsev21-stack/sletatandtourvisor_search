@@ -22,6 +22,7 @@ from toursearch.providers._formcheck import (
     text_contains,
 )
 from toursearch.providers.base import (
+    DESKTOP_CHROME_UA,
     capture_top as _capture_top,
     register_provider,
     start_frame_pump,
@@ -134,8 +135,11 @@ def _departure_candidates(city: str) -> list[str]:
     return cands
 
 
-def _parse_price(text: str) -> Decimal | None:
-    digits = re.sub(r"[^\d]", "", text)
+def _parse_price(text: str | None) -> Decimal | None:
+    # `or ""` — guard на None из row.get("price") при пустой ценовой ячейке DOM.
+    # До 2026-06 здесь `re.sub(pattern, None)` падал TypeError'ом; единственный
+    # провайдер где этой защиты не было (sletat/travelata/level/ostrovok делают так).
+    digits = re.sub(r"[^\d]", "", text or "")
     return Decimal(digits) if digits else None
 
 
@@ -269,7 +273,12 @@ class TourvisorProvider:
                 args=["--disable-blink-features=AutomationControlled", "--window-size=1600,1080"],
             )
             # Вьюпорт 1600: сайт целиком по ширине, но крупнее (читабельнее) в live-окне и скриншоте.
-            context = await browser.new_context(viewport={"width": 1600, "height": 1080})
+            # Явный desktop-UA: при headless=True по умолчанию шлётся «HeadlessChrome»,
+            # антибот-системы это видят. См. base.DESKTOP_CHROME_UA.
+            context = await browser.new_context(
+                viewport={"width": 1600, "height": 1080},
+                user_agent=DESKTOP_CHROME_UA,
+            )
             await context.add_init_script(
                 "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
             )
@@ -681,9 +690,12 @@ class TourvisorProvider:
         await page.click("div.TVTouristsFilter")
         await page.wait_for_selector("xpath=//div[contains(@class,'TVTouristsSelectTooltip')]")
 
-        # Взрослые: подвести счётчик TVTouristAll к нужному значению
+        # Взрослые: подвести счётчик TVTouristAll к нужному значению.
+        # None-guard на re.search: при неполной загрузке виджета inner_text может
+        # быть без цифр («Взр» / пустая строка) → match=None → AttributeError на .group().
         count_loc = page.locator("div.TVTouristCount.TVTouristAll")
-        current = int(re.search(r"\d+", (await count_loc.inner_text())).group())
+        m = re.search(r"\d+", await count_loc.inner_text())
+        current = int(m.group()) if m else 0
         plus = page.locator("div.TVTouristActionPlus")
         minus = page.locator("div.TVTouristActionMinus")
         while current != adults:

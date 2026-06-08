@@ -261,6 +261,11 @@ class TravelataProvider:
             # чего фильтр по оператору мог не найти нужного ТО. Храним САМЫЙ ПОЛНЫЙ снимок
             # (с наибольшим числом туров) — надёжнее и для списка ТО, и для фильтра.
             tours_api: dict = {}
+            # asyncio.Lock защищает «прочитать самый полный → перезаписать»: до 2026-06
+            # между check tours_api.get("data") и присваиванием tours_api["data"]=d могла
+            # вклиниться другая корутина (SPA шлёт API-ответы быстро) — итог: потеря
+            # «самого полного» снимка операторов.
+            tours_api_lock = asyncio.Lock()
 
             def _tours_count(d: dict) -> int:
                 return len(((d or {}).get("result") or {}).get("tours") or [])
@@ -271,8 +276,9 @@ class TravelataProvider:
                         d = await resp.json()
                     except Exception:
                         return
-                    if _tours_count(d) >= _tours_count(tours_api.get("data")):
-                        tours_api["data"] = d
+                    async with tours_api_lock:
+                        if _tours_count(d) >= _tours_count(tours_api.get("data")):
+                            tours_api["data"] = d
 
             page.on("response", lambda r: asyncio.create_task(_grab_tours(r)))
             pump = start_frame_pump(self.name, page, self.on_frame)

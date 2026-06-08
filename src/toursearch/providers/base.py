@@ -19,6 +19,15 @@ from toursearch.models import ProviderResult, SearchParams
 # Колбэк живого кадра: (имя площадки, jpeg в base64) → корутина.
 FrameCallback = Callable[[str, str], Awaitable[None]]
 
+# Общий «настольный Chrome» UA для провайдеров. До 2026-06 Sletat и Tourvisor
+# полагались на Playwright-дефолт, который при headless=True содержит «HeadlessChrome»
+# в строке — антибот-системы это видят и могут отдавать заглушку/CAPTCHA. Явный UA
+# снимает различие headless/headful и unify'ит поведение площадок.
+DESKTOP_CHROME_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
+
 
 async def _frame_pump(name: str, page, on_frame: FrameCallback, interval_ms: int = 1400) -> None:
     """Периодически снимать скриншот вкладки и отдавать его как base64 jpeg.

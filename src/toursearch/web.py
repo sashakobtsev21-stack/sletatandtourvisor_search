@@ -10,7 +10,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import (
     FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse,
 )
@@ -706,7 +706,12 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
 
     # --- JSON API для React-дашборда ---
     @app.get("/api/runs")
-    async def api_runs(request: Request, limit: int = 50):
+    async def api_runs(
+        request: Request,
+        # Верхняя граница (audit-3 P1): без неё ?limit=100000 тянул бы весь граф
+        # прогонов в память без предупреждения. 200 щедрее любого реалистичного UI.
+        limit: int = Query(50, ge=1, le=200),
+    ):
         owner = owner_filter(request)  # своя история (user) или вся (admin/legacy/local)
         with Storage(db_path) as storage:
             # P2-d: list_runs_with_status тянет только агрегаты и статусы площадок

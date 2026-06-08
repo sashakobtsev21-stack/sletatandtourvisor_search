@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
+from pydantic import BaseModel, Field
 
 from toursearch import auth, billing
 from toursearch.ratelimit import SlidingWindow
@@ -27,6 +28,18 @@ _audit = logging.getLogger("toursearch.audit")
 
 def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "?"
+
+
+class UserPatch(BaseModel):
+    """Тело PATCH /api/users/{id} — типизированный payload (audit-3 P1).
+
+    До 2026-06 хендлер принимал `payload: dict` — не было ни типов, ни валидации:
+    `{"role": null}` или `{"is_active": "yes"}` проскакивали без 422 и приводили
+    либо к 500, либо к тихой неправильной обработке (`bool("yes") == True`).
+    """
+    role: str | None = None
+    is_active: bool | None = None
+    password: str | None = Field(default=None, min_length=6)
 
 # Анти-enumeration: на неизвестном логине всё равно гоняем PBKDF2 против фиктивного хеша,
 # чтобы время ответа не выдавало существование аккаунта. Хеш считаем лениво один раз.
@@ -413,7 +426,8 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
             return _user_public(storage.get_user_by_id(uid))
 
     @app.patch("/api/users/{user_id}")
-    async def api_users_update(request: Request, user_id: int, payload: dict):
+    async def api_users_update(request: Request, user_id: int, payload: UserPatch):
+        # Pydantic-валидация — 422 на bad-shape input (audit-3 P1).
         actor = _current_user(request) or {}
         actor_label = f"{actor.get('username','?')}#{actor.get('id','?')}"
         with Storage(db_path) as storage:
@@ -421,27 +435,27 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
             if user is None:
                 raise HTTPException(status_code=404, detail="Пользователь не найден")
             # гвард: нельзя разжаловать/заблокировать последнего активного админа
-            demoting = "role" in payload and payload["role"] != "admin"
-            blocking = "is_active" in payload and not payload["is_active"]
+            demoting = payload.role is not None and payload.role != "admin"
+            blocking = payload.is_active is not None and not payload.is_active
             if user["role"] == "admin" and (demoting or blocking) and storage.count_admins() <= 1:
                 return JSONResponse({"error": "Нельзя убрать последнего админа."}, status_code=409)
             changes: list[str] = []   # для audit log: что именно поменяли
-            if "role" in payload:
-                if payload["role"] not in auth.ROLES:
+            if payload.role is not None:
+                if payload.role not in auth.ROLES:
                     return JSONResponse({"error": "Неизвестная роль."}, status_code=400)
-                if payload["role"] != user["role"]:
-                    changes.append(f"role:{user['role']}->{payload['role']}")
-                storage.set_role(user_id, payload["role"])
+                if payload.role != user["role"]:
+                    changes.append(f"role:{user['role']}->{payload.role}")
+                storage.set_role(user_id, payload.role)
                 storage.delete_user_sessions(user_id)  # права сменились → перелогин
-            if "is_active" in payload:
-                new_active = bool(payload["is_active"])
+            if payload.is_active is not None:
+                new_active = bool(payload.is_active)
                 if new_active != bool(user["is_active"]):
                     changes.append(f"is_active:{bool(user['is_active'])}->{new_active}")
                 storage.set_user_active(user_id, new_active)
-            if payload.get("password"):
-                if len(payload["password"]) < 6:
-                    return JSONResponse({"error": "Пароль слишком короткий."}, status_code=400)
-                storage.update_password(user_id, payload["password"])
+            if payload.password:
+                # min_length=6 — pydantic уже отбил короткий пароль 422-м, здесь
+                # просто применяем.
+                storage.update_password(user_id, payload.password)
                 storage.delete_user_sessions(user_id)
                 changes.append("password_changed")
             if changes:
