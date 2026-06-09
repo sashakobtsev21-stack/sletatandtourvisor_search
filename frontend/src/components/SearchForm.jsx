@@ -57,9 +57,13 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
   const [mode, setMode] = useState(initial?.search_mode ?? "tours"); // tours | hotels
   const [childrenCount, setChildrenCount] = useState(initial?.children_ages?.length ?? 0);
   const [childAges, setChildAges] = useState(initial?.children_ages ?? []);
+  // Дефолт — все доступные площадки (audit-2026-06). Раньше брали лишь
+  // `constants.PROVIDERS = ["sletat","tourvisor"]`, остальные приходилось включать руками.
+  // Сейчас при первой подгрузке /api/refdata расширяем до полного refProv (см. useEffect ниже).
   const [providers, setProviders] = useState(
     initial?.providers?.length ? [...initial.providers] : [...PROVIDERS]
   );
+  const [providersTouched, setProvidersTouched] = useState(!!initial?.providers?.length);
   const [operators, setOperators] = useState(initial?.operators ?? []);
   const [dateFrom, setDateFrom] = useState(initial?.date_from ?? defaultFrom);
   const [dateTo, setDateTo] = useState(initial?.date_to ?? defaultTo);
@@ -131,8 +135,18 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
     setProviders((prev) => prev.filter((p) => providerSupportsMode(p, mode)));
   }, [mode, providerModes]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // При первой подгрузке /api/refdata расширяем выбор до ВСЕХ совместимых площадок
+  // (audit-2026-06: пользователь должен по умолчанию сравнивать всё, а не только sletat+tourvisor).
+  // Делается один раз — после первого юзер-тача (providersTouched=true) больше не вмешиваемся.
+  useEffect(() => {
+    if (providersTouched || !providerOptions?.length) return;
+    const compatible = providerOptions.filter((p) => providerSupportsMode(p, mode));
+    if (compatible.length > providers.length) setProviders(compatible);
+  }, [providerOptions, mode, providerModes]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const toggleProvider = (p) => {
     if (!providerSupportsMode(p)) return; // несовместима с текущим режимом — не выбираем
+    setProvidersTouched(true);
     setProviders((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
   };
 
@@ -499,6 +513,33 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
             );
           })}
         </div>
+
+        {/* Видимый баннер: какие из ВЫБРАННЫХ площадок будут пропущены и почему
+            (audit-2026-06 — раньше только нативный title-tooltip, не виден на mobile). */}
+        {(() => {
+          const skipped = providers
+            .map((p) => ({
+              provider: p,
+              reasons: incompatReasons(providerCoverage, p, {
+                city: departureCity,
+                country: batch ? undefined : undefined,   // в single — страна через FormData
+              }),
+            }))
+            .filter((s) => s.reasons.length > 0);
+          if (!skipped.length) return null;
+          return (
+            <div className="mt-2 rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-100">
+              <div className="mb-1 font-semibold">⚠ Не все выбранные площадки совместимы:</div>
+              <ul className="space-y-0.5 text-amber-100/90">
+                {skipped.map((s) => (
+                  <li key={s.provider}>
+                    <span className="font-semibold capitalize">{providerLabel(s.provider)}</span>: {s.reasons.join("; ")}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        })()}
       </m.div>
 
       {/* Кнопка сабмита — крупная, с микроинтеракцией и состоянием загрузки */}

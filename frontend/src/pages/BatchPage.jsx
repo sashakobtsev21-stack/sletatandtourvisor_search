@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { m } from "framer-motion";
-import { Layers, Info, Plus, MapPin, Globe2, Calendar, Moon, Users, Server, Trash2 } from "lucide-react";
+import { Layers, Info, Plus, MapPin, Globe2, Calendar, Moon, Users, Server, Trash2, Plane, Hotel } from "lucide-react";
 import GlassCard from "../components/ui/GlassCard.jsx";
 import { Field, Input, Select } from "../components/ui/Field.jsx";
 import { useRefData } from "../lib/refdata.js";
@@ -33,6 +33,12 @@ export default function BatchPage() {
   const { departureCities, countries, operators: refOps, providers: refProv,
           providerModes, providerCoverage } = useRefData();
 
+  // Режим мультипоиска: «Туры» (с перелётом) или «Отели» (без перелёта).
+  // В отелях город вылета не нужен (доказательная для пользователя «поиск без перелётов»);
+  // composer-блок упрощается, площадки фильтруются по providerSupportsMode(mode).
+  const [mode, setMode] = useState("tours");          // "tours" | "hotels"
+  const isHotels = mode === "hotels";
+
   // Composer state — то, что сейчас в форме «новое направление».
   const [depCity, setDepCity] = useState("Москва");
   const [country, setCountry] = useState(countries?.[0] ?? "Турция");
@@ -47,7 +53,10 @@ export default function BatchPage() {
   // Shared-параметры (общие для всех направлений).
   const [adults, setAdults] = useState(2);
   const [childAges, setChildAges] = useState([]);
+  // По умолчанию — ВСЕ доступные площадки. Первый рендер берёт fallback из constants
+  // (sletat+tourvisor, 2 шт); после /api/refdata расширяется до полных 5 в useEffect ниже.
   const [providers, setProviders] = useState([...(refProv ?? [])]);
+  const [providersTouched, setProvidersTouched] = useState(false);
   const [opsSelected, setOpsSelected] = useState([]);
   const [priceMax, setPriceMax] = useState("");
   const [charterOnly, setCharterOnly] = useState(false);
@@ -56,12 +65,27 @@ export default function BatchPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // Поддерживает ли площадка туры (в мультипоиске режим только tours — отели
-  // не имеют батч-смысла без per-hotel дат).
+  // Поддерживает ли площадка ТЕКУЩИЙ режим мультипоиска (tours/hotels).
+  // Раньше зашивали только tours — теперь оба режима через переключатель.
   const providerSupportsTours = (p) =>
-    (providerModes[p] ?? ["tours", "hotels"]).includes("tours");
+    (providerModes[p] ?? ["tours", "hotels"]).includes(mode);
+
+  // После первой подгрузки refProv (все 5) — если юзер ещё ни одной кнопки не трогал,
+  // расширяем выбор до полного списка совместимых с текущим режимом площадок.
+  // mode=tours → travelata/level/sletat/tourvisor; mode=hotels → sletat/tourvisor/ostrovok.
+  useEffect(() => {
+    if (providersTouched || !refProv?.length) return;
+    const compatible = refProv.filter((p) => providerSupportsTours(p));
+    if (compatible.length > providers.length) setProviders(compatible);
+  }, [refProv, providerModes, mode]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // При смене режима убираем несовместимые площадки (то же что в одиночном поиске).
+  useEffect(() => {
+    setProviders((prev) => prev.filter((p) => providerSupportsTours(p)));
+  }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleProvider = (p) => {
+    setProvidersTouched(true);
     if (!providerSupportsTours(p)) return;
     setProviders((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
   };
@@ -79,20 +103,25 @@ export default function BatchPage() {
       setError("Дата «до» должна быть не раньше «от».");
       return;
     }
-    const candidate = {
-      country, departure_city: depCity,
-      date_from: dateFrom, date_to: dateTo,
-      nights_min: nightsMin, nights_max: nightsMax,
-    };
-    // Дубль (та же страна + те же даты + тот же город) → не добавляем.
+    // В отелях город вылета и ночи не нужны — храним только то, что важно для
+    // отображения и для отправки воркеру.
+    const candidate = isHotels
+      ? { country, date_from: dateFrom, date_to: dateTo }
+      : { country, departure_city: depCity,
+          date_from: dateFrom, date_to: dateTo,
+          nights_min: nightsMin, nights_max: nightsMax };
+    // Дубль (та же страна + те же даты + тот же город вылета) → не добавляем.
+    // В hotels departure_city = undefined у обеих сравниваемых → ===.
     const isDup = directions.some(
       (d) => d.country === candidate.country
           && d.date_from === candidate.date_from
           && d.date_to === candidate.date_to
-          && d.departure_city === candidate.departure_city,
+          && (d.departure_city ?? null) === (candidate.departure_city ?? null),
     );
     if (isDup) {
-      setError("Это направление уже в списке (та же страна, даты, город вылета).");
+      setError(isHotels
+        ? "Это направление уже в списке (та же страна и даты)."
+        : "Это направление уже в списке (та же страна, даты, город вылета).");
       return;
     }
     setError("");
@@ -117,23 +146,26 @@ export default function BatchPage() {
     setError("");
 
     const shared = {
-      mode: "tours",
+      mode,
       // departure_city уровня job — placeholder для shared SearchParams;
-      // воркер override'ит для каждого direction.
-      departure_city: directions[0].departure_city,
-      // date_from/date_to уровня job — fallback на случай если у направления не задано;
+      // воркер override'ит для каждого direction. В отелях direction.departure_city
+      // не задан → используем "Москва" как нейтральное значение (не используется).
+      departure_city: directions[0].departure_city ?? "Москва",
+      // date_from/date_to уровня job — fallback если у направления не задано;
       // у нас всегда задаются, но shared должны быть валидными для SearchParams.
       date_from: directions[0].date_from,
       date_to: directions[0].date_to,
-      nights_min: directions[0].nights_min,
-      nights_max: directions[0].nights_max,
+      // Ночи — обязательное поле SearchParams даже в режиме hotels; берём дефолтные
+      // если direction их не задал (в hotels-направлениях мы их не храним).
+      nights_min: directions[0].nights_min ?? 7,
+      nights_max: directions[0].nights_max ?? 10,
       adults,
       child_age: childAges,
       provider: providers,
       operator: opsSelected,
       price_max: priceMax || undefined,
-      charter_only: charterOnly ? "on" : undefined,
-      direct_only: directOnly ? "on" : undefined,
+      charter_only: !isHotels && charterOnly ? "on" : undefined,
+      direct_only: !isHotels && directOnly ? "on" : undefined,
     };
 
     try {
@@ -169,9 +201,32 @@ export default function BatchPage() {
         </span>
         <div className="text-sm text-muted">
           <div className="font-semibold text-ink">Мультипоиск — сравнение по разным направлениям и датам</div>
-          Каждое направление — со своими городом вылета и датами. Туристы, операторы и
-          фильтры — общие. Каждое направление расходует 1 поиск.
+          {isHotels
+            ? "Поиск отелей без авиа-перелёта — каждое направление со своей страной и датами заезд/выезд."
+            : "Каждое направление — со своими городом вылета и датами. Туристы, операторы и фильтры — общие."}
+          {" "}Каждое направление расходует 1 поиск.
         </div>
+      </GlassCard>
+
+      {/* Переключатель режима (audit-2026-06): «Туры» (с перелётом) или «Отели» (без). */}
+      <GlassCard variants={fadeUp} className="flex gap-2 p-2">
+        {[
+          { id: "tours",  label: "Туры с перелётом", Icon: Plane },
+          { id: "hotels", label: "Отели без перелёта", Icon: Hotel },
+        ].map(({ id, label, Icon }) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setMode(id)}
+            className={`flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-semibold transition-colors ${
+              mode === id
+                ? "bg-gradient-to-r from-brand to-ocean text-white shadow-glow"
+                : "text-muted hover:bg-white/[0.04] hover:text-ink"
+            }`}
+          >
+            <Icon className="size-4" /> {label}
+          </button>
+        ))}
       </GlassCard>
 
       {/* Composer: добавить новое направление */}
@@ -180,17 +235,20 @@ export default function BatchPage() {
           <Plus className="size-4 text-brand-soft" /> Добавить направление
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Откуда" icon={MapPin}>
-            <Select icon searchable value={depCity} onChange={(e) => setDepCity(e.target.value)}>
-              {departureCities.map((c) => <option key={c}>{c}</option>)}
-            </Select>
-          </Field>
+          {/* «Откуда» нужен только для туров с перелётом — в отелях скрываем. */}
+          {!isHotels && (
+            <Field label="Откуда" icon={MapPin}>
+              <Select icon searchable value={depCity} onChange={(e) => setDepCity(e.target.value)}>
+                {departureCities.map((c) => <option key={c}>{c}</option>)}
+              </Select>
+            </Field>
+          )}
           <Field label="Куда" icon={Globe2}>
             <Select icon searchable value={country} onChange={(e) => setCountry(e.target.value)}>
               {countries.map((c) => <option key={c}>{c}</option>)}
             </Select>
           </Field>
-          <Field label="Когда (от)" icon={Calendar}>
+          <Field label={isHotels ? "Заезд" : "Когда (от)"} icon={Calendar}>
             <Input icon type="date" value={dateFrom} min={isoDate(today())}
                    onChange={(e) => {
                      const v = e.target.value;
@@ -198,22 +256,27 @@ export default function BatchPage() {
                      if (v > dateTo) setDateTo(v);
                    }} />
           </Field>
-          <Field label="Когда (до)" icon={Calendar}>
+          <Field label={isHotels ? "Выезд" : "Когда (до)"} icon={Calendar}>
             <Input icon type="date" value={dateTo} min={dateFrom}
                    onChange={(e) => setDateTo(e.target.value)} />
           </Field>
-          <Field label="Ночей (от)" icon={Moon}>
-            <Input icon type="number" min={1} max={30} value={nightsMin}
-                   onChange={(e) => {
-                     const n = Number(e.target.value);
-                     setNightsMin(n);
-                     if (n > nightsMax) setNightsMax(n);
-                   }} />
-          </Field>
-          <Field label="Ночей (до)" icon={Moon}>
-            <Input icon type="number" min={nightsMin} max={30} value={nightsMax}
-                   onChange={(e) => setNightsMax(Number(e.target.value))} />
-          </Field>
+          {/* Ночи актуальны только для туров — в отелях кол-во ночей = (выезд − заезд). */}
+          {!isHotels && (
+            <>
+              <Field label="Ночей (от)" icon={Moon}>
+                <Input icon type="number" min={1} max={30} value={nightsMin}
+                       onChange={(e) => {
+                         const n = Number(e.target.value);
+                         setNightsMin(n);
+                         if (n > nightsMax) setNightsMax(n);
+                       }} />
+              </Field>
+              <Field label="Ночей (до)" icon={Moon}>
+                <Input icon type="number" min={nightsMin} max={30} value={nightsMax}
+                       onChange={(e) => setNightsMax(Number(e.target.value))} />
+              </Field>
+            </>
+          )}
         </div>
         <button
           type="button"
@@ -246,11 +309,11 @@ export default function BatchPage() {
                 </span>
                 <div className="min-w-0 flex-1 text-sm">
                   <div className="font-semibold text-white">
-                    {d.departure_city} → {d.country}
+                    {d.departure_city ? `${d.departure_city} → ${d.country}` : d.country}
                   </div>
                   <div className="truncate text-xs text-muted">
                     {formatDate(d.date_from)} — {formatDate(d.date_to)}
-                    {" · "}{d.nights_min}–{d.nights_max} ноч.
+                    {d.nights_min ? ` · ${d.nights_min}–${d.nights_max} ноч.` : ""}
                   </div>
                 </div>
                 <button
@@ -309,11 +372,11 @@ export default function BatchPage() {
               // нет — берём текущее значение composer'а как indicative.
               const dirsToCheck = directions.length
                 ? directions
-                : [{ departure_city: depCity, country }];
+                : [{ departure_city: isHotels ? undefined : depCity, country }];
               const allReasons = new Set();
               dirsToCheck.forEach((d) => {
                 incompatReasons(providerCoverage, p, {
-                  city: d.departure_city, country: d.country, mode: "tours",
+                  city: d.departure_city, country: d.country, mode,
                 }).forEach((r) => allReasons.add(r));
               });
               const partial = supported && allReasons.size > 0;
@@ -347,6 +410,42 @@ export default function BatchPage() {
               );
             })}
           </div>
+          {/* Видимый баннер: какие направления отсекутся какими площадками
+              (audit-2026-06 — нативный title невидим на mobile). */}
+          {(() => {
+            const dirsToCheck = directions.length
+              ? directions
+              : [{ departure_city: depCity, country }];
+            const issues = [];
+            providers.forEach((p) => {
+              dirsToCheck.forEach((d) => {
+                const reasons = incompatReasons(providerCoverage, p, {
+                  city: d.departure_city, country: d.country, mode,
+                });
+                if (reasons.length) issues.push({
+                  provider: p,
+                  where: d.departure_city ? `${d.departure_city} → ${d.country}` : d.country,
+                  reasons,
+                });
+              });
+            });
+            if (!issues.length) return null;
+            return (
+              <div className="mt-2 rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-100">
+                <div className="mb-1 font-semibold">⚠ Не все выбранные площадки покроют выбранные направления:</div>
+                <ul className="space-y-0.5 text-amber-100/90">
+                  {issues.slice(0, 10).map((i, idx) => (
+                    <li key={idx}>
+                      <span className="font-semibold capitalize">{i.provider}</span>: {i.where} — {i.reasons.join("; ")}
+                    </li>
+                  ))}
+                  {issues.length > 10 && (
+                    <li className="text-amber-100/60">…и ещё {issues.length - 10}</li>
+                  )}
+                </ul>
+              </div>
+            );
+          })()}
         </div>
 
         <details className="rounded-xl border border-white/5 bg-white/[0.02] p-3">
