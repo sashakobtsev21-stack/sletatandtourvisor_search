@@ -8,6 +8,7 @@ import { apiFetch } from "../lib/api.js";
 import { navigate } from "../lib/router.js";
 import { formatDate } from "../lib/format.js";
 import { staggerContainer, fadeUp } from "../lib/animations.js";
+import { incompatReasons, caveatOf } from "../lib/providerCoverage.js";
 
 /**
  * BatchPage (#/batch) — мультипоиск с per-direction датами.
@@ -30,7 +31,7 @@ const DEFAULT_TO = isoDate(addDays(today(), 8));
 
 export default function BatchPage() {
   const { departureCities, countries, operators: refOps, providers: refProv,
-          experimentalProviders, providerModes } = useRefData();
+          providerModes, providerCoverage } = useRefData();
 
   // Composer state — то, что сейчас в форме «новое направление».
   const [depCity, setDepCity] = useState("Москва");
@@ -303,7 +304,25 @@ export default function BatchPage() {
             {refProv.map((p) => {
               const on = providers.includes(p);
               const supported = providerSupportsTours(p);
-              const exp = experimentalProviders?.includes(p);
+              // По всем уже добавленным направлениям соберём непокрытые: чтобы знать
+              // «эта площадка не поддерживает половину выбранного». Если direction'ов
+              // нет — берём текущее значение composer'а как indicative.
+              const dirsToCheck = directions.length
+                ? directions
+                : [{ departure_city: depCity, country }];
+              const allReasons = new Set();
+              dirsToCheck.forEach((d) => {
+                incompatReasons(providerCoverage, p, {
+                  city: d.departure_city, country: d.country, mode: "tours",
+                }).forEach((r) => allReasons.add(r));
+              });
+              const partial = supported && allReasons.size > 0;
+              const caveat = caveatOf(providerCoverage, p);
+              const title = !supported
+                ? "Не поддерживает туры"
+                : partial
+                  ? `У площадки ${[...allReasons].join("; ")}. Несовместимые направления будут пропущены.`
+                  : caveat || undefined;
               return (
                 <button
                   key={p}
@@ -313,13 +332,17 @@ export default function BatchPage() {
                   className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors ${
                     !supported
                       ? "border-white/5 bg-white/[0.02] text-muted/40"
-                      : on
-                      ? "border-brand/40 bg-brand/15 text-white"
-                      : "border-white/10 bg-white/[0.03] text-muted hover:bg-white/[0.06]"
+                      : partial
+                        ? on
+                          ? "border-amber-400/40 bg-amber-500/15 text-white"
+                          : "border-amber-400/20 bg-amber-500/[0.06] text-muted hover:bg-amber-500/10"
+                        : on
+                          ? "border-brand/40 bg-brand/15 text-white"
+                          : "border-white/10 bg-white/[0.03] text-muted hover:bg-white/[0.06]"
                   }`}
-                  title={!supported ? "Не поддерживает туры" : exp ? "Экспериментальная" : undefined}
+                  title={title}
                 >
-                  {p}{exp ? " (β)" : ""}
+                  {p}{partial && <span className="ml-1 text-amber-300">⚠</span>}
                 </button>
               );
             })}

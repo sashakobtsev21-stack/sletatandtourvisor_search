@@ -14,6 +14,7 @@ import {
 } from "../lib/constants.js";
 import { useRefData } from "../lib/refdata.js";
 import { providerLabel } from "../lib/format.js";
+import { incompatReasons, caveatOf } from "../lib/providerCoverage.js";
 
 const addDays = (iso, n) => {
   const d = new Date(iso);
@@ -52,7 +53,7 @@ function fmtDateRange(fromIso, toIso) {
 export default function SearchForm({ onSubmit, isSearching = false, initial = null, batch = false }) {
   // Справочники с бэкенда (/api/refdata); до ответа — фолбэк-константы.
   const { departureCities, countries, operators: operatorOptions, providers: providerOptions,
-          experimentalProviders = [], providerModes = {} } = useRefData();
+          providerModes = {}, providerCoverage = {} } = useRefData();
   const [mode, setMode] = useState(initial?.search_mode ?? "tours"); // tours | hotels
   const [childrenCount, setChildrenCount] = useState(initial?.children_ages?.length ?? 0);
   const [childAges, setChildAges] = useState(initial?.children_ages ?? []);
@@ -434,9 +435,22 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
         <div className="flex flex-wrap gap-2">
           {providerOptions.map((p) => {
             const active = providers.includes(p);
-            const experimental = experimentalProviders.includes(p);
             const incompatible = !providerSupportsMode(p); // не работает в текущем режиме
             const onlyMode = providerOnlyMode(p);          // "Туры"/"Отели" — для бейджа
+            // Не-блокирующие предупреждения по покрытию: город/страна не в whitelist
+            // площадки. Площадка всё равно отметится (агрегаторы Sletat/Tourvisor
+            // всегда поддерживают всё, остальные — ограничены). UI просто подсвечивает.
+            const reasons = incompatReasons(providerCoverage, p, {
+              city: departureCity,
+              country: batch ? undefined : "",   // в батче страна меняется per-direction
+            });
+            const partial = !incompatible && reasons.length > 0;   // частично поддерживает
+            const caveat = caveatOf(providerCoverage, p);
+            const tooltipParts = [];
+            if (incompatible) tooltipParts.push(`Площадка работает только в режиме «${onlyMode}» — переключите режим выше`);
+            else if (partial) tooltipParts.push(`У площадки ${reasons.join("; ")}. Можно выбрать — она будет пропущена для несовместимых параметров.`);
+            else if (caveat) tooltipParts.push(caveat);
+            const titleStr = tooltipParts.join("\n") || undefined;
             return (
               <m.button
                 key={p}
@@ -445,20 +459,18 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
                 onClick={() => toggleProvider(p)}
                 whileHover={incompatible ? undefined : { scale: 1.04 }}
                 whileTap={incompatible ? undefined : { scale: 0.96 }}
-                title={
-                  incompatible
-                    ? `Площадка работает только в режиме «${onlyMode}» — переключите режим выше`
-                    : experimental
-                      ? "Экспериментальная площадка (по умолчанию выключена)"
-                      : undefined
-                }
+                title={titleStr}
                 className={[
                   "flex items-center gap-2 rounded-xl border px-3.5 py-2 text-sm font-semibold capitalize transition-colors",
                   incompatible
                     ? "cursor-not-allowed border-white/5 bg-white/[0.02] text-muted/40"
-                    : active
-                      ? "border-ocean/40 bg-ocean/15 text-white"
-                      : "border-white/10 bg-white/[0.03] text-muted hover:text-ink",
+                    : partial
+                      ? (active
+                          ? "border-amber-400/40 bg-amber-500/15 text-white"
+                          : "border-amber-400/20 bg-amber-500/[0.06] text-muted hover:text-ink")
+                      : active
+                        ? "border-ocean/40 bg-ocean/15 text-white"
+                        : "border-white/10 bg-white/[0.03] text-muted hover:text-ink",
                 ].join(" ")}
               >
                 <span
@@ -471,14 +483,16 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
                   }`}
                 />
                 {providerLabel(p)}
-                {experimental && !incompatible && (
-                  <span className="rounded-md bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-bold uppercase not-italic tracking-wider text-amber-300">
-                    β
-                  </span>
-                )}
                 {incompatible && onlyMode && (
                   <span className="rounded-md bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-wide text-muted/70">
                     только {onlyMode}
+                  </span>
+                )}
+                {partial && (
+                  <span title={titleStr}
+                        className="rounded-md bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-300"
+                  >
+                    ⚠
                   </span>
                 )}
               </m.button>

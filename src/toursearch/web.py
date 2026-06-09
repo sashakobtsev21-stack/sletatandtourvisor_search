@@ -872,6 +872,9 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
             "experimental_providers": [p for p in _providers() if is_experimental(p)],
             # режимы каждой площадки → форма гасит несовместимые с выбранным режимом
             "provider_modes": _provider_modes(),
+            # карта покрытия для tooltip'ов: какой провайдер какие города/страны/режимы
+            # поддерживает + короткий caveat (audit-2026-06).
+            "provider_coverage": refdata.PROVIDER_COVERAGE,
             "max_date_span_days": MAX_DATE_SPAN_DAYS,
         }
 

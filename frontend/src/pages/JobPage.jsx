@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { m } from "framer-motion";
-import { Layers, Loader2, AlertTriangle, CheckCircle2, Clock, ExternalLink, ArrowLeft } from "lucide-react";
+import { Layers, Loader2, AlertTriangle, CheckCircle2, Clock, ExternalLink, ArrowLeft, Plus } from "lucide-react";
 import GlassCard from "../components/ui/GlassCard.jsx";
 import { staggerContainer, fadeUp } from "../lib/animations.js";
 import { formatPrice } from "../lib/format.js";
@@ -82,9 +82,16 @@ export default function JobPage({ jobId }) {
           </span>
           <h2 className="text-xl font-extrabold tracking-tight text-white">Мультипоиск #{job.id}</h2>
           <span className={`rounded-full border px-2.5 py-0.5 text-xs font-semibold ${st.cls}`}>{st.label}</span>
-          <a href="#/jobs" className="ml-auto flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-semibold text-muted transition-colors hover:text-ink">
-            <ArrowLeft className="size-4" /> Все мультипоиски
-          </a>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            {/* «Новый мультипоиск» — возврат к форме; работает и пока текущий идёт фоном
+                (воркер не привязан к открытой странице, см. /jobs/{id} polling). */}
+            <a href="#/batch" className="flex items-center gap-1.5 rounded-lg border border-brand/30 bg-brand/10 px-3 py-2 text-sm font-semibold text-brand-soft transition-colors hover:bg-brand/20 hover:text-white">
+              <Plus className="size-4" /> Новый мультипоиск
+            </a>
+            <a href="#/jobs" className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-semibold text-muted transition-colors hover:text-ink">
+              <ArrowLeft className="size-4" /> Все мультипоиски
+            </a>
+          </div>
         </div>
 
         {/* Прогресс */}

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { m } from "framer-motion";
 import {
   History as HistoryIcon, Plane, Hotel, RotateCw, ChevronRight, Loader2, Search,
-  CheckCircle2, AlertTriangle,
+  CheckCircle2, AlertTriangle, Layers,
 } from "lucide-react";
 import GlassCard from "../components/ui/GlassCard.jsx";
 import { staggerContainer, fadeUp } from "../lib/animations.js";
@@ -10,6 +10,17 @@ import { formatPrice, formatDate, formatDateTime, providerLabel } from "../lib/f
 import { navigate } from "../lib/router.js";
 import { setRepeat } from "../lib/repeatStore.js";
 import { apiFetch } from "../lib/api.js";
+
+/** Статус мультипоиска: цвет/подпись бейджа. Совпадает с JobsPage/JobPage. */
+const JOB_STATUS = {
+  pending:     { label: "в очереди",        cls: "border-white/15 bg-white/5 text-muted" },
+  running:     { label: "идёт",             cls: "border-ocean/40 bg-ocean/15 text-ocean" },
+  done:        { label: "готово",           cls: "border-emerald-400/30 bg-emerald-500/15 text-emerald-200" },
+  partial:     { label: "частично",         cls: "border-amber-400/30 bg-amber-400/10 text-amber-300" },
+  failed:      { label: "ошибка",           cls: "border-rose-400/30 bg-rose-500/15 text-rose-200" },
+  interrupted: { label: "прервано",         cls: "border-amber-400/30 bg-amber-400/10 text-amber-300" },
+};
+
 
 /** Краткая сводка параметров прогона для заголовка строки истории. */
 function summarize(p) {
@@ -21,16 +32,24 @@ function summarize(p) {
   return { hotels, route, detail };
 }
 
-/** HistoryPage — список прошлых прогонов (#/history): параметры + дата + «Повторить». */
+/** HistoryPage — список прошлых прогонов И мультипоисков (#/history). */
 export default function HistoryPage() {
   const [runs, setRuns] = useState(null);
+  const [jobs, setJobs] = useState(null);
   const [error, setError] = useState(null);
 
   useEffect(() => {
     let alive = true;
-    apiFetch("/api/runs")
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((j) => alive && setRuns(j))
+    // Тянем одновременно одиночные прогоны и мультипоиски (audit-2026-06).
+    Promise.all([
+      apiFetch("/api/runs").then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP /api/runs ${r.status}`)))),
+      apiFetch("/api/jobs").then((r) => (r.ok ? r.json() : [])),  // jobs опц. (если 401/403)
+    ])
+      .then(([r, j]) => {
+        if (!alive) return;
+        setRuns(r);
+        setJobs(Array.isArray(j) ? j : []);
+      })
       .catch((e) => alive && setError(String(e)));
     return () => {
       alive = false;
@@ -68,7 +87,55 @@ export default function HistoryPage() {
           </GlassCard>
         )}
 
-        {runs && runs.length === 0 && (
+        {/* Мультипоиски — отдельная секция перед одиночными прогонами (audit-2026-06).
+            Показываем последние ≤10 мультипоисков (api/jobs отдаёт по убыванию id).
+            Каждая карточка — переход на #/jobs/{id} с прогрессом/направлениями. */}
+        {jobs && jobs.length > 0 && (
+          <>
+            <m.div variants={fadeUp} className="flex items-center gap-2 px-1 pt-2 text-xs font-semibold uppercase tracking-wider text-muted">
+              <Layers className="size-3.5 text-brand-soft" /> Мультипоиски ({jobs.length})
+            </m.div>
+            {jobs.slice(0, 10).map((j) => {
+              const status = JOB_STATUS[j.status] ?? JOB_STATUS.pending;
+              const summary = (j.directions ?? []).map((d) => {
+                const dates = d.date_from && d.date_to ? ` (${d.date_from} → ${d.date_to})` : "";
+                return `${d.country}${dates}`;
+              }).join(" · ") || (j.destinations ?? []).join(", ");
+              return (
+                <m.a
+                  key={`job-${j.id}`}
+                  variants={fadeUp}
+                  href={`#/jobs/${j.id}`}
+                  className="glass-surface group flex items-center gap-3 rounded-xl2 p-4 shadow-glass transition-colors hover:border-brand/40"
+                >
+                  <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-white/[0.05] text-sm font-bold text-brand-soft">
+                    <Layers className="size-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-ink">
+                      <span className="truncate">Мультипоиск #{j.id}</span>
+                      <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${status.cls}`}>
+                        {status.label}
+                      </span>
+                    </div>
+                    <div className="mt-0.5 truncate text-xs text-muted">{summary}</div>
+                    <div className="mt-1 text-[11px] text-muted/70">
+                      {formatDateTime(j.created_at)}
+                      {" · "}{j.progress_done}/{j.progress_total} направлений
+                      {j.error && <span className="ml-2 text-amber-300/80">{j.error}</span>}
+                    </div>
+                  </div>
+                  <ChevronRight className="hidden size-4 shrink-0 text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-ink md:block" />
+                </m.a>
+              );
+            })}
+            <m.div variants={fadeUp} className="flex items-center gap-2 px-1 pt-4 text-xs font-semibold uppercase tracking-wider text-muted">
+              <Search className="size-3.5 text-brand-soft" /> Одиночные прогоны ({runs?.length ?? 0})
+            </m.div>
+          </>
+        )}
+
+        {runs && runs.length === 0 && (!jobs || jobs.length === 0) && (
           <GlassCard variants={fadeUp} className="p-10 text-center text-sm text-muted">
             Пока пусто — выполни первый поиск.
           </GlassCard>
