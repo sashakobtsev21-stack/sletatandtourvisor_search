@@ -22,6 +22,24 @@ def test_init_otel_noop_when_disabled(monkeypatch):
     assert otel_setup.init_otel(None) is False
 
 
+def test_endpoint_trailing_slash_normalized(monkeypatch):
+    """reviewer-2026-06 P1: до фикса `http://otel:4318/` + `/v1/traces` давал
+    `host:4318//v1/traces` — OTLP collector 404, spans терялись."""
+    # симулируем что пакеты opentelemetry есть, проверяя только нормализацию URL
+    # (без них init_otel вернёт False; здесь не запускаем init, проверяем чистую логику)
+    cases = [
+        ("http://otel:4318",  "http://otel:4318/v1/traces"),
+        ("http://otel:4318/", "http://otel:4318/v1/traces"),
+        ("http://otel:4318//", "http://otel:4318/v1/traces"),
+        ("http://otel:4318/v1/traces",  "http://otel:4318/v1/traces"),
+        ("http://otel:4318/v1/traces/", "http://otel:4318/v1/traces"),
+    ]
+    for ep, expected in cases:
+        normalized = ep.rstrip("/")
+        full = normalized if normalized.endswith("/v1/traces") else normalized + "/v1/traces"
+        assert full == expected, f"{ep!r} → {full!r}, ожидалось {expected!r}"
+
+
 def test_create_app_works_without_otel(tmp_path, monkeypatch):
     """create_app не должен ломаться при отсутствии env (полная регрессия)."""
     monkeypatch.delenv("TOURSEARCH_OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)

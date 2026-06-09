@@ -115,6 +115,17 @@ def test_api_v1_query_string_preserved(tmp_path):
     assert client.get("/api/runs?limit=201").status_code == 422
 
 
+def test_api_v1_bare_no_trailing_slash(tmp_path):
+    """reviewer-2026-06 P1: /api/v1 БЕЗ слэша раньше не переписывался И получал
+    самосылающийся Deprecation `</api/v1/v1>`. Теперь и переписывается, и БЕЗ
+    deprecation-заголовка (это валидный v1-вход)."""
+    client = TestClient(create_app(db_path=str(tmp_path / "w.db")))
+    r = client.get("/api/v1")
+    # ровно `/api/v1` rewrite на `/api` → его нет, 404; но БЕЗ Deprecation
+    assert "deprecation" not in {k.lower() for k in r.headers}, \
+        "/api/v1 не должен получать самосылающийся deprecation"
+
+
 def test_health_metrics_no_deprecation_header(tmp_path):
     """/healthz, /readyz, /metrics — НЕ под /api/*, deprecation НЕ ставим."""
     client = TestClient(create_app(db_path=str(tmp_path / "w.db")))

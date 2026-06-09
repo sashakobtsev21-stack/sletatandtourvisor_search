@@ -67,9 +67,11 @@ def init_otel(app: "FastAPI | None" = None) -> bool:
         "deployment.environment": env,
     })
     provider = TracerProvider(resource=resource)
-    provider.add_span_processor(BatchSpanProcessor(
-        OTLPSpanExporter(endpoint=endpoint + "/v1/traces" if not endpoint.endswith("/v1/traces") else endpoint)
-    ))
+    # Нормализация endpoint: убираем trailing / (иначе получалось `host:4318//v1/traces`,
+    # OTLP collector отвечает 404, spans молча терялись — reviewer-2026-06 P1).
+    ep = endpoint.rstrip("/")
+    full_endpoint = ep if ep.endswith("/v1/traces") else ep + "/v1/traces"
+    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=full_endpoint)))
     trace.set_tracer_provider(provider)
     log.info("OpenTelemetry: traces → %s (env=%s, version=%s)", endpoint, env, service_version)
     # Auto-instrument FastAPI (нужен app instance).

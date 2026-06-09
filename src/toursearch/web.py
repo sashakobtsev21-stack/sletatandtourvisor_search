@@ -327,16 +327,19 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
         """`/api/v1/X` → внутрь как `/api/X`. На исходящем ответе legacy `/api/*` (не /v1)
         ставим Deprecation + Link на канонический /api/v1 путь (RFC 8594)."""
         path = request.url.path
-        is_v1 = path.startswith(_API_V1_PREFIX)
+        # Считаем v1 и `/api/v1/X`, и точное `/api/v1` (без слэша) — иначе bare path
+        # не переписывался и одновременно получал ложный `Deprecation: true` с самосылкой
+        # `Link: </api/v1/v1>` (reviewer-2026-06 P1).
+        is_v1 = path == "/api/v1" or path.startswith(_API_V1_PREFIX)
         if is_v1:
-            # Подменяем path в scope — FastAPI сам перематчит маршрут.
-            new_path = "/api/" + path[len(_API_V1_PREFIX):]
+            tail = path[len(_API_V1_PREFIX):] if path.startswith(_API_V1_PREFIX) else ""
+            new_path = "/api" + ("/" + tail if tail else "")
             request.scope["path"] = new_path
             request.scope["raw_path"] = new_path.encode("utf-8")
         resp = await call_next(request)
-        # Deprecation только на legacy /api/* (НЕ /api/v1/*, НЕ остальное).
+        # Deprecation только на legacy /api/* (НЕ /api/v1[/...], НЕ остальное).
         # Probe-эндпоинты (/healthz/readyz/metrics) и фронт-статика (/app) не трогаем.
-        if not is_v1 and path.startswith("/api/") and not path.startswith("/api/v1/"):
+        if not is_v1 and path.startswith("/api/"):
             resp.headers.setdefault("Deprecation", "true")
             resp.headers.setdefault(
                 "Link", f'</api/v1{path[len("/api"):]}>; rel="successor-version"')

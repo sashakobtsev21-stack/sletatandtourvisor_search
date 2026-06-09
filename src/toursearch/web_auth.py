@@ -298,10 +298,12 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
         resp.set_cookie("ts_csrf", csrf, httponly=False, samesite="lax",  # JS читает → X-CSRF-Token
                         secure=secure_cookies, max_age=max_age)
 
-    # Анти-брутфорс/абьюз входа и регистрации (in-memory, одно-процессный uvicorn → при масштабе Redis).
-    _login_rate = SlidingWindow(limit=20, window=300.0)   # попыток входа с одного IP / 5 мин
-    _login_fails = SlidingWindow(limit=5, window=900.0)   # неудач на (username|ip) / 15 мин → лок
-    _reg_rate = SlidingWindow(limit=3, window=600.0)      # регистраций с одного IP / 10 мин
+    # Анти-брутфорс/абьюз входа и регистрации. name= — стабильный префикс Redis-ключей
+    # (счётчики переживают рестарт процесса; без него namespace `anon<id>:` сбрасывался
+    # — reviewer-2026-06). На InMemoryBackend параметр игнорируется.
+    _login_rate = SlidingWindow(limit=20, window=300.0, name="login_rate")   # попыток / IP / 5 мин
+    _login_fails = SlidingWindow(limit=5, window=900.0, name="login_fails")  # неудач (user|ip) / 15 мин → лок
+    _reg_rate = SlidingWindow(limit=3, window=600.0, name="reg_rate")        # регистраций / IP / 10 мин
 
     @app.post("/api/login")
     async def api_login(request: Request, username: str = Form(...), password: str = Form(...),
