@@ -22,16 +22,21 @@ from toursearch.models import (
     SearchParams,
 )
 from toursearch.providers._formcheck import exact, norm, set_equal, text_contains
-from toursearch.providers.sletat import _MEAL_BTN
-from toursearch.providers.sletat import _OPERATOR_MAP as SL_OPS
-from toursearch.providers.sletat import _parse_hotel_price as sl_hprice
+# Публичные алиасы провайдеров (P2-b audit-3): раньше catalog импортировал _MEAL_BTN /
+# _OPERATOR_MAP / _parse_hotel_price / _split_name_stars / _departure_candidates /
+# _parse_price — приватные имена. Layering-issue устранён: в провайдерах теперь есть
+# публичные «без подчёркивания» алиасы, catalog их и берёт. Имена-aliases (SL_OPS, TV_OPS,
+# sl_hprice, tv_dep, ...) оставлены для краткости и читаемости внутри catalog.
+from toursearch.providers.sletat import MEAL_BTN as _MEAL_BTN
+from toursearch.providers.sletat import OPERATOR_MAP as SL_OPS
+from toursearch.providers.sletat import parse_hotel_price as sl_hprice
 from toursearch.providers.sletat import build_hotel_offers as sl_hotels
 from toursearch.providers.sletat import build_operator_offers as sl_ops
-from toursearch.providers.tourvisor import _OPERATOR_MAP as TV_OPS
+from toursearch.providers.tourvisor import OPERATOR_MAP as TV_OPS
 from toursearch.providers.tourvisor import (
-    _departure_candidates as tv_dep,
-    _parse_price,
-    _split_name_stars,
+    departure_candidates as tv_dep,
+    parse_price as _parse_price,
+    split_name_stars as _split_name_stars,
     build_hotel_offers as tv_hotels,
     filter_offers_by_operators as tv_filter,
 )
@@ -1335,7 +1340,7 @@ _reg(GUI11, [
 # Отдельная сессия: один раз заполняем форму и запускаем поиск (через проверенные методы
 # провайдера), кэшируем страницу выдачи и гоняем по ней все проверки результатов/блинчика.
 from toursearch.providers.sletat import SletatProvider as _SletatProv  # noqa: E402
-from toursearch.providers.sletat import _parse_price as _sl_pp  # noqa: E402
+from toursearch.providers.sletat import parse_price as _sl_pp  # noqa: E402
 
 _sl = _SletatProv(headless=True)
 _RESULTS_PAGE = {"page": None, "params": None}

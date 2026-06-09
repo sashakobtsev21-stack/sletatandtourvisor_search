@@ -1074,7 +1074,7 @@ class Storage:
         self._conn.commit()
         return cur.rowcount
 
-    def purge_old(self, days: int) -> dict[str, int]:
+    def purge_old(self, days: int, *, batch_size: int = 500) -> dict[str, int]:
         """Каскадная чистка устаревших артефактов (P1-6): runs/notifications/anon_usage
         старше `days` дней. provider_results/offers/hotel_offers/operator_offers удалятся
         автоматически через FK ON DELETE CASCADE на runs. Возвращает счётчики удалённого
@@ -1082,17 +1082,47 @@ class Storage:
         батча, runs/notifications связаны с ними по job_id — каскада на jobs нет
         специально, но при желании можно расширить.
 
+        Удаление БАТЧАМИ по `batch_size` строк (P2-a audit-3 от 2026-06): на крупной БД
+        одиночный DELETE с FK CASCADE на тысячи строк блокировал writer на десятки секунд,
+        мешая параллельным save_report. Чанки даёт промежуточный COMMIT, освобождая
+        writer-lock между итерациями.
+
         days <= 0 → ничего не делаем (защита от случайного полного wipe)."""
         if days <= 0:
             return {"runs": 0, "notifications": 0, "anon_usage": 0}
         cutoff = (datetime.fromisoformat(auth.utcnow_iso())
                   - timedelta(days=days)).isoformat(timespec="seconds")
-        cur_runs = self._conn.execute("DELETE FROM runs WHERE run_at <= ?", (cutoff,))
-        cur_notif = self._conn.execute("DELETE FROM notifications WHERE created_at <= ?", (cutoff,))
-        cur_anon = self._conn.execute("DELETE FROM anon_usage WHERE updated_at <= ?", (cutoff,))
-        self._conn.commit()
-        return {"runs": cur_runs.rowcount, "notifications": cur_notif.rowcount,
-                "anon_usage": cur_anon.rowcount}
+        n_runs = self._delete_chunked("runs", "run_at <= ?", (cutoff,), batch_size)
+        n_notif = self._delete_chunked(
+            "notifications", "created_at <= ?", (cutoff,), batch_size)
+        n_anon = self._delete_chunked(
+            "anon_usage", "updated_at <= ?", (cutoff,), batch_size)
+        return {"runs": n_runs, "notifications": n_notif, "anon_usage": n_anon}
+
+    def _delete_chunked(self, table: str, where: str, params: tuple, batch_size: int) -> int:
+        """DELETE батчами портабельно через `rowid` (есть у любой SQLite-таблицы,
+        включая таблицы с TEXT-первичным ключом вроде anon_usage). Каждая итерация
+        COMMIT'ится отдельно → writer-lock не держится больше чем на один батч."""
+        total = 0
+        while True:
+            try:
+                rowids = [row[0] for row in self._conn.execute(
+                    f"SELECT rowid FROM {table} WHERE {where} LIMIT ?",  # noqa: S608
+                    (*params, batch_size)).fetchall()]
+                if not rowids:
+                    break
+                placeholders = ",".join("?" * len(rowids))
+                cur = self._conn.execute(
+                    f"DELETE FROM {table} WHERE rowid IN ({placeholders})",  # noqa: S608
+                    rowids)
+                self._conn.commit()
+                total += cur.rowcount
+                if len(rowids) < batch_size:
+                    break
+            except sqlite3.Error:
+                self._conn.rollback()
+                raise
+        return total
 
     def vacuum(self) -> None:
         """VACUUM сжимает БД (актуально после массовой purge_old)."""

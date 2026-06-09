@@ -24,6 +24,7 @@ from toursearch.providers._formcheck import (
 from toursearch.providers.base import (
     DESKTOP_CHROME_UA,
     capture_top as _capture_top,
+    dedup_hotel_offers,
     register_provider,
     start_frame_pump,
     stop_frame_pump,
@@ -172,6 +173,14 @@ def _split_name_stars(title: str) -> tuple[str, int | None]:
     return name, stars
 
 
+# Публичные алиасы для testkit/catalog.py (P2-b audit-3): закрывают layering-issue,
+# когда тест-слой импортировал приватные имена. См. sletat.py.
+OPERATOR_MAP = _OPERATOR_MAP
+parse_price = _parse_price
+split_name_stars = _split_name_stars
+departure_candidates = _departure_candidates
+
+
 def build_hotel_offers(provider_name: str, rows: list[dict]) -> list[HotelOffer]:
     """Собрать HotelOffer из «сырых» карточек [{title, subtitle, rating, price}].
 
@@ -204,7 +213,7 @@ def build_hotel_offers(provider_name: str, rows: list[dict]) -> list[HotelOffer]
                 raw_label=(row.get("price") or "").strip(),
             )
         )
-    return out
+    return dedup_hotel_offers(out)         # P2-c: lazy-load дублирует карточки
 
 
 # Поля SearchParams, которые tourvisor.ru НЕ выставляет в UI формы и API —

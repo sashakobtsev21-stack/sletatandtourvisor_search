@@ -39,6 +39,7 @@ from toursearch.providers._formcheck import (
 from toursearch.providers.base import (
     DESKTOP_CHROME_UA,
     capture_top as _capture_top,
+    dedup_hotel_offers,
     register_provider,
     start_frame_pump,
     stop_frame_pump,
@@ -84,6 +85,15 @@ def _parse_hotel_price(text: str) -> Decimal | None:
         return None
     digits = re.sub(r"\D", "", m.group(0))
     return Decimal(digits) if digits else None
+
+
+# Публичные алиасы для testkit/catalog.py (P2-b audit-3): закрывают layering-issue,
+# когда тест-слой импортировал приватные имена. Подчёркнутые версии остаются для
+# обратной совместимости — не удаляем, чтобы не сломать внутренний код провайдера.
+OPERATOR_MAP = _OPERATOR_MAP
+MEAL_BTN = _MEAL_BTN
+parse_price = _parse_price
+parse_hotel_price = _parse_hotel_price
 
 
 def build_operator_offers(provider_name: str, rows: list[dict]) -> list[Offer]:
@@ -138,7 +148,7 @@ def build_hotel_offers(provider_name: str, rows: list[dict]) -> list[HotelOffer]
                 raw_label=(row.get("price") or "").strip(),
             )
         )
-    return out
+    return dedup_hotel_offers(out)         # P2-c: lazy-load на sletat иногда дублирует карточки
 
 
 @register_provider("sletat")

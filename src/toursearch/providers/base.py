@@ -14,7 +14,7 @@ import os
 import time
 from typing import Awaitable, Callable, Protocol, runtime_checkable
 
-from toursearch.models import ProviderResult, SearchParams
+from toursearch.models import HotelOffer, ProviderResult, SearchParams
 
 # Колбэк живого кадра: (имя площадки, jpeg в base64) → корутина.
 FrameCallback = Callable[[str, str], Awaitable[None]]
@@ -27,6 +27,25 @@ DESKTOP_CHROME_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 )
+
+
+def dedup_hotel_offers(offers: list[HotelOffer]) -> list[HotelOffer]:
+    """Дедупликация HotelOffer по (hotel_name.lower().strip(), price) (P2-c audit-3).
+
+    Сайты с lazy-load (Travelata/Level/Ostrovok) при долистывании выдачи могут отдавать
+    одни и те же карточки повторно. До 2026-06 дубликаты ехали как разные офферы,
+    «лучшая цена» считалась бы корректно, но списки выдачи раздувались. Сохраняем
+    ПЕРВЫЙ оффер для каждой пары (имя, цена) — порядок не страдает.
+    """
+    seen: set[tuple[str, str]] = set()
+    out = []
+    for o in offers:
+        key = ((o.hotel_name or "").strip().lower(), str(o.price))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(o)
+    return out
 
 
 async def _frame_pump(name: str, page, on_frame: FrameCallback, interval_ms: int = 1400) -> None:

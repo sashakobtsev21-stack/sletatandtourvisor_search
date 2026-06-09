@@ -570,6 +570,42 @@ def test_vacuum_succeeds_after_purge(tmp_path):
     storage.close()
 
 
+def test_purge_old_chunks_large_batches(tmp_path):
+    """audit-3 P2: purge_old удаляет батчами по `batch_size` rows.
+    На больших удалениях writer-lock освобождается между чанками."""
+    storage = Storage(tmp_path / "t.db")
+    uid = storage.create_user("u", "p", iters=1000)
+    # 25 устаревших прогонов + 5 свежих
+    old_when = (datetime.now() - timedelta(days=200))
+    for i in range(25):
+        rep = _report()
+        rep.run_at = old_when
+        storage.save_report(rep, user_id=uid)
+    for _ in range(5):
+        rep = _report()
+        rep.run_at = datetime.now()
+        storage.save_report(rep, user_id=uid)
+
+    # batch_size=10 → удаление пройдёт за 3 чанка (10+10+5)
+    counts = storage.purge_old(days=90, batch_size=10)
+    assert counts["runs"] == 25
+    remaining = storage._conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+    assert remaining == 5
+    storage.close()
+
+
+def test_purge_old_with_chunk_size_larger_than_total(tmp_path):
+    """Гранд-кейс: batch_size > totals → один проход, exit при ids < batch_size."""
+    storage = Storage(tmp_path / "t.db")
+    uid = storage.create_user("u", "p", iters=1000)
+    rep = _report()
+    rep.run_at = datetime.now() - timedelta(days=200)
+    storage.save_report(rep, user_id=uid)
+    counts = storage.purge_old(days=90, batch_size=500)
+    assert counts["runs"] == 1
+    storage.close()
+
+
 def test_list_runs_with_status_handles_null_aggregates(tmp_path):
     """Регрессия (audit-gap): прогон, где НИ ОДНОЙ priced_items не нашлось
     (всё упало), сохраняется с cheapest_* = NULL. list_runs_with_status

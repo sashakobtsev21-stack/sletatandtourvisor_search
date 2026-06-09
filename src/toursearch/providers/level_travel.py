@@ -28,6 +28,7 @@ from playwright.async_api import Page, TimeoutError as PWTimeout, async_playwrig
 from toursearch.models import HotelOffer, ProviderResult, SearchParams
 from toursearch.providers.base import (
     capture_top as _capture_top,
+    dedup_hotel_offers,
     register_provider,
     start_frame_pump,
     stop_frame_pump,
@@ -183,7 +184,7 @@ def build_hotel_offers(provider_name: str, rows: list[dict]) -> list[HotelOffer]
                 price=price, currency="RUB", raw_label=(row.get("price") or "").strip(),
             )
         )
-    return out
+    return dedup_hotel_offers(out)         # P2-c: дубли карточек после lazy-load
 
 
 @register_provider("level", experimental=True)
