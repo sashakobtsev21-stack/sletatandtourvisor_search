@@ -103,6 +103,10 @@ def safe_screenshot_path(base_dir: Path, name: str, *, strict_basename: bool = T
     `strict_basename=True` — `name != Path(name).name` отбивается сразу: filename
     не должен содержать ни `/`, ни `\\`, ни компоненты пути после decode.
     """
+    # Резолвим base_dir безусловно — иначе relative_to с НЕрезолвленным base_dir
+    # мог дать ложно-положительный containment-чек (caller-side bug, найден в финальном
+    # review 2026-06). Делаем безопасно на стороне helper'а — пусть caller не думает.
+    base_dir = base_dir.resolve()
     if strict_basename:
         clean = Path(name).name
         if not clean or clean != name:

@@ -55,9 +55,39 @@ to PATH») и, для интерфейса, [Node.js](https://nodejs.org/). Пр
 
 ```bash
 python -m venv .venv
-. .venv/Scripts/activate          # PowerShell: .\.venv\Scripts\Activate.ps1
-pip install -e ".[browser,web,dev]"
+# Linux/macOS:
+. .venv/bin/activate
+# Windows bash:
+. .venv/Scripts/activate
+# Windows PowerShell:
+# .\.venv\Scripts\Activate.ps1
+pip install -e ".[browser,web,dev]"   # dev — pytest/ruff/httpx/httpx2
 playwright install chromium
+```
+
+### Команды разработчика (cheatsheet)
+
+```bash
+# Бэкенд
+pytest -q                                # все unit/integration (e2e исключены)
+pytest -k name_pattern                   # подмножество тестов
+pytest -m e2e                            # живые тесты против реальных sletat/tourvisor
+ruff check src/ tests/ scripts/          # линт
+toursearch web --host 127.0.0.1 --port 8000   # локальный сервер
+
+# Фронт
+cd frontend
+npm run dev                              # dev-сервер с HMR (vite :5173, прокси на :8000)
+npm test                                 # vitest
+npm run build                            # сборка → frontend/dist/
+npm run build:analyze && node scripts/bundle-report.mjs   # анализ бандла
+
+# Управление данными (CLI, в venv)
+toursearch init-auth --username admin    # создать первого юзера (интерактивно)
+toursearch grant-credits --username u --count 50
+toursearch grant-sub --username u --days 30
+toursearch history                       # история прогонов
+toursearch healthcheck                   # форма площадок не сломана?
 ```
 
 ## Запуск
