@@ -79,9 +79,15 @@ export default function BatchPage() {
     if (compatible.length > providers.length) setProviders(compatible);
   }, [refProv, providerModes, mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // При смене режима убираем несовместимые площадки (то же что в одиночном поиске).
+  // При смене режима убираем несовместимые площадки И добавляем релевантные для
+  // НОВОГО режима (Островок при переключении на «Отели» — audit-2026-06).
   useEffect(() => {
-    setProviders((prev) => prev.filter((p) => providerSupportsTours(p)));
+    setProviders((prev) => {
+      const kept = prev.filter((p) => providerSupportsTours(p));
+      const newlyCompatible = (refProv || []).filter(
+        (p) => providerSupportsTours(p) && !kept.includes(p));
+      return [...kept, ...newlyCompatible];
+    });
   }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleProvider = (p) => {
@@ -377,6 +383,7 @@ export default function BatchPage() {
               dirsToCheck.forEach((d) => {
                 incompatReasons(providerCoverage, p, {
                   city: d.departure_city, country: d.country, mode,
+                  operators: opsSelected,
                 }).forEach((r) => allReasons.add(r));
               });
               const partial = supported && allReasons.size > 0;
@@ -421,6 +428,7 @@ export default function BatchPage() {
               dirsToCheck.forEach((d) => {
                 const reasons = incompatReasons(providerCoverage, p, {
                   city: d.departure_city, country: d.country, mode,
+                  operators: opsSelected,
                 });
                 if (reasons.length) issues.push({
                   provider: p,

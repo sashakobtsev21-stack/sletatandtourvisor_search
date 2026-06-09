@@ -70,6 +70,8 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
   const [nightsMin, setNightsMin] = useState(initial?.nights_min ?? 7);
   const [nightsMax, setNightsMax] = useState(initial?.nights_max ?? 10);
   const [departureCity, setDepartureCity] = useState(initial?.departure_city ?? "Москва"); // контролируемый — для сводки
+  // controlled — иначе провайдерные подсказки про «нет страны X» не работали (audit-2026-06).
+  const [destinationCountry, setDestinationCountry] = useState(initial?.destination_country ?? "Турция");
   const [adults, setAdults] = useState(initial?.adults ?? 2);
   const [destinations, setDestinations] = useState([]); // батч: выбранные направления (чипы)
   const [destPick, setDestPick] = useState("");          // батч: страна в селекте «добавить»
@@ -128,12 +130,19 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
     return m[0] === "hotels" ? "Отели" : "Туры";
   };
 
-  // При смене режима (или подгрузке справочника) убираем выбранные площадки, которые в
-  // этом режиме не работают (напр. Островок в «Турах») — чтобы не запускать их впустую
-  // (без результатов и без живой трансляции).
+  // При смене режима убираем выбранные площадки, несовместимые с новым режимом
+  // (напр. Островок в «Турах»), И добавляем те, что становятся релевантными в
+  // НОВОМ режиме (напр. Островок при переключении на «Отели» — audit-2026-06).
+  // Добавляем все совместимые с новым mode площадки из refdata — пользователь
+  // ожидает «по умолчанию сравнивать всё».
   useEffect(() => {
-    setProviders((prev) => prev.filter((p) => providerSupportsMode(p, mode)));
-  }, [mode, providerModes]); // eslint-disable-line react-hooks/exhaustive-deps
+    setProviders((prev) => {
+      const kept = prev.filter((p) => providerSupportsMode(p, mode));
+      const newlyCompatible = (providerOptions || []).filter(
+        (p) => providerSupportsMode(p, mode) && !kept.includes(p));
+      return [...kept, ...newlyCompatible];
+    });
+  }, [mode, providerModes, providerOptions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // При первой подгрузке /api/refdata расширяем выбор до ВСЕХ совместимых площадок
   // (audit-2026-06: пользователь должен по умолчанию сравнивать всё, а не только sletat+tourvisor).
@@ -179,9 +188,9 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
       direct_only: data.get("direct_only") === "on",
       providers,
     };
-    // Батч → много направлений; одиночный поиск → одна страна.
+    // Батч → много направлений; одиночный поиск → одна страна (controlled state).
     if (batch) onSubmit?.({ ...shared, destinations });
-    else onSubmit?.({ ...shared, destination_country: data.get("destination_country") });
+    else onSubmit?.({ ...shared, destination_country: destinationCountry });
   };
 
   return (
@@ -253,7 +262,9 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
 
         {!batch && (
           <Field label="Куда?" icon={Globe2} htmlFor="destination_country">
-            <Select id="destination_country" name="destination_country" icon searchable defaultValue={initial?.destination_country ?? "Турция"}>
+            <Select id="destination_country" name="destination_country" icon searchable
+                    value={destinationCountry}
+                    onChange={(e) => setDestinationCountry(e.target.value)}>
               {countries.map((c) => <option key={c}>{c}</option>)}
             </Select>
           </Field>
@@ -451,12 +462,15 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
             const active = providers.includes(p);
             const incompatible = !providerSupportsMode(p); // не работает в текущем режиме
             const onlyMode = providerOnlyMode(p);          // "Туры"/"Отели" — для бейджа
-            // Не-блокирующие предупреждения по покрытию: город/страна не в whitelist
-            // площадки. Площадка всё равно отметится (агрегаторы Sletat/Tourvisor
-            // всегда поддерживают всё, остальные — ограничены). UI просто подсвечивает.
+            // Не-блокирующие предупреждения по покрытию: город/страна/режим/операторы
+            // не поддерживаются площадкой. Площадка всё равно отметится (агрегаторы
+            // Sletat/Tourvisor всегда поддерживают всё, остальные — ограничены).
+            // UI подсвечивает + баннер ниже перечисляет.
             const reasons = incompatReasons(providerCoverage, p, {
-              city: departureCity,
-              country: batch ? undefined : "",   // в батче страна меняется per-direction
+              city: !isHotels ? departureCity : undefined,    // в отелях вылет не критичен
+              country: batch ? undefined : destinationCountry,  // в батче страна per-direction
+              mode,
+              operators,
             });
             const partial = !incompatible && reasons.length > 0;   // частично поддерживает
             const caveat = caveatOf(providerCoverage, p);
@@ -521,8 +535,10 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
             .map((p) => ({
               provider: p,
               reasons: incompatReasons(providerCoverage, p, {
-                city: departureCity,
-                country: batch ? undefined : undefined,   // в single — страна через FormData
+                city: !isHotels ? departureCity : undefined,
+                country: batch ? undefined : destinationCountry,
+                mode,
+                operators,
               }),
             }))
             .filter((s) => s.reasons.length > 0);

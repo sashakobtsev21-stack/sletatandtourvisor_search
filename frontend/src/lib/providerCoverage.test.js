@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { supportsCity, supportsCountry, supportsMode, incompatReasons, caveatOf } from "./providerCoverage.js";
+import { supportsCity, supportsCountry, supportsMode, supportsOperatorFilter, incompatReasons, caveatOf } from "./providerCoverage.js";
 
 const coverage = {
-  sletat:    { modes: ["tours", "hotels"], departure_cities: "all", countries: "all", caveat: "" },
-  travelata: { modes: ["tours"], departure_cities: ["Москва", "СПб"], countries: ["Турция"], caveat: "Только туры." },
-  ostrovok:  { modes: ["hotels"], departure_cities: "all", countries: "all", caveat: "Отели." },
+  sletat:    { modes: ["tours", "hotels"], departure_cities: "all", countries: "all", operator_filter: true, caveat: "" },
+  travelata: { modes: ["tours"], departure_cities: ["Москва", "СПб"], countries: ["Турция"], operator_filter: true, caveat: "Только туры." },
+  ostrovok:  { modes: ["hotels"], departure_cities: "all", countries: "all", operator_filter: false, caveat: "Отели." },
 };
 
 describe("supportsCity", () => {
@@ -42,6 +42,32 @@ describe("incompatReasons", () => {
   it("ostrovok + tours → причина mode", () => {
     const r = incompatReasons(coverage, "ostrovok", { city: "Москва", country: "Турция", mode: "tours" });
     expect(r.some((s) => s.includes("tours") || s.includes("режим"))).toBe(true);
+  });
+});
+
+describe("supportsOperatorFilter", () => {
+  it("ostrovok = false (отели без понятия 'туроператор')", () => {
+    expect(supportsOperatorFilter(coverage, "ostrovok")).toBe(false);
+  });
+  it("sletat/travelata = true", () => {
+    expect(supportsOperatorFilter(coverage, "sletat")).toBe(true);
+    expect(supportsOperatorFilter(coverage, "travelata")).toBe(true);
+  });
+  it("unknown provider = true (нет данных → считаем поддерживает)", () => {
+    expect(supportsOperatorFilter(coverage, "unknown")).toBe(true);
+  });
+});
+
+describe("incompatReasons + operators", () => {
+  it("ostrovok + выбранные операторы → причина про оператора", () => {
+    const r = incompatReasons(coverage, "ostrovok", {
+      mode: "hotels", operators: ["Anex"],
+    });
+    expect(r.some((s) => s.includes("туроператор"))).toBe(true);
+  });
+  it("ostrovok без operators → причина про оператора НЕ появляется", () => {
+    const r = incompatReasons(coverage, "ostrovok", { mode: "hotels", operators: [] });
+    expect(r.some((s) => s.includes("туроператор"))).toBe(false);
   });
 });
 
