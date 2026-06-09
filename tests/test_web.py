@@ -95,6 +95,34 @@ def test_search_prepare_rejects_bad_price_gracefully(tmp_path):
     assert resp.status_code == 200 and "error" in resp.json()
 
 
+def test_api_v1_mirrors_legacy_routes(tmp_path):
+    """audit-final 2026-06: /api/v1/X → внутри обрабатывается как /api/X.
+    Legacy /api/* отвечает с Deprecation header'ом + Link на v1 (RFC 8594)."""
+    client = TestClient(create_app(db_path=str(tmp_path / "w.db")))
+    r_v1 = client.get("/api/v1/runs?limit=10")
+    r_legacy = client.get("/api/runs?limit=10")
+    assert r_v1.status_code == 200 and r_legacy.status_code == 200
+    assert r_v1.json() == r_legacy.json()
+    assert "deprecation" not in {k.lower() for k in r_v1.headers}
+    assert r_legacy.headers.get("deprecation") == "true"
+    assert "/api/v1/runs" in r_legacy.headers.get("link", "")
+
+
+def test_api_v1_query_string_preserved(tmp_path):
+    """Query-параметры (limit=201 → 422) работают одинаково на v1 и legacy."""
+    client = TestClient(create_app(db_path=str(tmp_path / "w.db")))
+    assert client.get("/api/v1/runs?limit=201").status_code == 422
+    assert client.get("/api/runs?limit=201").status_code == 422
+
+
+def test_health_metrics_no_deprecation_header(tmp_path):
+    """/healthz, /readyz, /metrics — НЕ под /api/*, deprecation НЕ ставим."""
+    client = TestClient(create_app(db_path=str(tmp_path / "w.db")))
+    for path in ("/healthz", "/readyz", "/metrics"):
+        r = client.get(path)
+        assert "deprecation" not in {k.lower() for k in r.headers}, path
+
+
 def test_metrics_endpoint_returns_aggregates(tmp_path):
     """audit-final P2: /metrics — JSON-снимок без auth, агрегаты по основным таблицам."""
     client = TestClient(create_app(db_path=str(tmp_path / "w.db")))

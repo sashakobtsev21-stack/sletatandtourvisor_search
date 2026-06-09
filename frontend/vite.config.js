@@ -34,4 +34,10 @@ export default defineConfig({
       "/run": { target: BACKEND, changeOrigin: true },
     },
   },
+  // vitest: jsdom для component-тестов через @testing-library/react.
+  // Pure-function тесты (lib/*.test.js) тоже работают (jsdom включает Node).
+  test: {
+    environment: "jsdom",
+    setupFiles: ["./src/test-setup.js"],
+  },
 });

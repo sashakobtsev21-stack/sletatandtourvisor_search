@@ -313,6 +313,54 @@ location / {
 }
 ```
 
+### Redis для горизонтального масштабирования
+
+По умолчанию rate-limit (анти-брутфорс входа, анти-абьюз регистрации) — in-memory.
+При запуске multi-worker / multi-instance каждый воркер считает отдельно (лимит
+ослаблен в N раз). Решение: общий Redis-store через переменную окружения.
+
+```bash
+pip install -e ".[redis]"                # отдельный extras (по умолчанию не ставится)
+export TOURSEARCH_REDIS_URL=redis://redis-host:6379/0
+toursearch web
+```
+
+Если URL пустой ИЛИ пакет `redis` не установлен ИЛИ Redis недоступен — автоматический
+fallback на InMemory с warning в лог. Логика sliding-window та же, реализация — ZSet +
+EXPIRE + Lua-script (атомарность из коробки).
+
+### API версионирование (`/api/v1/*`)
+
+Все эндпоинты `/api/*` доступны также под префиксом `/api/v1/*` — рекомендованный
+путь для новых интеграторов. Legacy `/api/*` продолжает работать без изменений,
+но отвечает с двумя заголовками (RFC 8594):
+
+```
+Deprecation: true
+Link: </api/v1/runs>; rel="successor-version"
+```
+
+Стратегия: при будущем breaking change v2 будет отдельной веткой (`/api/v2/*`);
+v1 продолжит работать как сейчас, а legacy `/api/*` можно будет выпиливать в
+будущей мажорной версии. Сейчас (один консумер — фронт того же origin) v1 нужен,
+чтобы внешние интеграторы сразу строились на стабильном версионированном URL.
+
+### OpenTelemetry-трейсинг
+
+Опциональная инструментация FastAPI всех request'ов как spans. Активируется при
+наличии env с URL OTLP-collector'а:
+
+```bash
+pip install -e ".[otel]"                 # opentelemetry-api/sdk/exporter-otlp/instrumentation-fastapi
+export TOURSEARCH_OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318   # OTLP-HTTP
+export TOURSEARCH_OTEL_ENV=production    # атрибут deployment.environment
+toursearch web
+```
+
+Healthcheck/metrics-endpoints (`/healthz`, `/readyz`, `/metrics`) исключены из трейсов
+(шум). Без env / без пакетов → no-op (молча), никаких импортов opentelemetry-*,
+регрессий старта нет. Опт-аут: `TOURSEARCH_OTEL_DISABLED=1`.
+
 ### Liveness/Readiness/Metrics probes
 
 - `GET /healthz` — процесс жив, event loop отвечает (без auth, без БД).

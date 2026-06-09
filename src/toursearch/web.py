@@ -253,6 +253,11 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
             "Задайте реальный провайдер (yookassa) или явно TOURSEARCH_ALLOW_INSECURE=1." % host)
     register_auth(app, db_path=db_path, auth_token=auth_token, secure_cookies=secure_cookies)
     register_billing(app, db_path=db_path)
+    # OpenTelemetry — опциональная инструментация. No-op без TOURSEARCH_OTEL_EXPORTER_OTLP_ENDPOINT.
+    # Должна идти ПОСЛЕ register_auth/register_billing — иначе их middleware/маршруты не попадут
+    # в spans (FastAPIInstrumentor навешивается на текущий состав маршрутов).
+    from toursearch.otel_setup import init_otel
+    init_otel(app)
 
     # --- Предел одновременных поисков (каждый поднимает ~5 браузеров) ---
     # Защита машины от лавины браузеров (двойной клик, баг-ретрай, лёгкое выставление
@@ -305,6 +310,37 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
     # параметры ≈ 5 KB). Не применяется к multipart (для будущей загрузки файлов
     # стоит ослабить точечно); сейчас на проекте файловых аплоадов нет.
     max_body_bytes = max(1024, int(os.environ.get("TOURSEARCH_MAX_BODY_BYTES") or 256 * 1024))
+
+    # --- API versioning: /api/v1/* → внутренний /api/* + Deprecation header на legacy ---
+    # Стратегия (audit-final 2026-06): сейчас все маршруты — на голом /api/* (один
+    # консумер — фронт того же origin). Чтобы можно было ввести breaking changes без
+    # ломания текущего фронта, мы добавляем «зеркало» /api/v1/* через middleware-rewrite:
+    # incoming /api/v1/X → внутри обработается как /api/X. Внешним интеграторам
+    # рекомендуем /api/v1/*; legacy /api/* продолжает работать, но получает
+    # `Deprecation: true` + `Link: </api/v1/...>; rel="successor-version"` (RFC 8594).
+    # При первом breaking change v2 будет уже отдельной веткой роутера; v1 продолжит
+    # работать как сейчас, а legacy /api/* можно будет выпиливать в будущей мажорной.
+    _API_V1_PREFIX = "/api/v1/"
+
+    @app.middleware("http")
+    async def _api_v1_rewrite(request: Request, call_next):
+        """`/api/v1/X` → внутрь как `/api/X`. На исходящем ответе legacy `/api/*` (не /v1)
+        ставим Deprecation + Link на канонический /api/v1 путь (RFC 8594)."""
+        path = request.url.path
+        is_v1 = path.startswith(_API_V1_PREFIX)
+        if is_v1:
+            # Подменяем path в scope — FastAPI сам перематчит маршрут.
+            new_path = "/api/" + path[len(_API_V1_PREFIX):]
+            request.scope["path"] = new_path
+            request.scope["raw_path"] = new_path.encode("utf-8")
+        resp = await call_next(request)
+        # Deprecation только на legacy /api/* (НЕ /api/v1/*, НЕ остальное).
+        # Probe-эндпоинты (/healthz/readyz/metrics) и фронт-статика (/app) не трогаем.
+        if not is_v1 and path.startswith("/api/") and not path.startswith("/api/v1/"):
+            resp.headers.setdefault("Deprecation", "true")
+            resp.headers.setdefault(
+                "Link", f'</api/v1{path[len("/api"):]}>; rel="successor-version"')
+        return resp
 
     @app.middleware("http")
     async def _body_size_limit(request: Request, call_next):
