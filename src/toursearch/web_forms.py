@@ -13,7 +13,24 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+from fastapi.responses import JSONResponse
+
 from toursearch.models import SearchParams
+
+
+def err_response(status: int, message: str, **extras) -> JSONResponse:
+    """Единый формат ошибок API: `{"error": "..."}` + опциональные поля.
+
+    Контракт (audit-3 P1): фронт парсит ошибки только по полю `error`.
+    Где использовали FastAPI HTTPException — продолжаем, FastAPI кладёт сообщение
+    в `detail`; фронт обрабатывает оба ключа в апи-клиенте (api.js).
+
+    Этот helper унифицирует ручные `JSONResponse({"error": ...})` через одно место.
+    `extras` (например, `retry_after=30` для 429) — попадают в тело верхним уровнем.
+    """
+    body: dict = {"error": message}
+    body.update(extras)
+    return JSONResponse(body, status_code=status)
 
 # Sletat ограничивает окно вылета ±13 дней от первой даты (наблюдено вживую).
 MAX_DATE_SPAN_DAYS = 13

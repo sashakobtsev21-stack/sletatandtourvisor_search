@@ -4,24 +4,26 @@
 //
 // Режимы бэкенда (см. docs/AUTH_PLAN.md): local → /api/me 200 со всеми правами (вход не
 // нужен); multiuser → 200 после входа / 401 без; legacy → 200 если есть токен-cookie.
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { apiFetch, setUnauthorizedHandler } from "./api.js";
 import { navigate } from "./router.js";
 
 const AuthContext = createContext(null);
 
-// Single-flight для refresh: параллельные вызовы (login → refresh + onUnauthorized →
-// setUser(null) + другой apiFetch → ещё refresh) шарят одну текущую загрузку /api/me.
-// Раньше последний ответ выигрывал, состояние могло уехать в стейл-значение (P2-4).
-let _refreshInFlight = null;
-
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);   // { mode, username, role, permissions } | null
   const [loading, setLoading] = useState(true);
+  // Single-flight для refresh: параллельные вызовы (login → refresh +
+  // onUnauthorized → setUser(null) + другой apiFetch → ещё refresh) шарят одну
+  // текущую загрузку /api/me. Раньше последний ответ выигрывал, состояние могло
+  // уехать в стейл-значение (P2-4). Реализация через useRef внутри Provider — каждый
+  // AuthProvider-instance имеет свой семафор (audit-3 P2: модульный _refreshInFlight
+  // конфликтовал между провайдерами в тестах с двумя инстансами).
+  const refreshInFlight = useRef(null);
 
   const refresh = useCallback(async () => {
-    if (_refreshInFlight) return _refreshInFlight;
-    _refreshInFlight = (async () => {
+    if (refreshInFlight.current) return refreshInFlight.current;
+    refreshInFlight.current = (async () => {
       try {
         const r = await apiFetch("/api/me");
         setUser(r.ok ? await r.json() : null);
@@ -29,10 +31,10 @@ export function AuthProvider({ children }) {
         setUser(null);
       } finally {
         setLoading(false);
-        _refreshInFlight = null;
+        refreshInFlight.current = null;
       }
     })();
-    return _refreshInFlight;
+    return refreshInFlight.current;
   }, []);
 
   useEffect(() => {
@@ -48,7 +50,8 @@ export function AuthProvider({ children }) {
       const r = await apiFetch("/api/login", { method: "POST", body });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
-        throw new Error(j.error || "Не удалось войти");
+        // err: ручные JSONResponse({"error"}) vs HTTPException → "detail" (FastAPI).
+        throw new Error(j.error || j.detail || "Не удалось войти");
       }
       await refresh(); // подтянуть роль/права из /api/me
     },
@@ -63,7 +66,7 @@ export function AuthProvider({ children }) {
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
-        throw new Error(j.error || "Не удалось зарегистрироваться");
+        throw new Error(j.error || j.detail || "Не удалось зарегистрироваться");
       }
       await refresh(); // авто-вход после регистрации
     },

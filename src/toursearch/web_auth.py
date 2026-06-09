@@ -101,8 +101,8 @@ def _required_permission(path: str) -> "str | None":
         return "tests.view"
     if path.startswith("/tests/"):                       # /tests/prepare, /tests/stream
         return "tests.run"
-    if path.startswith("/api/users"):
-        return "users.manage"
+    if path.startswith("/api/users") or path.startswith("/api/audit"):
+        return "users.manage"            # admin-only (audit-log — управление пользователями)
     if path.startswith("/search"):                       # /search, /prepare, /cancel, /stream
         return "search.run"
     if path.startswith("/api/runs") or path == "/history" or path.startswith("/run/"):
@@ -473,3 +473,18 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
                     details=joined,
                 )
             return _user_public(storage.get_user_by_id(user_id))
+
+    @app.get("/api/audit")
+    async def api_audit(
+        target_user_id: int | None = None,
+        actor_id: int | None = None,
+        limit: int = 100,
+    ):
+        """Чтение audit-log (admin-only через _required_permission → users.manage).
+
+        Фильтры опциональные; без них — последние `limit` записей. Лимит верхне
+        ограничен (защита от вытягивания всей истории в RAM)."""
+        limit = max(1, min(limit, 500))
+        with Storage(db_path) as storage:
+            return storage.list_audit(
+                limit=limit, target_user_id=target_user_id, actor_id=actor_id)

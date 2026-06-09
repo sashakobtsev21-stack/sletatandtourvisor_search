@@ -417,6 +417,35 @@ def test_admin_patch_writes_audit_to_db(tmp_path):
     assert "is_active:True->False" in (row["details"] or "")
 
 
+def test_api_audit_admin_only(tmp_path):
+    """audit-3 P1-b: /api/audit — read-API для логов админ-мутаций.
+    Доступ только админу (через _required_permission → users.manage).
+    Гость → 401, user → 403, admin → 200 + последние N."""
+    db = _seed(tmp_path, [("admin", "secret1", "admin"), ("u", "secret1", "user")])
+    # гость
+    guest = TestClient(create_app(db_path=db))
+    assert guest.get("/api/audit").status_code == 401
+    # обычный user
+    user = TestClient(create_app(db_path=db))
+    _login(user, "u", "secret1")
+    assert user.get("/api/audit").status_code == 403
+    # admin — пусто пока, но 200
+    admin = TestClient(create_app(db_path=db))
+    _login(admin, "admin", "secret1")
+    r = admin.get("/api/audit")
+    assert r.status_code == 200 and r.json() == []
+    # делаем admin-мутацию → должна появиться запись
+    uid = next(x["id"] for x in admin.get("/api/users").json() if x["username"] == "u")
+    admin.patch(f"/api/users/{uid}", json={"role": "vip"}, headers=_csrf(admin))
+    rows = admin.get("/api/audit").json()
+    assert len(rows) == 1
+    assert rows[0]["action"] == "user_patch"
+    assert rows[0]["actor_name"] == "admin"
+    # фильтр по target_user_id
+    assert len(admin.get(f"/api/audit?target_user_id={uid}").json()) == 1
+    assert len(admin.get("/api/audit?target_user_id=9999").json()) == 0
+
+
 def test_patch_users_invalid_shape_returns_422(tmp_path):
     """audit-3 P1: PATCH /api/users теперь принимает UserPatch (pydantic).
     Bad shape (`is_active: 'yes'`, role=null с дополнительными полями) → 422."""

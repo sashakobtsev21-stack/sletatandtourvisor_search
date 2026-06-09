@@ -10,10 +10,10 @@
 from __future__ import annotations
 
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import JSONResponse
 
 from toursearch import billing
 from toursearch.storage import Storage
+from toursearch.web_forms import err_response
 
 
 def register_billing(app: FastAPI, *, db_path: str) -> None:
@@ -49,11 +49,10 @@ def register_billing(app: FastAPI, *, db_path: str) -> None:
     async def billing_checkout(request: Request, plan: str = Form("month")):
         user = getattr(request.state, "user", None)
         if user is None:
-            return JSONResponse({"error": "Войдите или зарегистрируйтесь, чтобы оформить доступ."},
-                                status_code=400)
+            return err_response(400, "Войдите или зарегистрируйтесь, чтобы оформить доступ.")
         kind, spec = billing.plan_spec(plan)
         if spec is None:
-            return JSONResponse({"error": "Неизвестный тариф."}, status_code=400)
+            return err_response(400, "Неизвестный тариф.")
         credits, days = spec.get("credits", 0), spec.get("days", 0)
         with Storage(db_path) as s:
             pid = s.create_payment(user["id"], provider=billing.PROVIDER, plan=plan,
@@ -69,11 +68,10 @@ def register_billing(app: FastAPI, *, db_path: str) -> None:
         """Имитация успешной оплаты (только провайдер 'stub'). Делает то же, что сделал бы
         вебхук реального провайдера: помечает платёж успешным и продлевает подписку."""
         if billing.PROVIDER != "stub":
-            return JSONResponse({"error": "Имитация недоступна: задан реальный провайдер."},
-                                status_code=400)
+            return err_response(400, "Имитация недоступна: задан реальный провайдер.")
         user = getattr(request.state, "user", None)
         if user is None:
-            return JSONResponse({"error": "Нужен вход."}, status_code=400)
+            return err_response(400, "Нужен вход.")
         with Storage(db_path) as s:
             p = s.get_payment(payment_id)
             if p is None or p["user_id"] != user["id"]:
