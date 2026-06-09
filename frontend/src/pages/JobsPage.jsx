@@ -67,7 +67,14 @@ export default function JobsPage() {
                   <span className="text-xs text-muted">{formatShortDateTime(j.created_at)}</span>
                 </div>
                 <div className="truncate text-sm text-muted">
-                  {j.destinations.join(", ")}
+                  {/* После 2026-06: directions содержат per-direction даты. Показываем
+                      «Страна (от→до)» через ·, fallback на legacy список стран. */}
+                  {j.directions?.length
+                    ? j.directions.map((d) => {
+                        const dates = d.date_from && d.date_to ? ` (${d.date_from} → ${d.date_to})` : "";
+                        return `${d.country}${dates}`;
+                      }).join(" · ")
+                    : j.destinations.join(", ")}
                 </div>
                 {j.error && <div className="mt-1 text-xs text-amber-300/80">{j.error}</div>}
               </div>

@@ -27,6 +27,8 @@ from toursearch.models import SearchParams
 from toursearch.orchestrator import run_search
 from toursearch.providers.base import prune_screenshots
 from toursearch.storage import Storage
+from datetime import date
+
 from toursearch.web_auth import current_user_id, owner_filter
 from toursearch.web_forms import err_response, parse_search_params
 
@@ -60,7 +62,10 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
         stored = json.loads(job["params_json"])
         base = SearchParams.model_validate(stored["search_params"])
         providers = stored["providers"]
-        destinations = json.loads(job["destinations_json"])
+        # `directions` — список dict'ов с per-direction параметрами (country +
+        # опц. date_from/date_to/departure_city/nights_min/nights_max). Хелпер
+        # нормализует legacy list[str] → list[{"country": ...}] (даты берутся из base).
+        directions = Storage.decode_directions(job["destinations_json"])
         user_id = job["user_id"]
 
         with Storage(db_path) as s:
@@ -84,8 +89,12 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
             done = 0
             failures = 0
             interrupted = False
-            total = len(destinations)
-            for country in destinations:
+            total = len(directions)
+            for direction in directions:
+                country = direction.get("country")
+                if not country:
+                    failures += 1
+                    continue
                 # Списание считаем по СВЕЖЕМУ пользователю каждый раз: за длинный батч могли
                 # оформить подписку / сменить роль — тогда кредиты больше не списываем.
                 # P2-c: один CreditSession на направление; refund при exit без mark_done.
@@ -106,7 +115,21 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
                     await active.acquire_wait()
                     success = False
                     try:
-                        sp = base.model_copy(update={"destination_country": country})
+                        # Per-direction оверрайды (audit-2026-06): каждое направление
+                        # может иметь свои даты/город вылета/число ночей. Что не задано —
+                        # берётся из shared base. Даты приходят строками ISO ("YYYY-MM-DD").
+                        overrides: dict = {"destination_country": country}
+                        if direction.get("date_from"):
+                            overrides["date_from"] = date.fromisoformat(direction["date_from"])
+                        if direction.get("date_to"):
+                            overrides["date_to"] = date.fromisoformat(direction["date_to"])
+                        if direction.get("departure_city"):
+                            overrides["departure_city"] = direction["departure_city"]
+                        if direction.get("nights_min") is not None:
+                            overrides["nights_min"] = int(direction["nights_min"])
+                        if direction.get("nights_max") is not None:
+                            overrides["nights_max"] = int(direction["nights_max"])
+                        sp = base.model_copy(update=overrides)
                         report = await run_search(sp, providers=providers, headless=True)
                         # Heavy write — worker-thread (раньше save_report блокировал loop
                         # на N×M INSERT'ов внутри батч-цикла, влияло на параллельные стримы).
@@ -159,23 +182,64 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
 
     @app.post("/api/jobs")
     async def create_job_ep(request: Request):
-        # Разбор формы — общий с /search/prepare; в web_forms.py, чтобы не было
-        # обратной зависимости web_jobs→web (раньше был лениво-импорт-костыль).
-        f = await request.form()
-        destinations = list(dict.fromkeys(d for d in f.getlist("destination") if d))  # уникальные, порядок
-        if len(destinations) < 2:
+        """Создать мультипоиск. Два варианта тела (для совместимости):
+
+        * JSON body (рекомендуется): `{"shared": {<form-fields...>}, "directions":
+          [{"country": "Турция", "date_from": "2026-07-05", "date_to": "2026-07-15",
+            "departure_city"?, "nights_min"?, "nights_max"?}, ...]}` — у каждого
+          направления свои даты/город/ночи; что не задано — берётся из shared.
+        * form-data (legacy): `destination=Турция&destination=Египет&date_from=...` —
+          одни даты на всех направлений (старый клиент).
+        """
+        ctype = (request.headers.get("content-type") or "").lower()
+        directions: list[dict] = []
+        if "application/json" in ctype:
+            try:
+                body = await request.json()
+            except Exception:                       # noqa: BLE001
+                return err_response(400, "Некорректное JSON-тело.")
+            shared_raw = body.get("shared") or {}
+            raw_dirs = body.get("directions") or []
+            if not isinstance(raw_dirs, list) or not isinstance(shared_raw, dict):
+                return err_response(400, "Ожидаются поля `shared` (object) и `directions` (array).")
+            # Дедуп по (country, date_from, date_to, departure_city) — порядок сохраняем.
+            seen = set()
+            for d in raw_dirs:
+                if not isinstance(d, dict) or not d.get("country"):
+                    continue
+                key = (d.get("country"), d.get("date_from"), d.get("date_to"),
+                       d.get("departure_city"))
+                if key in seen:
+                    continue
+                seen.add(key)
+                directions.append({k: v for k, v in d.items() if v not in (None, "")})
+
+            # Псевдо-форма для parse_search_params (он ждёт интерфейс form.getlist/get).
+            class _F:
+                def __init__(self, data: dict): self._d = data
+                def get(self, k, default=None): return self._d.get(k, default)
+                def getlist(self, k):
+                    v = self._d.get(k)
+                    return v if isinstance(v, list) else ([v] if v not in (None, "") else [])
+            f = _F(shared_raw)
+        else:
+            f = await request.form()
+            countries = list(dict.fromkeys(d for d in f.getlist("destination") if d))
+            directions = [{"country": c} for c in countries]   # legacy: per-direction оверрайдов нет
+
+        if len(directions) < 2:
             return err_response(400, "Выберите минимум 2 направления для батч-анализа.")
-        if len(destinations) > MAX_DESTINATIONS_PER_JOB:                # DoS-cap
+        if len(directions) > MAX_DESTINATIONS_PER_JOB:                # DoS-cap
             return err_response(
                 400,
                 f"В одном мультипоиске не более {MAX_DESTINATIONS_PER_JOB} направлений "
-                f"(прислано {len(destinations)}).")
-        try:  # страна-плейсхолдер destinations[0]; воркер подставит каждую
-            base, providers = parse_search_params(f, destination_country=destinations[0])
+                f"(прислано {len(directions)}).")
+        try:  # страна-плейсхолдер directions[0]; воркер подставит каждую при прогоне
+            base, providers = parse_search_params(f, destination_country=directions[0]["country"])
         except ValueError as exc:
             return err_response(400, str(exc))
 
-        n = len(destinations)
+        n = len(directions)
         user = getattr(request.state, "user", None)
         if billing.consumes_credit(user):  # обычный кредит-юзер: нужно N кредитов авансом
             left = int(user.get("searches_left") or 0)
@@ -185,7 +249,7 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
             {"search_params": base.model_dump(mode="json"), "providers": providers},
             ensure_ascii=False)
         with Storage(db_path) as s:
-            job_id = s.create_job(current_user_id(request), params_json, destinations)
+            job_id = s.create_job(current_user_id(request), params_json, directions)
         app_state.bg_tasks.spawn(_run_job(job_id), name=f"batch-job:{job_id}")
         return {"job_id": job_id, "total": n}
 
@@ -194,10 +258,20 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
         owner = owner_filter(request)  # свои анализы (user) или все (admin/local)
         with Storage(db_path) as s:
             jobs = s.list_jobs(owner_id=owner)
-        return [{"id": j["id"], "status": j["status"], "progress_done": j["progress_done"],
-                 "progress_total": j["progress_total"], "created_at": j["created_at"],
-                 "finished_at": j.get("finished_at"), "error": j.get("error"),
-                 "destinations": json.loads(j["destinations_json"])} for j in jobs]
+        out = []
+        for j in jobs:
+            dirs = Storage.decode_directions(j["destinations_json"])
+            out.append({
+                "id": j["id"], "status": j["status"],
+                "progress_done": j["progress_done"], "progress_total": j["progress_total"],
+                "created_at": j["created_at"], "finished_at": j.get("finished_at"),
+                "error": j.get("error"),
+                # `destinations` — обратно-совместимый список стран (для старого UI);
+                # `directions` — полный список с per-direction параметрами (новый UI).
+                "destinations": [d["country"] for d in dirs],
+                "directions": dirs,
+            })
+        return out
 
     @app.get("/api/jobs/{job_id}")
     async def get_job_ep(request: Request, job_id: int):
@@ -217,20 +291,35 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
                 "cheapest_price": str(ch.price) if ch else None,
                 "cheapest_label": ch.label if ch else None,
                 "cheapest_provider": ch.provider if ch else None}
-        destinations = json.loads(job["destinations_json"])
+        decoded = Storage.decode_directions(job["destinations_json"])
         running = job["status"] in ("pending", "running")
-        directions = []
-        for c in destinations:
+        # done_map keyed by country; для жобов с дублирующимися странами (разные даты)
+        # это работает не идеально, но дублирующиеся страны мы дедуплицируем в POST
+        # по (country, date_from, date_to, departure_city).
+        directions_out = []
+        for d in decoded:
+            c = d["country"]
+            base_entry = {
+                "country": c,
+                "date_from": d.get("date_from"),
+                "date_to": d.get("date_to"),
+                "departure_city": d.get("departure_city"),
+                "nights_min": d.get("nights_min"),
+                "nights_max": d.get("nights_max"),
+            }
             if c in done_map:
-                directions.append({"country": c, "status": "done", **done_map[c]})
+                directions_out.append({**base_entry, "status": "done", **done_map[c]})
             else:  # ещё не дошли (running) либо не удалось (терминальный статус без прогона)
-                directions.append({"country": c, "status": "pending" if running else "failed",
-                                   "run_id": None, "cheapest_price": None,
-                                   "cheapest_label": None, "cheapest_provider": None})
+                directions_out.append({
+                    **base_entry,
+                    "status": "pending" if running else "failed",
+                    "run_id": None, "cheapest_price": None,
+                    "cheapest_label": None, "cheapest_provider": None,
+                })
         return {"id": job["id"], "status": job["status"], "progress_done": job["progress_done"],
                 "progress_total": job["progress_total"], "created_at": job["created_at"],
                 "finished_at": job.get("finished_at"), "error": job.get("error"),
-                "directions": directions}
+                "directions": directions_out}
 
     # --- Уведомления в приложении (Ф2): значок «готово» поллит непрочитанные ---
 

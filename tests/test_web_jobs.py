@@ -76,6 +76,97 @@ def _params_json(providers=("sletat",)) -> str:
 
 # --------------------------- HTTP-контракт ---------------------------
 
+def _shared_form() -> dict:
+    """Минимальный набор shared-полей для JSON-body create_job."""
+    return {
+        "mode": "tours", "departure_city": "Москва",
+        "date_from": "2026-07-01", "date_to": "2026-07-08",
+        "nights_min": "7", "nights_max": "10", "adults": "2",
+        "provider": ["sletat"],
+    }
+
+
+def test_batch_json_per_direction_dates(tmp_path, monkeypatch):
+    """audit-2026-06: /api/jobs принимает JSON body с per-direction датами.
+    Москва→Египет 1 июня + Москва→Турция 5 июля = 2 строки с СВОИМИ датами."""
+    _patch_search(monkeypatch)
+    db = _seed(tmp_path, [("admin", "secret1", "admin")])
+    cli = TestClient(create_app(db_path=db))
+    _login(cli, "admin", "secret1")
+    body = {
+        "shared": _shared_form(),
+        "directions": [
+            {"country": "Египет", "date_from": "2026-06-01", "date_to": "2026-06-10"},
+            {"country": "Турция", "date_from": "2026-07-05", "date_to": "2026-07-15"},
+        ],
+    }
+    r = cli.post("/api/jobs", json=body, headers=_csrf(cli))
+    assert r.status_code == 200, r.text
+    job_id = r.json()["job_id"]
+    # GET возвращает per-direction даты
+    g = cli.get(f"/api/jobs/{job_id}")
+    assert g.status_code == 200
+    dirs = g.json()["directions"]
+    assert len(dirs) == 2
+    by_country = {d["country"]: d for d in dirs}
+    assert by_country["Египет"]["date_from"] == "2026-06-01"
+    assert by_country["Египет"]["date_to"] == "2026-06-10"
+    assert by_country["Турция"]["date_from"] == "2026-07-05"
+    assert by_country["Турция"]["date_to"] == "2026-07-15"
+
+
+def test_batch_json_dedups_same_country_same_dates(tmp_path, monkeypatch):
+    """Дубликаты (одна страна с одинаковыми датами) выбрасываются — но >1 строки
+    одной страны с РАЗНЫМИ датами оставляем."""
+    _patch_search(monkeypatch)
+    db = _seed(tmp_path, [("admin", "secret1", "admin")])
+    cli = TestClient(create_app(db_path=db))
+    _login(cli, "admin", "secret1")
+    body = {
+        "shared": _shared_form(),
+        "directions": [
+            {"country": "Турция", "date_from": "2026-07-05", "date_to": "2026-07-15"},
+            {"country": "Турция", "date_from": "2026-07-05", "date_to": "2026-07-15"},  # дубль
+            {"country": "Турция", "date_from": "2026-08-01", "date_to": "2026-08-10"},  # ДРУГИЕ даты
+        ],
+    }
+    r = cli.post("/api/jobs", json=body, headers=_csrf(cli))
+    assert r.status_code == 200, r.text
+    assert r.json()["total"] == 2, "дубль выкинут, но другие даты оставлены"
+
+
+def test_batch_json_invalid_body(tmp_path, monkeypatch):
+    """JSON-body без `directions` → 400."""
+    _patch_search(monkeypatch)
+    db = _seed(tmp_path, [("admin", "secret1", "admin")])
+    cli = TestClient(create_app(db_path=db))
+    _login(cli, "admin", "secret1")
+    r = cli.post("/api/jobs", json={"shared": {}}, headers=_csrf(cli))
+    assert r.status_code == 400
+
+
+def test_batch_form_data_still_works(tmp_path, monkeypatch):
+    """Legacy form-data тоже принимается (старый клиент не сломали)."""
+    _patch_search(monkeypatch)
+    db = _seed(tmp_path, [("admin", "secret1", "admin")])
+    cli = TestClient(create_app(db_path=db))
+    _login(cli, "admin", "secret1")
+    # encode_form через MultiDict — у httpx2 list-of-tuples передаётся правильно.
+    from urllib.parse import urlencode
+    form = urlencode([
+        ("mode", "tours"), ("departure_city", "Москва"),
+        ("destination", "Турция"), ("destination", "Египет"),
+        ("date_from", "2026-07-01"), ("date_to", "2026-07-08"),
+        ("nights_min", "7"), ("nights_max", "10"), ("adults", "2"),
+        ("provider", "sletat"),
+    ])
+    r = cli.post(
+        "/api/jobs", content=form,
+        headers={**_csrf(cli), "Content-Type": "application/x-www-form-urlencoded"})
+    assert r.status_code == 200, r.text
+    assert r.json()["total"] == 2
+
+
 def test_batch_destinations_cap(tmp_path, monkeypatch):
     """A: DoS-cap на /api/jobs — больше MAX_DESTINATIONS_PER_JOB направлений → 400.
     Раньше admin/vip-юзер мог отправить 10 000 направлений (нет кредит-гейта)."""

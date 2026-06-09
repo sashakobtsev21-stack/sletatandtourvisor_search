@@ -184,8 +184,9 @@ CREATE TABLE IF NOT EXISTS jobs (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id           INTEGER REFERENCES users(id) ON DELETE CASCADE,
     status            TEXT NOT NULL DEFAULT 'pending',  -- pending/running/done/partial/failed/interrupted
-    params_json       TEXT NOT NULL,                    -- общие параметры (без страны)
-    destinations_json TEXT NOT NULL,                    -- список стран (JSON-массив)
+    params_json       TEXT NOT NULL,                    -- общие параметры (без страны/дат)
+    destinations_json TEXT NOT NULL,                    -- list[dict]: [{country, date_from, date_to, ...}]
+                                                        -- (legacy list[str] нормализуется на чтении в _decode_directions)
     progress_done     INTEGER NOT NULL DEFAULT 0,
     progress_total    INTEGER NOT NULL DEFAULT 0,
     created_at        TEXT NOT NULL,
@@ -834,16 +835,39 @@ class Storage:
     # ------------------------- Батч-анализ (jobs) -------------------------
 
     def create_job(self, user_id: "int | None", params_json: str,
-                   destinations: list[str]) -> int:
-        """Создать батч-задание (status=pending, total=число направлений). Вернёт id."""
+                   directions: list[dict]) -> int:
+        """Создать батч-задание. directions: список dict'ов с per-direction параметрами:
+        обязательно `country`, обычно `date_from`/`date_to`, опц. `departure_city`/
+        `nights_min`/`nights_max`/`destination_resort`. Остальные параметры берутся
+        из общего params_json (туристы, операторы, фильтры). status=pending,
+        total=len(directions). Вернёт id."""
         cur = self._conn.execute(
             "INSERT INTO jobs (user_id, status, params_json, destinations_json, "
             "progress_done, progress_total, created_at) VALUES (?, 'pending', ?, ?, 0, ?, ?)",
-            (user_id, params_json, json.dumps(destinations, ensure_ascii=False),
-             len(destinations), auth.utcnow_iso()),
+            (user_id, params_json, json.dumps(directions, ensure_ascii=False),
+             len(directions), auth.utcnow_iso()),
         )
         self._conn.commit()
         return int(cur.lastrowid)
+
+    @staticmethod
+    def decode_directions(destinations_json: str) -> list[dict]:
+        """Нормализовать `destinations_json` к новому формату `list[dict]`.
+
+        До 2026-06 хранились голые list[str] страны (одни общие даты на всех).
+        После — list[dict] с per-direction оверрайдами. На чтении конвертируем
+        обратно-совместимо: если list[str] — заворачиваем в dict'ы без оверрайдов
+        (даты берутся из shared params), если уже list[dict] — отдаём как есть.
+        """
+        raw = json.loads(destinations_json) if destinations_json else []
+        out: list[dict] = []
+        for item in raw:
+            if isinstance(item, str):
+                out.append({"country": item})
+            elif isinstance(item, dict) and "country" in item:
+                out.append(item)
+            # else: невалидный элемент пропускаем (защита от мусора в БД)
+        return out
 
     def get_job(self, job_id: int, owner_id: "int | None" = None) -> "dict | None":
         """Задание по id. Если задан owner_id — чужое считается ненайденным."""

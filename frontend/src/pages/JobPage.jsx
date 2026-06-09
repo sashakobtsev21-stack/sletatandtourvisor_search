@@ -104,30 +104,37 @@ export default function JobPage({ jobId }) {
         {job.error && <p className="mt-3 text-sm text-amber-300/90">{job.error}</p>}
       </GlassCard>
 
-      {/* Направления */}
+      {/* Направления — каждое со своими городом вылета и датами (audit-2026-06) */}
       <div className="space-y-2">
-        {job.directions.map((d) => (
-          <GlassCard key={d.country} variants={fadeUp} className="flex items-center gap-3 p-4">
-            <DirIcon status={d.status} />
-            <div className="min-w-0 flex-1">
-              <div className="font-semibold text-white">{d.country}</div>
-              {d.status === "done" && d.cheapest_price ? (
-                <div className="truncate text-sm text-muted">
-                  Лучшее: <span className="font-semibold text-emerald-300">{formatPrice(d.cheapest_price)}</span>
-                  {d.cheapest_label ? ` — ${d.cheapest_label}` : ""}
-                  {d.cheapest_provider ? ` (${d.cheapest_provider})` : ""}
-                </div>
-              ) : (
-                <div className="text-sm text-muted">{DIR_LABEL[d.status] ?? "—"}</div>
+        {job.directions.map((d, i) => {
+          const route = d.departure_city ? `${d.departure_city} → ${d.country}` : d.country;
+          const dates = d.date_from && d.date_to
+            ? `${d.date_from} — ${d.date_to}`
+            : null;
+          return (
+            <GlassCard key={`${d.country}-${d.date_from}-${i}`} variants={fadeUp} className="flex items-center gap-3 p-4">
+              <DirIcon status={d.status} />
+              <div className="min-w-0 flex-1">
+                <div className="font-semibold text-white">{route}</div>
+                {dates && <div className="text-xs text-muted">{dates}</div>}
+                {d.status === "done" && d.cheapest_price ? (
+                  <div className="truncate text-sm text-muted">
+                    Лучшее: <span className="font-semibold text-emerald-300">{formatPrice(d.cheapest_price)}</span>
+                    {d.cheapest_label ? ` — ${d.cheapest_label}` : ""}
+                    {d.cheapest_provider ? ` (${d.cheapest_provider})` : ""}
+                  </div>
+                ) : (
+                  <div className="text-sm text-muted">{DIR_LABEL[d.status] ?? "—"}</div>
+                )}
+              </div>
+              {d.run_id != null && (
+                <a href={`#/run/${d.run_id}`} className="flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-semibold text-ocean transition-colors hover:text-brand-soft">
+                  <ExternalLink className="size-3.5" /> Открыть
+                </a>
               )}
-            </div>
-            {d.run_id != null && (
-              <a href={`#/run/${d.run_id}`} className="flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm font-semibold text-ocean transition-colors hover:text-brand-soft">
-                <ExternalLink className="size-3.5" /> Открыть
-              </a>
-            )}
-          </GlassCard>
-        ))}
+            </GlassCard>
+          );
+        })}
       </div>
     </m.div>
   );
