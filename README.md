@@ -274,6 +274,31 @@ sqlite3 toursearch.db ".backup /backup/toursearch-$(date +%F).db"
 из старого бэкапа фоновый цикл может их удалить, если старше N дней; временно
 поставьте `TOURSEARCH_RETENTION_DAYS=0` для разбора.
 
+### Анализ бандла фронта
+
+Чтобы посмотреть что доминирует в собранном JS:
+
+```bash
+cd frontend
+npm run build:analyze          # → dist/stats.html (treemap) + текстовый отчёт:
+node scripts/bundle-report.mjs
+```
+
+Текущий профиль (после P2 партии от 2026-06):
+
+| Пакет | gzip KB | % |
+|---|---:|---:|
+| `framer-motion` | 89.3 | 38.9% |
+| `(app)` (наш код) | 69.2 | 30.2% |
+| `react-dom` | 47.0 | 20.5% |
+| `lucide-react` | 11.1 | 4.8% |
+| остальное | ~12 | ~5.6% |
+| **Итого main bundle** | **229 KB gzip** | |
+
+Основной кандидат на оптимизацию — `framer-motion` (38.9%). При желании
+снизить ~50% его размера: использовать `LazyMotion` с `domAnimation`-features
+и заменить `motion.div` → `m.div`. Это глобальная правка, требует тестирования.
+
 ## Тесты
 
 **1. Быстрый pytest‑сьют (для CI)** — без сети/браузера:

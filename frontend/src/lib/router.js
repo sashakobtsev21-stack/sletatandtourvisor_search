@@ -20,14 +20,18 @@ export function navigate(to) {
   if (window.location.hash !== hash) window.location.hash = hash;
 }
 
-/** Вернуть id прогона, если маршрут вида /run/<id>, иначе null. */
+/** Вернуть id прогона, если маршрут вида /run/<id>, иначе null. id > 0 (audit-3). */
 export function matchRun(path) {
   const m = path.match(/^\/run\/(\d+)$/);
-  return m ? Number(m[1]) : null;
+  if (!m) return null;
+  const n = Number(m[1]);
+  return n > 0 ? n : null;          // /run/0 — невалидный id (БД autoincrement начинается с 1)
 }
 
-/** Вернуть id батч-анализа, если маршрут вида /jobs/<id>, иначе null. */
+/** Вернуть id батч-анализа, если маршрут вида /jobs/<id>, иначе null. id > 0 (audit-3). */
 export function matchJob(path) {
   const m = path.match(/^\/jobs\/(\d+)$/);
-  return m ? Number(m[1]) : null;
+  if (!m) return null;
+  const n = Number(m[1]);
+  return n > 0 ? n : null;
 }

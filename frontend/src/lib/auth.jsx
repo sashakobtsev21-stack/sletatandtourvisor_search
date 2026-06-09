@@ -75,8 +75,11 @@ export function AuthProvider({ children }) {
 
   const logout = useCallback(async () => {
     await apiFetch("/api/logout", { method: "POST" }).catch(() => {});
-    navigate("/");        // на главную (в мультиюзере — лендинг гостя)
-    await refresh();      // /api/me → гость (мультиюзер) или полный доступ (локальный режим)
+    // audit-3: сначала refresh (user → null/guest), потом navigate. Раньше navigate
+    // шёл первым → App рендерил новый маршрут с ещё-залогиненным user (мимолётный
+    // артефакт ≤200мс на медленном /api/me).
+    await refresh();
+    navigate("/");
   }, [refresh]);
 
   const can = useCallback(

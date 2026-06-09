@@ -18,7 +18,6 @@ import json
 import logging
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
 
 from toursearch import auth, billing
 from toursearch.async_storage import storage_op
@@ -29,7 +28,7 @@ from toursearch.orchestrator import run_search
 from toursearch.providers.base import prune_screenshots
 from toursearch.storage import Storage
 from toursearch.web_auth import current_user_id, owner_filter
-from toursearch.web_forms import parse_search_params
+from toursearch.web_forms import err_response, parse_search_params
 
 logger = logging.getLogger("toursearch.jobs")
 
@@ -165,25 +164,23 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
         f = await request.form()
         destinations = list(dict.fromkeys(d for d in f.getlist("destination") if d))  # уникальные, порядок
         if len(destinations) < 2:
-            return JSONResponse({"error": "Выберите минимум 2 направления для батч-анализа."},
-                                status_code=400)
+            return err_response(400, "Выберите минимум 2 направления для батч-анализа.")
         if len(destinations) > MAX_DESTINATIONS_PER_JOB:                # DoS-cap
-            return JSONResponse(
-                {"error": f"В одном мультипоиске не более {MAX_DESTINATIONS_PER_JOB} направлений "
-                          f"(прислано {len(destinations)})."}, status_code=400)
+            return err_response(
+                400,
+                f"В одном мультипоиске не более {MAX_DESTINATIONS_PER_JOB} направлений "
+                f"(прислано {len(destinations)}).")
         try:  # страна-плейсхолдер destinations[0]; воркер подставит каждую
             base, providers = parse_search_params(f, destination_country=destinations[0])
         except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
+            return err_response(400, str(exc))
 
         n = len(destinations)
         user = getattr(request.state, "user", None)
         if billing.consumes_credit(user):  # обычный кредит-юзер: нужно N кредитов авансом
             left = int(user.get("searches_left") or 0)
             if left < n:
-                return JSONResponse(
-                    {"error": f"Нужно {n} поиск(ов), а доступно {left}. Пополните на вкладке «Подписка»."},
-                    status_code=402)
+                return err_response(402, f"Нужно {n} поиск(ов), а доступно {left}. Пополните на вкладке «Подписка».")
         params_json = json.dumps(
             {"search_params": base.model_dump(mode="json"), "providers": providers},
             ensure_ascii=False)
@@ -208,7 +205,7 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
         with Storage(db_path) as s:
             job = s.get_job(job_id, owner_id=owner)
             if job is None:
-                return JSONResponse({"error": "Анализ не найден."}, status_code=404)
+                return err_response(404, "Анализ не найден.")
             runs = s.list_job_runs(job_id)
         done_map: dict = {}
         for country, run_id, rep in runs:

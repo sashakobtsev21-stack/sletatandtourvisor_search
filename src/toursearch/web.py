@@ -12,7 +12,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import (
-    FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse,
+    FileResponse, HTMLResponse, RedirectResponse, StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -127,7 +127,7 @@ _TEMPLATES.env.filters["price"] = _fmt_price
 # зависимости. Сохраняем алиасы и реэкспорт под старыми именами для совместимости
 # с тестами и Jinja-форм-обработчиком ниже.
 from toursearch.web_forms import (  # noqa: E402 — после длинного блока импортов специально
-    MAX_DATE_SPAN_DAYS, parse_price_input, parse_search_params, safe_screenshot_path,
+    MAX_DATE_SPAN_DAYS, err_response, parse_price_input, parse_search_params, safe_screenshot_path,
 )
 __all__ = ["create_app", "MAX_DATE_SPAN_DAYS", "parse_search_params"]
 
@@ -304,11 +304,9 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
             try:
                 size = int(cl)
             except ValueError:
-                return JSONResponse({"error": "Некорректный Content-Length."}, status_code=400)
+                return err_response(400, "Некорректный Content-Length.")
             if size > max_body_bytes:
-                return JSONResponse(
-                    {"error": f"Тело запроса слишком велико ({size} > {max_body_bytes} байт)."},
-                    status_code=413)
+                return err_response(413, f"Тело запроса слишком велико ({size} > {max_body_bytes} байт).")
         return await call_next(request)
 
     @app.middleware("http")
@@ -390,7 +388,7 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
                 s._conn.execute("SELECT 1").fetchone()
             return {"ok": True}
         except Exception as exc:                                # noqa: BLE001
-            return JSONResponse({"ok": False, "error": str(exc)}, status_code=503)
+            return err_response(503, str(exc), ok=False)
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request):
