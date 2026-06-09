@@ -265,6 +265,33 @@ docs/                планы фаз, разбор для любителя, г
 
 Подробно — `docs/AUTH_PLAN.md`.
 
+### Docker / docker compose
+
+В репо есть `Dockerfile` (multi-stage: Node-frontend → Python+Playwright бэк) и
+`docker-compose.yml` (с volume для БД + healthcheck + лимиты RAM):
+
+```bash
+cp .env.example .env && nano .env       # настройте обязательные env (см. ниже)
+docker compose up -d --build
+docker compose exec toursearch \
+  toursearch init-auth --username admin --password-from-env ADMIN_PASSWORD
+```
+
+`init-auth --password-from-env VAR` читает пароль из env (для Docker без TTY) —
+переменная не светит в argv/history. После создания админа — удалите ADMIN_PASSWORD из .env.
+
+**Multi-worker НЕ поддерживается** by design: `ratelimit` in-memory (счётчик в каждом
+воркере) + `retention loop` стартует в каждом (N параллельных purge/VACUUM по одной
+SQLite). Контейнер запускает uvicorn workers=1 (см. `Dockerfile` CMD). Для горизонтального
+масштабирования нужны Redis-backend для ratelimit + внешний планировщик retention.
+
+### fail-fast на stub-провайдер оплаты в проде
+
+`TOURSEARCH_PAYMENT_PROVIDER=stub` — «оплата» без денег (заглушка для разработки).
+В production-окружении (host не в `127.0.0.1`/`localhost`) приложение **откажется
+стартовать** с stub-провайдером (RuntimeError при `create_app`). Опт-аут — явный
+`TOURSEARCH_ALLOW_INSECURE=1` (для нагрузочного тестирования за TLS-прокси).
+
 ### Деплой за reverse‑proxy
 
 При выставлении за nginx/HAProxy/прочее обязательно запускать uvicorn с
@@ -286,14 +313,33 @@ location / {
 }
 ```
 
-### Liveness/Readiness probes
+### Liveness/Readiness/Metrics probes
 
 - `GET /healthz` — процесс жив, event loop отвечает (без auth, без БД).
 - `GET /readyz` — БД доступна (`SELECT 1`). 503 если SQLite залочена/недоступна.
+- `GET /metrics` — JSON-снимок бизнес-метрик: runs_total / runs_24h / jobs_by_status /
+  users_total / payments_succeeded / active_searches (+ их лимит) / bg_tasks_alive.
+  Без auth, без PII — закройте за reverse-proxy от внешнего доступа если нужно.
 
 ### Резервная копия БД
 
-Все данные в одном файле SQLite (`toursearch.db`). Backup:
+`scripts/backup.sh` делает онлайн-копию через `sqlite3 .backup` (безопасно во время работы
+сервера благодаря WAL) + ротация (хранит последние 14):
+
+```bash
+./scripts/backup.sh                                # → backups/toursearch-<UTC>.db
+./scripts/backup.sh /data/toursearch.db /backups   # явные source + dest
+```
+
+Восстановление — `scripts/restore.sh` (требует остановленный сервер):
+
+```bash
+docker compose stop                                 # или pkill -f 'toursearch web'
+./scripts/restore.sh backups/toursearch-20260609T143000Z.db
+docker compose start
+```
+
+Альтернатива без скрипта (oneliner):
 
 ```bash
 sqlite3 toursearch.db ".backup /backup/toursearch-$(date +%F).db"
@@ -337,8 +383,9 @@ pytest -q                               # модели, парсинг, URL, с�
 ruff check src/ tests/                  # линт
 cd frontend && npm run build && npm test # сборка фронта + vitest
 ```
-CI (GitHub Actions) гоняет pytest + ruff + сборку фронта + vitest на каждый push/PR. Живые (e2e)
-тесты в CI исключены — они в панели.
+GitHub Actions воркфлоу есть, но **выключены** (переименованы в `.github/workflows/*.yml.disabled`
+— GitHub читает только `*.yml`/`*.yaml`). Чтобы включить — переименовать обратно. Сейчас
+правило «локально перед push»: `pytest -q && ruff check src/ tests/ && cd frontend && npm test`.
 
 **2. Панель «Автотесты» в дашборде** (`/app` → вкладка, только `admin`) — 600+ кейсов по смыслу:
 health‑check (целостность форм + логика), смоук, позитивные (сверка фильтров с выдачей), режим

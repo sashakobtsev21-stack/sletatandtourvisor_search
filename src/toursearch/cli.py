@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime
 
 import typer
@@ -148,17 +149,33 @@ def web(
 @app.command()
 def init_auth(
     username: str = typer.Option(..., "--username", help="Имя первого пользователя"),
-    role: str = typer.Option("admin", "--role", help="Роль (admin/user)"),
+    role: str = typer.Option("admin", "--role", help="Роль (admin/user/vip)"),
     db: str = typer.Option("toursearch.db", "--db"),
+    password_from_env: "str | None" = typer.Option(
+        None, "--password-from-env",
+        help="Имя env-переменной с паролем (для Docker/CI: --password-from-env ADMIN_PASSWORD). "
+             "Без флага — интерактивный prompt."),
 ) -> None:
-    """Создать первого пользователя (включает обязательный вход для всех)."""
+    """Создать первого пользователя (включает обязательный вход для всех).
+
+    Два режима ввода пароля:
+    * интерактивно (по умолчанию): typer prompt с подтверждением — НЕ светит в argv;
+    * --password-from-env VAR: для Docker entrypoint без TTY (env-переменная читается
+      внутри процесса и тоже не светит в argv/history).
+    """
     from toursearch import auth
 
     if role not in auth.ROLES:
         typer.echo(f"Неизвестная роль: {role}. Доступно: {', '.join(auth.ROLES)}")
         raise typer.Exit(code=1)
-    # Пароль — интерактивно (НЕ через argv: утечёт в историю shell / список процессов)
-    password = typer.prompt("Пароль", hide_input=True, confirmation_prompt=True)
+    if password_from_env:
+        password = os.environ.get(password_from_env, "")
+        if not password:
+            typer.echo(f"Env-переменная {password_from_env} пуста или не задана.")
+            raise typer.Exit(code=1)
+    else:
+        # НЕ через argv: утечёт в историю shell / список процессов.
+        password = typer.prompt("Пароль", hide_input=True, confirmation_prompt=True)
     if len(password) < 6:
         typer.echo("Пароль слишком короткий (мин. 6 символов).")
         raise typer.Exit(code=1)

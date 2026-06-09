@@ -1,4 +1,5 @@
 import { lazy, Suspense } from "react";
+import { LazyMotion, domAnimation } from "framer-motion";
 import AppShell from "./components/AppShell.jsx";
 import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import SearchPage from "./pages/SearchPage.jsx";
@@ -45,7 +46,7 @@ function PageFallback() {
   );
 }
 
-export default function App() {
+function AppInner() {
   const route = useHashRoute();
   const { user, loading, can } = useAuth();
 
@@ -71,14 +72,22 @@ export default function App() {
   else if (route.startsWith("/tests")) page = <TestsPage />;
   else page = <SearchPage />;
 
-  // ErrorBoundary поверх Suspense: ловит throw из любой лениво-загруженной страницы
-  // (раньше → белый экран). resetKey=route → при переходе на другой маршрут показанная
-  // ошибка сбрасывается, пользователь не залипает в fallback-UI после смены страницы.
   return (
     <AppShell route={route}>
       <ErrorBoundary resetKey={route}>
         <Suspense fallback={<PageFallback />}>{page}</Suspense>
       </ErrorBoundary>
     </AppShell>
+  );
+}
+
+/** App — корень с LazyMotion. `features={domAnimation}` бандлит только нужное
+ * подмножество framer-motion (~ -45 KB gzip vs полный motion). strict=true бросает
+ * warning если где-то осталось `motion.X` вместо `m.X` (P3 audit-final). */
+export default function App() {
+  return (
+    <LazyMotion features={domAnimation} strict>
+      <AppInner />
+    </LazyMotion>
   );
 }

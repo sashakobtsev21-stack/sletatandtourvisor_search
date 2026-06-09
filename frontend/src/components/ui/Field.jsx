@@ -1,6 +1,6 @@
 import { Children, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { fadeUp } from "../../lib/animations.js";
 
 /**
@@ -20,7 +20,7 @@ const controlBase =
  */
 export function Field({ label, icon: Icon, htmlFor, children, className = "" }) {
   return (
-    <motion.div variants={fadeUp} className={className}>
+    <m.div variants={fadeUp} className={className}>
       {label && (
         <label
           htmlFor={htmlFor}
@@ -38,7 +38,7 @@ export function Field({ label, icon: Icon, htmlFor, children, className = "" }) 
         )}
         {children}
       </div>
-    </motion.div>
+    </m.div>
   );
 }
 
@@ -102,7 +102,7 @@ export function Select({
     : options;
 
   // Позиционируем панель по триггеру. Портал на body нужен, потому что каждый
-  // Field — motion.div со своим stacking context (transform/filter), внутри
+  // Field — m.div со своим stacking context (transform/filter), внутри
   // которого z-index панели «заперт» и её перекрывают соседние поля.
   const reposition = () => {
     if (!ref.current) return;
@@ -194,7 +194,7 @@ export function Select({
 
       {open && pos &&
         createPortal(
-          <motion.div
+          <m.div
             ref={popRef}
             initial={{ opacity: 0, y: -6, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -251,7 +251,7 @@ export function Select({
                 );
               })}
             </ul>
-          </motion.div>,
+          </m.div>,
           document.body
         )}
     </div>

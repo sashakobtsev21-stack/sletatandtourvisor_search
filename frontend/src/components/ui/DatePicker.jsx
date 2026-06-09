@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { motion, AnimatePresence } from "framer-motion";
+import { m, AnimatePresence } from "framer-motion";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 /**
@@ -265,7 +265,7 @@ export function DatePicker({ id, name, value, min, max, onChange, icon = false, 
 
       {open && pos &&
         createPortal(
-          <motion.div
+          <m.div
             ref={popRef}
             role="dialog"
             aria-modal="true"
@@ -309,7 +309,7 @@ export function DatePicker({ id, name, value, min, max, onChange, icon = false, 
             {/* Сетка дней с анимацией смены месяца */}
             <div ref={gridRef} role="grid" aria-label="Дни месяца" className="relative overflow-hidden">
               <AnimatePresence initial={false} mode="popLayout" custom={dir}>
-                <motion.div
+                <m.div
                   key={`${view.y}-${view.m}`}
                   custom={dir}
                   variants={slideVariants}
@@ -360,7 +360,7 @@ export function DatePicker({ id, name, value, min, max, onChange, icon = false, 
                       </button>
                     );
                   })}
-                </motion.div>
+                </m.div>
               </AnimatePresence>
             </div>
 
@@ -383,7 +383,7 @@ export function DatePicker({ id, name, value, min, max, onChange, icon = false, 
                 </span>
               )}
             </div>
-          </motion.div>,
+          </m.div>,
           document.body
         )}
     </div>

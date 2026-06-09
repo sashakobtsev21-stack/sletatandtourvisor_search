@@ -1,0 +1,40 @@
+# Локальный/прод-эталонный compose: контейнер с приложением + persistent volume для БД.
+# Для прода: ставьте перед контейнером reverse-proxy (nginx/Traefik) с TLS-терминацией;
+# uvicorn принимает X-Forwarded-* при --proxy-headers (см. README раздел «Деплой»).
+#
+# Запуск:
+#   cp .env.example .env && edit .env       # ОБЯЗАТЕЛЬНО: TOURSEARCH_PAYMENT_PROVIDER,
+#                                           # TOURSEARCH_BEHIND_PROXY, etc.
+#   docker compose up -d --build
+#   docker compose exec toursearch toursearch init-auth --username admin --password-from-env ADMIN_PASSWORD
+
+services:
+  toursearch:
+    build: .
+    container_name: toursearch
+    restart: unless-stopped
+    ports:
+      # Внутри сети контейнеров слушаем 8000; снаружи проброс на 8000 — закройте за прокси.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - toursearch_data:/data
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    # Лимиты ресурсов — каждый поиск поднимает 5 Chromium-процессов;
+    # на 3 параллельных поиска (TOURSEARCH_MAX_CONCURRENT_SEARCHES=3) минимум ~2GB RAM.
+    deploy:
+      resources:
+        limits:
+          memory: 3G
+        reservations:
+          memory: 1G
+
+volumes:
+  toursearch_data:
+    driver: local

@@ -113,8 +113,10 @@ def test_security_headers_present(tmp_path):
     assert "strict-transport-security" not in h  # localhost (без HTTPS) → без HSTS
 
 
-def test_hsts_on_secure_host(tmp_path):
-    # host != localhost → secure-cookie режим → есть HSTS
+def test_hsts_on_secure_host(tmp_path, monkeypatch):
+    # host != localhost → secure-cookie режим → есть HSTS.
+    # ALLOW_INSECURE=1 нужен потому что fail-fast на stub-billing в проде (audit-final).
+    monkeypatch.setenv("TOURSEARCH_ALLOW_INSECURE", "1")
     client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")]),
                                    host="0.0.0.0"))
     assert "strict-transport-security" in client.get("/api/me").headers
@@ -496,9 +498,10 @@ def test_legacy_wrong_token_still_blocked(tmp_path, monkeypatch):
 
 # --------------------------- secure-cookie вне localhost (Ф3) ---------------------------
 
-def test_secure_cookie_on_nonlocal_host(tmp_path):
+def test_secure_cookie_on_nonlocal_host(tmp_path, monkeypatch):
     # host != localhost → cookie с флагом Secure (без HTTPS не дойдёт, но наружу без TLS
     # предохранитель и не пускает). На localhost (по умолчанию) — без Secure, см. остальные тесты.
+    monkeypatch.setenv("TOURSEARCH_ALLOW_INSECURE", "1")     # fail-fast stub-billing
     client = TestClient(create_app(db_path=_seed(tmp_path, [("admin", "secret1", "admin")]),
                                    host="0.0.0.0"))
     r = _login(client, "admin", "secret1")

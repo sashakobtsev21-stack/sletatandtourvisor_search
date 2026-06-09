@@ -242,6 +242,15 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
     # secure-cookie автоматически вне localhost; за TLS-прокси на 127.0.0.1 — форс через env.
     secure_cookies = (host not in LOCAL_HOSTS) or os.environ.get("TOURSEARCH_SECURE_COOKIES") == "1"
     app.state.secure_cookies = secure_cookies
+    # Fail-fast: stub-провайдер оплаты в проде = бесплатные «подписки» в обход денег.
+    # На localhost допустим (разработка); вне — обязан быть настоящий провайдер.
+    # Опт-аут через TOURSEARCH_ALLOW_INSECURE=1 (для нагрузочного тестирования за TLS-прокси).
+    if (billing.PROVIDER == "stub" and host not in LOCAL_HOSTS
+            and os.environ.get("TOURSEARCH_ALLOW_INSECURE") != "1"):
+        raise RuntimeError(
+            "TOURSEARCH_PAYMENT_PROVIDER=stub в production-окружении (host=%r). "
+            "stub принимает 'оплату' без денег — это бесплатные подписки. "
+            "Задайте реальный провайдер (yookassa) или явно TOURSEARCH_ALLOW_INSECURE=1." % host)
     register_auth(app, db_path=db_path, auth_token=auth_token, secure_cookies=secure_cookies)
     register_billing(app, db_path=db_path)
 
@@ -311,8 +320,9 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
 
     @app.middleware("http")
     async def _security_headers(request: Request, call_next):
-        """Заголовки безопасности на все ответы (добавлен последним → внешний слой).
-        HSTS — только когда secure-cookie (за HTTPS), чтобы не ломать локальный HTTP."""
+        """Заголовки безопасности + cache-headers для хешированных ассетов
+        (audit-final P2: раньше браузеры перепроверяли 229 KB бандла при каждом
+        визите). HSTS — только когда secure-cookie (за HTTPS), чтобы не ломать локальный HTTP."""
         resp = await call_next(request)
         resp.headers.setdefault("X-Content-Type-Options", "nosniff")
         resp.headers.setdefault("X-Frame-Options", "DENY")
@@ -320,6 +330,10 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
         resp.headers.setdefault("Content-Security-Policy", _CSP)
         if secure_cookies:
             resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        # Кэш ассетов с хешем в имени (Vite кладёт `name-<hash>.js`) — immutable, 1 год.
+        # /app/index.html и др. без хеша — без cache, чтобы новая версия не залипала.
+        if request.url.path.startswith("/app/assets/"):
+            resp.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
         return resp
 
     # Папка скриншотов: создаём и периодически чистим, но НЕ монтируем как статику.
@@ -389,6 +403,34 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
             return {"ok": True}
         except Exception as exc:                                # noqa: BLE001
             return err_response(503, str(exc), ok=False)
+
+    @app.get("/metrics")
+    async def metrics():
+        """Минимальный info-endpoint для мониторинга (audit-final P2). Без auth —
+        Prometheus-стиль text-формат не нужен здесь; отдаём JSON со счётчиками.
+        Не светим PII (только агрегаты)."""
+        with Storage(db_path) as s:
+            runs_total = s._conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+            runs_24h = s._conn.execute(
+                "SELECT COUNT(*) FROM runs WHERE datetime(run_at) >= datetime('now', '-1 day')",
+            ).fetchone()[0]
+            jobs_total = s._conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+            jobs_by_status = dict(s._conn.execute(
+                "SELECT status, COUNT(*) FROM jobs GROUP BY status").fetchall())
+            users_total = s._conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            payments_succeeded = s._conn.execute(
+                "SELECT COUNT(*) FROM payments WHERE status='succeeded'").fetchone()[0]
+        return {
+            "runs_total": int(runs_total),
+            "runs_24h": int(runs_24h),
+            "jobs_total": int(jobs_total),
+            "jobs_by_status": {k: int(v) for k, v in jobs_by_status.items()},
+            "users_total": int(users_total),
+            "payments_succeeded": int(payments_succeeded),
+            "active_searches": active_runs.count,
+            "active_searches_limit": max_concurrent_searches,
+            "bg_tasks_alive": len(app.state.bg_tasks),
+        }
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request):

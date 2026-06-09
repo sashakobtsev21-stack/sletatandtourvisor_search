@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { Layers, Loader2, Plus, ChevronRight } from "lucide-react";
 import GlassCard from "../components/ui/GlassCard.jsx";
 import { staggerContainer, fadeUp } from "../lib/animations.js";
@@ -39,8 +39,8 @@ export default function JobsPage() {
     );
 
   return (
-    <motion.div variants={staggerContainer} initial="hidden" animate="show" className="mx-auto max-w-4xl space-y-4">
-      <motion.div variants={fadeUp} className="flex items-center gap-3">
+    <m.div variants={staggerContainer} initial="hidden" animate="show" className="mx-auto max-w-4xl space-y-4">
+      <m.div variants={fadeUp} className="flex items-center gap-3">
         <span className="grid size-10 place-items-center rounded-xl bg-gradient-to-br from-brand to-ocean shadow-glow">
           <Layers className="size-5 text-white" />
         </span>
@@ -48,7 +48,7 @@ export default function JobsPage() {
         <a href="#/batch" className="ml-auto flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-brand to-ocean px-3 py-2 text-sm font-semibold text-white shadow-glow transition-opacity hover:opacity-95">
           <Plus className="size-4" /> Новый мультипоиск
         </a>
-      </motion.div>
+      </m.div>
 
       {jobs.length === 0 ? (
         <GlassCard variants={fadeUp} className="p-10 text-center text-sm text-muted">
@@ -59,7 +59,7 @@ export default function JobsPage() {
         jobs.map((j) => {
           const st = STATUS[j.status] ?? STATUS.pending;
           return (
-            <GlassCard key={j.id} as={motion.a} variants={fadeUp} href={`#/jobs/${j.id}`} className="flex items-center gap-4 p-4 transition-colors hover:bg-white/[0.04]">
+            <GlassCard key={j.id} as={m.a} variants={fadeUp} href={`#/jobs/${j.id}`} className="flex items-center gap-4 p-4 transition-colors hover:bg-white/[0.04]">
               <div className="min-w-0 flex-1">
                 <div className="mb-1 flex flex-wrap items-center gap-2">
                   <span className="font-bold text-white">Мультипоиск #{j.id}</span>
@@ -80,6 +80,6 @@ export default function JobsPage() {
           );
         })
       )}
-    </motion.div>
+    </m.div>
   );
 }

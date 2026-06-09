@@ -1,4 +1,4 @@
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import {
   Palmtree, Search, Layers, Zap, TrendingDown, Trophy, Globe2, Clock,
   Check, ArrowRight, ShieldCheck, Sparkles, LogIn, Gauge,
@@ -80,31 +80,31 @@ export default function LandingPage() {
 
       <main id="top" className="mx-auto max-w-6xl px-5">
         {/* HERO */}
-        <motion.section variants={staggerContainer} initial="hidden" animate="show" className="py-16 text-center md:py-24">
-          <motion.div variants={fadeUp} className="mx-auto mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-1.5 text-xs font-semibold text-muted">
+        <m.section variants={staggerContainer} initial="hidden" animate="show" className="py-16 text-center md:py-24">
+          <m.div variants={fadeUp} className="mx-auto mb-5 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-1.5 text-xs font-semibold text-muted">
             <Sparkles className="size-3.5 text-brand-soft" /> Агрегатор поиска туров для агентств и операторов
-          </motion.div>
-          <motion.h1 variants={fadeUp} className="mx-auto max-w-4xl text-4xl font-extrabold leading-tight tracking-tight text-white md:text-6xl">
+          </m.div>
+          <m.h1 variants={fadeUp} className="mx-auto max-w-4xl text-4xl font-extrabold leading-tight tracking-tight text-white md:text-6xl">
             Сравните туры по{" "}
             <span className="bg-gradient-to-r from-brand-soft via-brand to-ocean bg-clip-text text-transparent">5 системам</span>{" "}
             за один поиск
-          </motion.h1>
-          <motion.p variants={fadeUp} className="mx-auto mt-5 max-w-2xl text-lg text-muted">
+          </m.h1>
+          <m.p variants={fadeUp} className="mx-auto mt-5 max-w-2xl text-lg text-muted">
             Слетать.ру, Турвизор, Travelata, Level.Travel и Островок — в одном окне. Находите
             лучшую цену, оператора и отель быстрее, чем открываете пять вкладок.
-          </motion.p>
-          <motion.div variants={fadeUp} className="mt-8 flex flex-wrap items-center justify-center gap-3">
+          </m.p>
+          <m.div variants={fadeUp} className="mt-8 flex flex-wrap items-center justify-center gap-3">
             <button onClick={() => navigate("/search")} className="flex items-center gap-2 rounded-xl bg-gradient-to-r from-brand-deep via-brand to-ocean px-6 py-3.5 text-base font-bold text-white shadow-glow transition-transform hover:scale-[1.02]">
               Попробовать бесплатно <ArrowRight className="size-5" />
             </button>
             <button onClick={() => scrollTo("pricing")} className="rounded-xl border border-white/10 bg-white/[0.04] px-6 py-3.5 text-base font-semibold text-ink transition-colors hover:bg-white/[0.08]">
               Смотреть тарифы
             </button>
-          </motion.div>
-          <motion.p variants={fadeUp} className="mt-4 flex items-center justify-center gap-1.5 text-sm text-muted">
+          </m.div>
+          <m.p variants={fadeUp} className="mt-4 flex items-center justify-center gap-1.5 text-sm text-muted">
             <ShieldCheck className="size-4 text-emerald-400" /> 2 поиска бесплатно — без регистрации
-          </motion.p>
-        </motion.section>
+          </m.p>
+        </m.section>
 
         {/* Площадки */}
         <section className="pb-8">
@@ -119,7 +119,7 @@ export default function LandingPage() {
         {/* Выгоды */}
         <section id="features" className="scroll-mt-20 py-16">
           <SectionHead eyebrow="Возможности" title="Почему это быстрее и выгоднее" />
-          <motion.div variants={staggerContainer} initial="hidden" whileInView="show" viewport={{ once: true, margin: "-80px" }} className="grid gap-5 sm:grid-cols-2">
+          <m.div variants={staggerContainer} initial="hidden" whileInView="show" viewport={{ once: true, margin: "-80px" }} className="grid gap-5 sm:grid-cols-2">
             {BENEFITS.map(({ icon: Icon, title, text }) => (
               <GlassCard key={title} variants={fadeUp} className="p-6">
                 <span className="mb-4 grid size-11 place-items-center rounded-xl bg-gradient-to-br from-brand to-ocean shadow-glow">
@@ -129,13 +129,13 @@ export default function LandingPage() {
                 <p className="text-sm leading-relaxed text-muted">{text}</p>
               </GlassCard>
             ))}
-          </motion.div>
+          </m.div>
         </section>
 
         {/* Как это работает */}
         <section id="how" className="scroll-mt-20 py-16">
           <SectionHead eyebrow="Как это работает" title="Три шага до лучшей цены" />
-          <motion.div variants={staggerContainer} initial="hidden" whileInView="show" viewport={{ once: true, margin: "-80px" }} className="grid gap-5 md:grid-cols-3">
+          <m.div variants={staggerContainer} initial="hidden" whileInView="show" viewport={{ once: true, margin: "-80px" }} className="grid gap-5 md:grid-cols-3">
             {STEPS.map(({ icon: Icon, title, text }, i) => (
               <GlassCard key={title} variants={fadeUp} className="p-6">
                 <div className="mb-3 flex items-center gap-3">
@@ -146,7 +146,7 @@ export default function LandingPage() {
                 <p className="text-sm leading-relaxed text-muted">{text}</p>
               </GlassCard>
             ))}
-          </motion.div>
+          </m.div>
         </section>
 
         {/* Тарифы */}
@@ -191,7 +191,7 @@ export default function LandingPage() {
           {/* Пакеты поисков */}
           <div className="mt-6">
             <div className="mb-3 text-center text-sm font-semibold text-muted">Или разовые пакеты поисков</div>
-            <motion.div variants={staggerContainer} initial="hidden" whileInView="show" viewport={{ once: true }} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <m.div variants={staggerContainer} initial="hidden" whileInView="show" viewport={{ once: true }} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {PACKS.map(({ credits, price, popular }) => (
                 <GlassCard key={credits} variants={fadeUp} className={`relative p-5 text-center ${popular ? "ring-1 ring-ocean/40" : ""}`}>
                   {popular && (
@@ -208,7 +208,7 @@ export default function LandingPage() {
                   </button>
                 </GlassCard>
               ))}
-            </motion.div>
+            </m.div>
           </div>
         </section>
 
@@ -245,10 +245,10 @@ export default function LandingPage() {
 
 function SectionHead({ eyebrow, title }) {
   return (
-    <motion.div initial="hidden" whileInView="show" viewport={{ once: true }} variants={staggerContainer} className="mb-8 text-center">
-      <motion.div variants={fadeUp} className="mb-2 text-xs font-semibold uppercase tracking-wider text-brand-soft">{eyebrow}</motion.div>
-      <motion.h2 variants={fadeUp} className="text-2xl font-extrabold tracking-tight text-white md:text-3xl">{title}</motion.h2>
-    </motion.div>
+    <m.div initial="hidden" whileInView="show" viewport={{ once: true }} variants={staggerContainer} className="mb-8 text-center">
+      <m.div variants={fadeUp} className="mb-2 text-xs font-semibold uppercase tracking-wider text-brand-soft">{eyebrow}</m.div>
+      <m.h2 variants={fadeUp} className="text-2xl font-extrabold tracking-tight text-white md:text-3xl">{title}</m.h2>
+    </m.div>
   );
 }
 

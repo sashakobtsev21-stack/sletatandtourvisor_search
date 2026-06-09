@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import {
   FlaskConical, Play, Loader2, CheckCircle2, XCircle, ChevronDown, Info, Clock,
   ShieldCheck, Zap, Target, Hotel, Map, AlertTriangle, Users,
@@ -245,7 +245,7 @@ export default function TestsPage() {
           <span className="min-w-[3.5rem] text-2xl font-extrabold tabular-nums text-white">{pct}%</span>
           <Stopwatch elapsed={elapsed} running={running} />
           <div className="relative h-2.5 flex-1 overflow-hidden rounded-full bg-white/[0.06]">
-            <motion.span
+            <m.span
               className={`absolute inset-y-0 left-0 rounded-full ${stats.failed ? "bg-gradient-to-r from-emerald-400 to-rose-400" : "bg-gradient-to-r from-brand to-ocean"}`}
               animate={{ width: `${pct}%` }}
               transition={{ type: "spring", stiffness: 120, damping: 20 }}

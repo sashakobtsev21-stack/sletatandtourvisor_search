@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { CreditCard, CheckCircle2, Infinity as InfinityIcon, CalendarClock, Loader2 } from "lucide-react";
 import GlassCard from "../components/ui/GlassCard.jsx";
 import { apiFetch } from "../lib/api.js";
@@ -89,7 +89,7 @@ export default function BillingPage() {
         <CreditCard className="size-5 text-brand-soft" /> Поиски и оплата
       </h1>
 
-      <GlassCard className="p-5" as={motion.div} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+      <GlassCard className="p-5" as={m.div} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
         {status.local ? (
           <p className="text-sm text-muted">Локальный режим — поиски без ограничений.</p>
         ) : status.is_admin ? (
@@ -117,7 +117,7 @@ export default function BillingPage() {
       )}
 
       {pending ? (
-        <GlassCard className="p-5" as={motion.div} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
+        <GlassCard className="p-5" as={m.div} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
           <p className="mb-3 text-sm text-muted">
             Имитация оплаты (тестовый режим, без списания):{" "}
             {pending.kind === "subscription"

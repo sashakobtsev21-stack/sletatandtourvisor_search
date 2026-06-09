@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { Layers, Loader2, AlertTriangle, CheckCircle2, Clock, ExternalLink, ArrowLeft } from "lucide-react";
 import GlassCard from "../components/ui/GlassCard.jsx";
 import { staggerContainer, fadeUp } from "../lib/animations.js";
@@ -74,7 +74,7 @@ export default function JobPage({ jobId }) {
   const pct = job.progress_total ? Math.round((job.progress_done / job.progress_total) * 100) : 0;
 
   return (
-    <motion.div variants={staggerContainer} initial="hidden" animate="show" className="mx-auto max-w-4xl space-y-4">
+    <m.div variants={staggerContainer} initial="hidden" animate="show" className="mx-auto max-w-4xl space-y-4">
       <GlassCard variants={fadeUp} className="p-5">
         <div className="flex flex-wrap items-center gap-3">
           <span className="grid size-10 place-items-center rounded-xl bg-gradient-to-br from-brand to-ocean shadow-glow">
@@ -94,7 +94,7 @@ export default function JobPage({ jobId }) {
             <span className="tabular-nums">{pct}%</span>
           </div>
           <div className="h-2 overflow-hidden rounded-full bg-white/10">
-            <motion.div
+            <m.div
               className="h-full rounded-full bg-gradient-to-r from-brand to-ocean"
               animate={{ width: `${pct}%` }}
               transition={{ duration: 0.4 }}
@@ -129,7 +129,7 @@ export default function JobPage({ jobId }) {
           </GlassCard>
         ))}
       </div>
-    </motion.div>
+    </m.div>
   );
 }
 

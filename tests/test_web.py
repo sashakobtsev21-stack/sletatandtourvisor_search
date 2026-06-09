@@ -95,6 +95,77 @@ def test_search_prepare_rejects_bad_price_gracefully(tmp_path):
     assert resp.status_code == 200 and "error" in resp.json()
 
 
+def test_metrics_endpoint_returns_aggregates(tmp_path):
+    """audit-final P2: /metrics — JSON-снимок без auth, агрегаты по основным таблицам."""
+    client = TestClient(create_app(db_path=str(tmp_path / "w.db")))
+    r = client.get("/metrics")
+    assert r.status_code == 200
+    j = r.json()
+    for key in ("runs_total", "runs_24h", "jobs_total", "users_total",
+                "payments_succeeded", "active_searches", "active_searches_limit",
+                "bg_tasks_alive"):
+        assert key in j, f"missing key: {key}"
+    assert isinstance(j["jobs_by_status"], dict)
+
+
+def test_static_assets_get_cache_headers(tmp_path):
+    """audit-final P2: /app/assets/* должны иметь Cache-Control: immutable."""
+    cli = TestClient(create_app(db_path=str(tmp_path / "w.db")))
+    # /app/assets/anyfile — 404 (нет файла), но middleware должно поставить header
+    # для путей префикса. Сделаем GET на путь — даже на 404 middleware отрабатывает.
+    r = cli.get("/app/assets/index-fake.js")
+    # cache-header ставится middleware'ом до того как StaticFiles вернёт 404
+    assert "cache-control" in {k.lower() for k in r.headers}
+    assert "immutable" in r.headers.get("cache-control", "").lower()
+
+
+def test_create_app_rejects_stub_billing_in_production(tmp_path, monkeypatch):
+    """audit-final P1: stub-провайдер в проде = бесплатные подписки. App должен
+    отказываться стартовать (RuntimeError) если host не локальный И провайдер stub."""
+    monkeypatch.setenv("TOURSEARCH_PAYMENT_PROVIDER", "stub")
+    # reload billing.PROVIDER из env (он читается при импорте, поэтому force-reload)
+    import importlib
+    from toursearch import billing as billing_mod
+    importlib.reload(billing_mod)
+    try:
+        import pytest as _pt
+        with _pt.raises(RuntimeError, match="stub"):
+            create_app(db_path=str(tmp_path / "w.db"), host="0.0.0.0")
+    finally:
+        monkeypatch.delenv("TOURSEARCH_PAYMENT_PROVIDER", raising=False)
+        importlib.reload(billing_mod)
+
+
+def test_create_app_allows_stub_on_localhost(tmp_path, monkeypatch):
+    """На localhost stub разрешён (разработка)."""
+    monkeypatch.setenv("TOURSEARCH_PAYMENT_PROVIDER", "stub")
+    import importlib
+    from toursearch import billing as billing_mod
+    importlib.reload(billing_mod)
+    try:
+        app = create_app(db_path=str(tmp_path / "w.db"), host="127.0.0.1")
+        assert app is not None
+    finally:
+        monkeypatch.delenv("TOURSEARCH_PAYMENT_PROVIDER", raising=False)
+        importlib.reload(billing_mod)
+
+
+def test_create_app_stub_with_explicit_allow_insecure(tmp_path, monkeypatch):
+    """TOURSEARCH_ALLOW_INSECURE=1 — opt-out для нагрузочного за TLS-прокси."""
+    monkeypatch.setenv("TOURSEARCH_PAYMENT_PROVIDER", "stub")
+    monkeypatch.setenv("TOURSEARCH_ALLOW_INSECURE", "1")
+    import importlib
+    from toursearch import billing as billing_mod
+    importlib.reload(billing_mod)
+    try:
+        app = create_app(db_path=str(tmp_path / "w.db"), host="0.0.0.0")
+        assert app is not None
+    finally:
+        monkeypatch.delenv("TOURSEARCH_PAYMENT_PROVIDER", raising=False)
+        monkeypatch.delenv("TOURSEARCH_ALLOW_INSECURE", raising=False)
+        importlib.reload(billing_mod)
+
+
 def test_api_runs_limit_capped(tmp_path):
     """audit-3 P1: ?limit без верхней границы тянул бы всю историю в память.
     Теперь Query(le=200) — большие значения → 422."""

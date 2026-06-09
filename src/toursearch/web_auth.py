@@ -62,7 +62,8 @@ LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
 # `/api/tests/screenshot/{filename}` (только с правом `tests.view`). Прямой статик-маршрут
 # удалён — было IDOR, любой авторизованный/гость мог скачивать чужие выдачи перебором.
 _AUTH_SKIP_PREFIXES = ("/app", "/assets")
-_AUTH_SKIP_EXACT = ("/", "/favicon.ico", "/openapi.json", "/docs", "/redoc", "/healthz", "/readyz")
+_AUTH_SKIP_EXACT = ("/", "/favicon.ico", "/openapi.json", "/docs", "/redoc",
+                    "/healthz", "/readyz", "/metrics")
 # Пути, где creds резолвятся, но доступ НЕ требуется (вход / регистрация / выход / «кто я»).
 _AUTH_EXEMPT_EXACT = ("/api/login", "/api/register", "/api/logout", "/api/me")
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import {
   History as HistoryIcon, Plane, Hotel, RotateCw, ChevronRight, Loader2, Search,
   CheckCircle2, AlertTriangle,
@@ -44,7 +44,7 @@ export default function HistoryPage() {
 
   return (
     <div className="mx-auto max-w-4xl">
-      <motion.div variants={staggerContainer} initial="hidden" animate="show" className="space-y-4">
+      <m.div variants={staggerContainer} initial="hidden" animate="show" className="space-y-4">
         <GlassCard variants={fadeUp} className="flex items-center gap-3 p-5">
           <span className="grid size-10 place-items-center rounded-xl bg-gradient-to-br from-brand to-ocean shadow-glow">
             <HistoryIcon className="size-5 text-white" />
@@ -77,7 +77,7 @@ export default function HistoryPage() {
         {runs && runs.map((r) => {
           const { hotels, route, detail } = summarize(r.params);
           return (
-            <motion.div
+            <m.div
               key={r.run_id}
               variants={fadeUp}
               className="glass-surface group flex items-center gap-3 rounded-xl2 p-4 shadow-glass transition-colors hover:border-brand/40"
@@ -132,10 +132,10 @@ export default function HistoryPage() {
                 <RotateCw className="size-3.5" /> Повторить
               </button>
               <ChevronRight className="hidden size-4 shrink-0 text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-ink md:block" />
-            </motion.div>
+            </m.div>
           );
         })}
-      </motion.div>
+      </m.div>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { m, AnimatePresence } from "framer-motion";
 import {
   Plane, Globe2, CalendarDays, MoonStar, Users, Baby,
   Building2, Search, ChevronRight, Hotel, Sparkles,
@@ -171,7 +171,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
 
   return (
     <GlassCard
-      as={motion.form}
+      as={m.form}
       overflow="visible"
       onSubmit={handleSubmit}
       variants={staggerContainer}
@@ -180,7 +180,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
       className="p-6 md:p-7"
     >
       {/* Заголовок */}
-      <motion.div variants={fadeUp} className="mb-5 flex items-center gap-3">
+      <m.div variants={fadeUp} className="mb-5 flex items-center gap-3">
         <span className="grid size-10 place-items-center rounded-xl bg-gradient-to-br from-brand to-brand-deep shadow-glow">
           <Sparkles className="size-5 text-white" />
         </span>
@@ -194,10 +194,10 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
               : `Сравним ${providerOptions.length} площадки за один прогон`}
           </p>
         </div>
-      </motion.div>
+      </m.div>
 
       {/* Режим: Туры / Отели — сегментированный переключатель с «пилюлей» */}
-      <motion.div variants={fadeUp} className="mb-5">
+      <m.div variants={fadeUp} className="mb-5">
         <div className="relative grid grid-cols-2 gap-1 rounded-xl border border-white/10 bg-white/[0.03] p-1">
           {[
             { id: "tours", label: "Туры", icon: Plane },
@@ -210,7 +210,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
               className="relative z-10 flex items-center justify-center gap-2 rounded-lg py-2 text-sm font-semibold transition-colors"
             >
               {mode === id && (
-                <motion.span
+                <m.span
                   layoutId="mode-pill"
                   transition={spring}
                   className="absolute inset-0 -z-10 rounded-lg bg-gradient-to-r from-brand to-brand-deep shadow-glow"
@@ -221,7 +221,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
             </button>
           ))}
         </div>
-      </motion.div>
+      </m.div>
 
       {/* Откуда (только туры) + Куда.
           ВАЖНО: тут только обычный условный рендер, без motion-обёрток с
@@ -247,7 +247,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
 
       {/* Батч: мультивыбор направлений — селект «Добавить» + чипы выбранного с удалением. */}
       {batch && (
-        <motion.div variants={fadeUp} className="mt-4">
+        <m.div variants={fadeUp} className="mt-4">
           <label className="mb-1.5 block text-xs font-medium tracking-wide text-muted">
             Направления{" "}
             <span className="text-muted/60">
@@ -299,7 +299,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
               {childAges.length > 0 && ` + ${childAges.length} реб. (${childAges.join(", ")})`}
             </p>
           )}
-        </motion.div>
+        </m.div>
       )}
 
       {/* Даты. В отелях это даты проживания (заезд→выезд) — ими же задаются ночи. */}
@@ -317,11 +317,11 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
           />
         </Field>
       </div>
-      <motion.p variants={fadeUp} className="mt-1.5 text-[11px] text-muted">
+      <m.p variants={fadeUp} className="mt-1.5 text-[11px] text-muted">
         {isHotels
           ? `Ночи задаются датами проживания: выезд − заезд (не более ${MAX_DATE_SPAN_DAYS} ночей).`
           : `Диапазон дат вылета — не более ${MAX_DATE_SPAN_DAYS} дней.`}
-      </motion.p>
+      </m.p>
 
       {/* Ночи — только для туров. В отелях ночи = диапазон дат проживания (контрола нет). */}
       {!isHotels && (
@@ -382,7 +382,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
 
       {/* Туроператоры — мультивыбор чипами. В режиме мультипоиска скрыто (одни параметры на все направления). */}
       {!batch && (
-        <motion.div variants={fadeUp} className="mt-5">
+        <m.div variants={fadeUp} className="mt-5">
           <label className="mb-2 block text-xs font-medium tracking-wide text-muted">
             Туроператоры{" "}
             <span className="text-muted/60">
@@ -393,7 +393,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
             {operatorOptions.map((op) => {
               const active = operators.includes(op);
               return (
-                <motion.button
+                <m.button
                   key={op}
                   type="button"
                   onClick={() => toggleOperator(op)}
@@ -408,11 +408,11 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
                 >
                   <Building2 className="size-3.5" />
                   {op}
-                </motion.button>
+                </m.button>
               );
             })}
           </div>
-        </motion.div>
+        </m.div>
       )}
 
       {/* Фильтры рейсов — только для туров */}
@@ -427,7 +427,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
       )}
 
       {/* Площадки для сравнения */}
-      <motion.div variants={fadeUp} className="mt-5">
+      <m.div variants={fadeUp} className="mt-5">
         <label className="mb-2 block text-xs font-medium tracking-wide text-muted">
           Площадки для сравнения
         </label>
@@ -438,7 +438,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
             const incompatible = !providerSupportsMode(p); // не работает в текущем режиме
             const onlyMode = providerOnlyMode(p);          // "Туры"/"Отели" — для бейджа
             return (
-              <motion.button
+              <m.button
                 key={p}
                 type="button"
                 disabled={incompatible}
@@ -481,14 +481,14 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
                     только {onlyMode}
                   </span>
                 )}
-              </motion.button>
+              </m.button>
             );
           })}
         </div>
-      </motion.div>
+      </m.div>
 
       {/* Кнопка сабмита — крупная, с микроинтеракцией и состоянием загрузки */}
-      <motion.button
+      <m.button
         variants={fadeUp}
         type="submit"
         disabled={isSearching || providers.length === 0 || (batch && destinations.length < 2)}
@@ -514,7 +514,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
             <ChevronRight className="size-4 transition-transform group-hover:translate-x-1" />
           </>
         )}
-      </motion.button>
+      </m.button>
 
       <HealthCheckInfo providers={providers} />
     </GlassCard>
@@ -529,7 +529,7 @@ function HealthCheckInfo({ providers = [] }) {
   const [open, setOpen] = useState(false);
 
   return (
-    <motion.div variants={fadeUp} className="mt-3">
+    <m.div variants={fadeUp} className="mt-3">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -543,7 +543,7 @@ function HealthCheckInfo({ providers = [] }) {
 
       <AnimatePresence initial={false}>
         {open && (
-          <motion.div
+          <m.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: "auto" }}
             exit={{ opacity: 0, height: 0 }}
@@ -563,10 +563,10 @@ function HealthCheckInfo({ providers = [] }) {
                   : " (отметь площадки ниже)."}
               </p>
             </div>
-          </motion.div>
+          </m.div>
         )}
       </AnimatePresence>
-    </motion.div>
+    </m.div>
   );
 }
 
@@ -576,7 +576,7 @@ function Checkbox({ name, label, defaultChecked = false }) {
   return (
     <label className="flex cursor-pointer select-none items-center gap-2 text-sm text-ink">
       <input type="checkbox" name={name} defaultChecked={defaultChecked} className="peer sr-only" onChange={(e) => setChecked(e.target.checked)} />
-      <motion.span
+      <m.span
         whileTap={{ scale: 0.85 }}
         className={[
           "grid size-5 place-items-center rounded-md border transition-colors",
@@ -585,7 +585,7 @@ function Checkbox({ name, label, defaultChecked = false }) {
       >
         <AnimatePresence>
           {checked && (
-            <motion.svg
+            <m.svg
               initial={{ scale: 0, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0, opacity: 0 }}
@@ -593,10 +593,10 @@ function Checkbox({ name, label, defaultChecked = false }) {
               stroke="currentColor" strokeWidth="3"
             >
               <path d="M20 6 9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
-            </motion.svg>
+            </m.svg>
           )}
         </AnimatePresence>
-      </motion.span>
+      </m.span>
       {label}
     </label>
   );

@@ -1,4 +1,4 @@
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { Palmtree, Search, Layers, History, FlaskConical, Users, CreditCard, LogOut, LogIn, UserPlus } from "lucide-react";
 import { fadeUp } from "../lib/animations.js";
 import { useAuth } from "../lib/auth.jsx";
@@ -40,7 +40,7 @@ export default function AppShell({ route = "/", children }) {
       </div>
 
       {/* Шапка */}
-      <motion.header
+      <m.header
         variants={fadeUp}
         initial="hidden"
         animate="show"
@@ -132,7 +132,7 @@ export default function AppShell({ route = "/", children }) {
             </div>
           ) : null}
         </div>
-      </motion.header>
+      </m.header>
 
       <main className="mx-auto max-w-[1800px] px-4 py-6 md:px-6">{children}</main>
 

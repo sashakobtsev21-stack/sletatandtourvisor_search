@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 import { Palmtree, User, Lock, LogIn, UserPlus } from "lucide-react";
 import GlassCard from "../components/ui/GlassCard.jsx";
 import { useAuth } from "../lib/auth.jsx";
@@ -54,7 +54,7 @@ export default function LoginPage({ guest = false }) {
       </div>
 
       <GlassCard
-        as={motion.div}
+        as={m.div}
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3, ease: "easeOut" }}

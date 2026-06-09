@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { m, AnimatePresence } from "framer-motion";
 import { Terminal, CircleStop, CheckCircle2, AlertTriangle, Info, Loader2 } from "lucide-react";
 import GlassCard from "./ui/GlassCard.jsx";
 import { fadeUp, logLine } from "../lib/animations.js";
@@ -53,7 +53,7 @@ function SearchTerminalImpl({ logs = [], progress = 0, status = "idle", onCancel
 
         <AnimatePresence>
           {isRunning && (
-            <motion.button
+            <m.button
               initial={{ opacity: 0, scale: 0.8 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.8 }}
@@ -64,7 +64,7 @@ function SearchTerminalImpl({ logs = [], progress = 0, status = "idle", onCancel
             >
               <CircleStop className="size-4" />
               Стоп
-            </motion.button>
+            </m.button>
           )}
         </AnimatePresence>
       </div>
@@ -72,14 +72,14 @@ function SearchTerminalImpl({ logs = [], progress = 0, status = "idle", onCancel
       {/* Прогресс-бар */}
       <div className="mb-1.5 flex items-center justify-between text-xs">
         <span className="text-muted">Прогресс</span>
-        <motion.b
+        <m.b
           key={pct}
           initial={{ scale: 1.3, color: "#a9adff" }}
           animate={{ scale: 1, color: "#e7ecff" }}
           className="tabular-nums font-bold"
         >
           {pct}%
-        </motion.b>
+        </m.b>
       </div>
       <div
         role="progressbar"
@@ -90,7 +90,7 @@ function SearchTerminalImpl({ logs = [], progress = 0, status = "idle", onCancel
         aria-busy={isRunning || undefined}
         className="relative mb-5 h-2.5 overflow-hidden rounded-full bg-white/[0.06]"
       >
-        <motion.span
+        <m.span
           className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-brand-deep via-brand to-ocean"
           initial={{ width: 0 }}
           animate={{ width: `${clamped}%` }}
@@ -127,7 +127,7 @@ function SearchTerminalImpl({ logs = [], progress = 0, status = "idle", onCancel
               const meta = LEVELS[line.level] ?? LEVELS.info;
               const Icon = meta.icon;
               return (
-                <motion.div
+                <m.div
                   key={line.id}
                   variants={logLine}
                   initial="hidden"
@@ -139,14 +139,14 @@ function SearchTerminalImpl({ logs = [], progress = 0, status = "idle", onCancel
                   {line.ts && <span className="shrink-0 text-muted/50">{line.ts}</span>}
                   <Icon className="mt-0.5 size-3.5 shrink-0 opacity-80" />
                   <span className="break-words">{line.msg}</span>
-                </motion.div>
+                </m.div>
               );
             })}
           </AnimatePresence>
         )}
         {/* мигающий курсор внизу, пока идёт поиск */}
         {isRunning && (
-          <motion.span
+          <m.span
             animate={{ opacity: [1, 0.2, 1] }}
             transition={{ repeat: Infinity, duration: 1 }}
             className="ml-5 inline-block h-3.5 w-2 translate-y-0.5 bg-brand-soft"

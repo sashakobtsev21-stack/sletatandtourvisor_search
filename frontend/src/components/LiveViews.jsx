@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { m, AnimatePresence } from "framer-motion";
 import { Radio, MonitorPlay, Loader2, CheckCircle2 } from "lucide-react";
 import GlassCard from "./ui/GlassCard.jsx";
 import { staggerContainer, fadeUp, slideIn } from "../lib/animations.js";
@@ -19,7 +19,7 @@ import { providerLabel } from "../lib/format.js";
  */
 function LiveViewsImpl({ providers = [], frames = {}, phases = {}, active = false }) {
   return (
-    <motion.div
+    <m.div
       variants={staggerContainer}
       initial="hidden"
       animate="show"
@@ -78,7 +78,7 @@ function LiveViewsImpl({ providers = [], frames = {}, phases = {}, active = fals
                       размонтирует предыдущее состояние, поэтому окно не может
                       «застрять» сразу в двух состояниях. Плавность даёт initial→animate. */}
                   {phase === "frame" && (
-                    <motion.img
+                    <m.img
                       initial={{ opacity: 0, scale: 1.02 }}
                       animate={{ opacity: 1, scale: 1 }}
                       transition={{ duration: 0.3 }}
@@ -88,26 +88,26 @@ function LiveViewsImpl({ providers = [], frames = {}, phases = {}, active = fals
                     />
                   )}
                   {phase === "waiting" && (
-                    <motion.div
+                    <m.div
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       className="absolute inset-0 flex items-center justify-center gap-2 text-sm text-muted"
                     >
                       <Loader2 className="size-4 animate-spin" />
                       ожидание первого кадра…
-                    </motion.div>
+                    </m.div>
                   )}
                   {phase === "loading" && (
-                    <motion.div
+                    <m.div
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       className="absolute inset-0 p-3"
                     >
                       <MockSnapshot loading />
-                    </motion.div>
+                    </m.div>
                   )}
                   {phase === "done" && (
-                    <motion.div
+                    <m.div
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       transition={{ duration: 0.35 }}
@@ -117,7 +117,7 @@ function LiveViewsImpl({ providers = [], frames = {}, phases = {}, active = fals
                       <span className="absolute bottom-3 right-3 flex items-center gap-1 rounded-full bg-emerald-500/20 px-2.5 py-1 text-[11px] font-semibold text-emerald-300">
                         <CheckCircle2 className="size-3.5" /> страница загружена
                       </span>
-                    </motion.div>
+                    </m.div>
                   )}
                 </div>
               </GlassCard>
@@ -125,7 +125,7 @@ function LiveViewsImpl({ providers = [], frames = {}, phases = {}, active = fals
           })}
         </AnimatePresence>
       )}
-    </motion.div>
+    </m.div>
   );
 }
 

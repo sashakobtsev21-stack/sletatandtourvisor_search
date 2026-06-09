@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { m, AnimatePresence } from "framer-motion";
 import {
   Hotel, Plane, ArrowLeft, ImageIcon, ExternalLink, AlertTriangle, Loader2, Star, Trophy, Info,
 } from "lucide-react";
@@ -54,7 +54,7 @@ export default function ResultsPage({ runId }) {
   const hotels = p.search_mode === "hotels";
 
   return (
-    <motion.div variants={staggerContainer} initial="hidden" animate="show" className="mx-auto max-w-5xl space-y-5">
+    <m.div variants={staggerContainer} initial="hidden" animate="show" className="mx-auto max-w-5xl space-y-5">
       {/* Шапка: маршрут + лучший вариант одной строкой */}
       <GlassCard variants={fadeUp} className="p-5">
         <div className="flex flex-wrap items-center gap-3">
@@ -173,7 +173,7 @@ export default function ResultsPage({ runId }) {
       {/* Модалка скриншота — с приближением (клик по фото) */}
       <AnimatePresence>
         {shot && (
-          <motion.div
+          <m.div
             role="dialog" aria-modal="true" aria-label={shot.cap}
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             onClick={() => setShot(null)}
@@ -193,10 +193,10 @@ export default function ResultsPage({ runId }) {
                 }
               />
             </div>
-          </motion.div>
+          </m.div>
         )}
       </AnimatePresence>
-    </motion.div>
+    </m.div>
   );
 }
 

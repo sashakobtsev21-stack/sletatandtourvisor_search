@@ -1,18 +1,18 @@
-import { motion } from "framer-motion";
+import { m } from "framer-motion";
 
 /**
  * GlassCard — базовая «стеклянная» карточка в стиле shadcn/ui.
  * Полупрозрачная подложка + размытие + мягкая тень и тонкая граница-блик сверху.
  *
  * props:
- *  - as: тег/компонент-обёртка (по умолчанию motion.div)
+ *  - as: тег/компонент-обёртка (по умолчанию m.div)
  *  - className: доп. классы
  *  - variants/initial/animate: пробрасываются в Framer Motion
  */
 export default function GlassCard({
   children,
   className = "",
-  as: Component = motion.div,
+  as: Component = m.div,
   overflow = "hidden", // "visible" — когда внутри есть выпадающие списки/поповеры
   ...motionProps
 }) {
