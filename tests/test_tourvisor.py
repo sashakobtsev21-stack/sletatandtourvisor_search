@@ -10,6 +10,7 @@ import pytest
 
 pytest.importorskip("playwright")  # провайдер требует опциональную группу 'browser'
 
+from toursearch.models import NotApplicableError
 from toursearch.providers import get_provider, load_browser_providers
 from toursearch.providers.tourvisor import (
     _parse_price,
@@ -85,3 +86,35 @@ def test_build_hotel_offers():
 def test_provider_is_registered():
     load_browser_providers()
     assert get_provider("tourvisor").name == "tourvisor"
+
+
+# --------------------- детерминированные отказы ---------------------
+
+class _PageNothingClickable:
+    """Фейковая страница: список открылся, но нужного пункта нет (evaluate → False)."""
+
+    async def click(self, *a, **k):
+        pass
+
+    async def wait_for_selector(self, *a, **k):
+        pass
+
+    async def wait_for_timeout(self, *a, **k):
+        pass
+
+    async def evaluate(self, *a, **k):
+        return False
+
+
+async def test_unknown_departure_city_raises_not_applicable():
+    """Города нет в таблице вылетов — NotApplicableError (нейтрально, без ретрая)."""
+    prov = get_provider("tourvisor")(headless=True)
+    with pytest.raises(NotApplicableError, match="недоступен на Tourvisor"):
+        await prov._select_departure_city(_PageNothingClickable(), "Урюпинск")
+
+
+async def test_unknown_country_raises_not_applicable():
+    """Страны нет в списке направлений — NotApplicableError (нейтрально, без ретрая)."""
+    prov = get_provider("tourvisor")(headless=True)
+    with pytest.raises(NotApplicableError, match="недоступна на Tourvisor"):
+        await prov._select_country(_PageNothingClickable(), "Нарния")

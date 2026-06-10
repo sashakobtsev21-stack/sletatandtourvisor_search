@@ -80,6 +80,43 @@ async def test_list_names_shows_live_only():
     await bg.cancel_all(timeout=1.0)
 
 
+async def test_spawn_logs_unhandled_exception(caplog):
+    """P1-7: исключение фоновой задачи логируется с её именем — раньше done-callback
+    только discard'ил, и задача умирала ТИХО («exception never retrieved» лишь при GC)."""
+    import logging
+
+    bg = BackgroundRegistry()
+
+    async def boom():
+        raise RuntimeError("кабум")
+
+    with caplog.at_level(logging.ERROR, logger="toursearch.bg"):
+        bg.spawn(boom(), name="doomed-task")
+        await asyncio.sleep(0.05)              # даём задаче упасть и callback'у отработать
+    assert len(bg) == 0
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any("doomed-task" in m and "кабум" in m for m in msgs)
+    # traceback приложен (exc_info) — иначе в логе только текст без места падения
+    assert any(r.exc_info for r in caplog.records)
+
+
+async def test_spawn_cancelled_task_not_logged_as_error(caplog):
+    """Отмена — штатная остановка (shutdown), НЕ ошибка: ERROR-шума быть не должно."""
+    import logging
+
+    bg = BackgroundRegistry()
+
+    async def forever():
+        await asyncio.sleep(60)
+
+    with caplog.at_level(logging.ERROR, logger="toursearch.bg"):
+        bg.spawn(forever(), name="to-cancel")
+        await asyncio.sleep(0)
+        await bg.cancel_all(timeout=1.0)
+        await asyncio.sleep(0)
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
 async def test_json_formatter_includes_exception_traceback():
     """Регрессия (audit-gap): JsonFormatter должен включать exc-field для записей
     с exc_info (logger.exception). Раньше теста не было — формат мог сломаться тихо."""

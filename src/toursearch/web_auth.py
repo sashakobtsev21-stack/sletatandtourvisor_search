@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import logging
+import os
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, Form, HTTPException, Request
@@ -56,19 +58,36 @@ def _dummy_verify(password: str) -> None:
 # Хосты, считающиеся локальными (secure-cookie выкл, предохранитель не нужен).
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
 
+
+def insecure_exposure(db_path: str) -> bool:
+    """True, если авторизация НЕ настроена (local-режим: в БД нет пользователей и нет
+    TOURSEARCH_TOKEN) и нет явного опт-аута TOURSEARCH_ALLOW_INSECURE=1 — такой инстанс
+    нельзя выставлять за пределы localhost (всё открыто без входа, пароли пошли бы по
+    открытой сети). Единая проверка для CLI-предохранителя (`toursearch web`) и
+    fail-fast в create_app (ASGI-деплой мимо CLI, audit P1-2) — чтобы не расходились."""
+    if os.environ.get("TOURSEARCH_ALLOW_INSECURE") == "1":
+        return False
+    if (os.environ.get("TOURSEARCH_TOKEN") or "").strip():
+        return False
+    with Storage(db_path) as s:
+        return not s.has_any_user()
+
 # Пути, где middleware не делает НИЧЕГО (статика SPA, docs, корень-редирект).
 # `/screenshots` ВЫНЕСЕН: скриншоты выдачи раздаются только через owner-checked эндпоинт
 # `/api/runs/{run_id}/screenshot/{provider}` (мультиюзер: только владелец прогона/admin) или
 # `/api/tests/screenshot/{filename}` (только с правом `tests.view`). Прямой статик-маршрут
 # удалён — было IDOR, любой авторизованный/гость мог скачивать чужие выдачи перебором.
+# Гостю скриншоты СВОЕГО прогона отдаёт сессионный `/search/screenshot/{token}/{provider}`
+# (web.py, owner-check по device-cookie) — он под анонимным префиксом `/search/` ниже.
 _AUTH_SKIP_PREFIXES = ("/app", "/assets")
 _AUTH_SKIP_EXACT = ("/", "/favicon.ico", "/openapi.json", "/docs", "/redoc",
                     "/healthz", "/readyz", "/metrics")
 # Пути, где creds резолвятся, но доступ НЕ требуется (вход / регистрация / выход / «кто я»).
 _AUTH_EXEMPT_EXACT = ("/api/login", "/api/register", "/api/logout", "/api/me")
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-# Пути, доступные анонимному гостю (мультиюзер, без входа): сам поиск + справочники/статус.
-# Лимит ANON_CREDITS на устройство; история/тесты/пользователи/скриншоты — только после входа.
+# Пути, доступные анонимному гостю (мультиюзер, без входа): сам поиск (вкл. сессионные
+# скриншоты своего прогона) + справочники/статус. Лимит ANON_CREDITS на устройство;
+# история/тесты/пользователи/скриншоты ЧУЖИХ прогонов — только после входа.
 _ANON_ALLOWED_PREFIXES = ("/search/",)
 _ANON_ALLOWED_EXACT = ("/api/refdata", "/api/billing/status")
 
@@ -203,6 +222,26 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
                     bearer and hmac.compare_digest(bearer, auth_token))
         mode = request.state.auth_mode
 
+        # Defense-in-depth (audit P1-2): local-режим = полный доступ без входа, допустим
+        # ТОЛЬКО с loopback. При деплое `uvicorn toursearch.web:app -b 0.0.0.0` без
+        # TOURSEARCH_PUBLIC=1 fail-fast в create_app не срабатывает — этот рубеж режет
+        # нелокальные IP (политика та же, что у CLI-предохранителя: init-auth / токен /
+        # явный TOURSEARCH_ALLOW_INSECURE=1). Непарсящиеся client.host ('testclient',
+        # None) пропускаем — это не сетевые клиенты, иначе ляжет весь тестовый сьют.
+        # Проверка ПОСЛЕ _auth_skip → /healthz|/readyz|/metrics отвечают (k8s-пробы).
+        if mode == "local" and os.environ.get("TOURSEARCH_ALLOW_INSECURE") != "1":
+            try:
+                remote = not ipaddress.ip_address(_client_ip(request)).is_loopback
+            except ValueError:
+                remote = False
+            if remote:
+                _log.warning("local-mode reject (нелокальный IP без авторизации): ip=%s %s %s",
+                             _client_ip(request), request.method, path)
+                return err_response(
+                    403, "Сервис работает в локальном режиме (без авторизации) и не принимает "
+                         "запросы извне. Создайте пользователя (toursearch init-auth) или "
+                         "задайте TOURSEARCH_TOKEN; явный опт-аут — TOURSEARCH_ALLOW_INSECURE=1.")
+
         # id устройства (cookie ts_device) — для учёта анонимных бесплатных поисков. Заводим
         # на всех путях (в т.ч. exempt /api/me), чтобы гость получил cookie на первом заходе.
         device = request.cookies.get("ts_device")
@@ -277,8 +316,10 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
                                  request.state.user["username"], request.state.user["role"], perm, path)
                     return err_response(403, "Недостаточно прав.")
                 # Запуск анализа требует остатка поисков (admin — без ограничений). Отмену
-                # (/search/cancel) не гейтим: остаток мог обнулиться уже запущенным поиском.
+                # (/search/cancel) и сессионный скриншот (/search/screenshot/...) не гейтим:
+                # это не новый запуск — остаток мог обнулиться уже запущенным поиском.
                 if (perm == billing.PAID_PERMISSION and not path.endswith("/cancel")
+                        and not path.startswith("/search/screenshot/")
                         and not billing.has_search_access(request.state.user)):
                     return err_response(402, "Закончились поиски — пополните на вкладке «Подписка».")
         # local → открыто (Origin мутирующих уже проверён выше)

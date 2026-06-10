@@ -20,6 +20,9 @@ export default function ResultsPage({ runId }) {
   const [error, setError] = useState(null);
   const [shot, setShot] = useState(null); // {src, cap} для модалки скриншота
   const [zoom, setZoom] = useState(false); // приближён ли скриншот
+  // Скриншот не загрузился (404): у гостя сессионная ссылка живёт ~3 мин после поиска —
+  // вместо битой иконки браузера показываем понятную заглушку.
+  const [shotErr, setShotErr] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -98,7 +101,7 @@ export default function ResultsPage({ runId }) {
                 {r.screenshot_url && (
                   <button
                     type="button"
-                    onClick={() => { setZoom(false); setShot({ src: r.screenshot_url, cap: `${providerLabel(r.provider)} — выдача` }); }}
+                    onClick={() => { setZoom(false); setShotErr(false); setShot({ src: r.screenshot_url, cap: `${providerLabel(r.provider)} — выдача` }); }}
                     className="flex items-center gap-1 text-ocean transition-colors hover:text-brand-soft"
                   >
                     <ImageIcon className="size-3.5" /> скриншот
@@ -183,15 +186,26 @@ export default function ResultsPage({ runId }) {
               {shot.cap} · клик по изображению — {zoom ? "отдалить" : "приблизить"}, клик по фону — закрыть
             </div>
             <div className={`flex min-h-full ${zoom ? "items-start justify-start" : "items-center justify-center"}`}>
-              <img
-                src={shot.src} alt={shot.cap}
-                onClick={(e) => { e.stopPropagation(); setZoom((z) => !z); }}
-                className={
-                  zoom
-                    ? "max-w-none cursor-zoom-out rounded-lg shadow-2xl"
-                    : "max-h-[88vh] max-w-[94vw] cursor-zoom-in rounded-lg object-contain shadow-2xl"
-                }
-              />
+              {shotErr ? (
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="flex flex-col items-center gap-3 rounded-lg border border-white/10 bg-white/[0.04] px-10 py-12 text-center text-muted"
+                >
+                  <ImageIcon className="size-8" />
+                  <p className="text-sm">Скриншот недоступен — срок его хранения истёк. Запустите поиск заново.</p>
+                </div>
+              ) : (
+                <img
+                  src={shot.src} alt={shot.cap}
+                  onClick={(e) => { e.stopPropagation(); setZoom((z) => !z); }}
+                  onError={() => setShotErr(true)}
+                  className={
+                    zoom
+                      ? "max-w-none cursor-zoom-out rounded-lg shadow-2xl"
+                      : "max-h-[88vh] max-w-[94vw] cursor-zoom-in rounded-lg object-contain shadow-2xl"
+                  }
+                />
+              )}
             </div>
           </m.div>
         )}

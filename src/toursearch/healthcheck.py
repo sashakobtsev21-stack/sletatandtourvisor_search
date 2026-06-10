@@ -109,6 +109,9 @@ async def check_provider(name: str, headless: bool = True, timeout_ms: int = 30_
 HEALTH_CACHE_TTL_S = float(os.environ.get("TOURSEARCH_HEALTHCHECK_TTL_S") or 60.0)
 _health_cache: dict[frozenset[str], tuple[float, dict[str, ProviderHealth]]] = {}
 _health_inflight: dict[frozenset[str], asyncio.Future] = {}
+# Сильные ссылки на детачнутые задачи расчёта: event loop держит задачи только
+# слабыми ссылками, без этого set задачу мог бы съесть GC посреди расчёта.
+_health_tasks: set[asyncio.Task] = set()
 _health_cache_lock = asyncio.Lock()
 
 
@@ -119,6 +122,52 @@ def _cache_is_all_ok(results: dict[str, ProviderHealth]) -> bool:
 def _clear_health_cache() -> None:
     """Только для тестов / админ-команды «пересдать health»."""
     _health_cache.clear()
+
+
+async def _compute_health(
+    key: frozenset[str], names: list[str], headless: bool, inflight: asyncio.Future
+) -> None:
+    """Расчёт health одного набора площадок: публикует итог в inflight-future.
+
+    P1-7: живёт ОТДЕЛЬНОЙ детачнутой задачей, а не в теле первого вызвавшего.
+    Раньше отмена «раннера» (юзер остановил поиск во время гейта / SSE-клиент
+    оборвался) уходила в inflight.set_exception — и ВСЕ ждущие получали ЧУЖОЙ
+    CancelledError. Задача короткоживущая (≤60с, ограничена таймаутами
+    Playwright); в bg-реестр приложения её не вписать — healthcheck не знает
+    app, поэтому plain task (сильная ссылка — в _health_tasks). На shutdown их
+    отменяет cancel_inflight_health (вызывается из lifespan).
+    """
+    try:
+        raw = await asyncio.gather(
+            *(check_provider(name, headless=headless) for name in names),
+            return_exceptions=True,
+        )
+        results: dict[str, ProviderHealth] = {}
+        for name, res in zip(names, raw):
+            if isinstance(res, BaseException):
+                results[name] = ProviderHealth(
+                    provider=name, ok=False, error=f"{type(res).__name__}: {res}"
+                )
+            else:
+                results[name] = res
+        # Кэшируем только если ВСЁ зелено: красный должен сразу проходить заново,
+        # как только сайт починили (TTL=60с задержки на «всё снова работает» нет).
+        if _cache_is_all_ok(results):
+            _health_cache[key] = (time.monotonic(), dict(results))
+        if not inflight.done():
+            inflight.set_result(results)
+    except asyncio.CancelledError:
+        # Отменили сам расчёт (shutdown loop'а) — будим ждущих отменой future,
+        # иначе они повиснут на shield навсегда; саму отмену пробрасываем.
+        if not inflight.done():
+            inflight.cancel()
+        raise
+    except BaseException as exc:  # noqa: BLE001 — ошибку доставляем всем ждущим
+        if not inflight.done():
+            inflight.set_exception(exc)
+    finally:
+        async with _health_cache_lock:
+            _health_inflight.pop(key, None)
 
 
 async def run_health_check(
@@ -145,8 +194,9 @@ async def run_health_check(
     if cached and now - cached[0] < HEALTH_CACHE_TTL_S:
         return dict(cached[1])
 
-    # Coalesce: один раннер на key, остальные ждут future. Лок только на
-    # резолв «я раннер или ждущий», await вне лока — чтобы не блокировать.
+    # Coalesce: один расчёт на key в детачнутой задаче, ВСЕ вызвавшие (включая
+    # первого) ждут общий future. Лок только на резолв «создать расчёт или
+    # присоединиться», await вне лока — чтобы не блокировать.
     async with _health_cache_lock:
         cached = _health_cache.get(key)
         if cached and time.monotonic() - cached[0] < HEALTH_CACHE_TTL_S:
@@ -155,40 +205,37 @@ async def run_health_check(
         if inflight is None:
             inflight = asyncio.get_event_loop().create_future()
             _health_inflight[key] = inflight
-            is_runner = True
-        else:
-            is_runner = False
+            task = asyncio.create_task(
+                _compute_health(key, list(names), headless, inflight),
+                name=f"healthcheck:{'+'.join(sorted(key))}",
+            )
+            _health_tasks.add(task)
+            task.add_done_callback(_health_tasks.discard)
 
-    if not is_runner:
-        # Кто-то уже считает — ждём его результат
-        return dict(await inflight)
+    # shield: отмена ждущего (юзер остановил поиск / SSE оборвался) отменяет
+    # только ЕГО ожидание — расчёт продолжается, остальные получат результат.
+    return dict(await asyncio.shield(inflight))
 
-    # Мы — раннер; считаем и публикуем в future для всех ждущих.
+
+async def cancel_inflight_health(timeout: float = 5.0) -> None:
+    """Отменить незавершённые health-задачи на graceful shutdown.
+
+    Детачнутые задачи `_compute_health` живут вне app.state.bg_tasks (модуль не
+    знает app), поэтому `bg.cancel_all` их не видит. Без явной отмены in-flight
+    проверка (поднятые браузеры Chromium) могла пережить остановку сервиром или
+    оборваться жёстко, минуя `finally: await browser.close()` в check_provider.
+    Lifespan вызывает это после cancel_all — отмена даёт finally закрыть браузеры.
+    """
+    tasks = [t for t in _health_tasks if not t.done()]
+    if not tasks:
+        return
+    for t in tasks:
+        t.cancel()
     try:
-        raw = await asyncio.gather(
-            *(check_provider(name, headless=headless) for name in names),
-            return_exceptions=True,
-        )
-        results: dict[str, ProviderHealth] = {}
-        for name, res in zip(names, raw):
-            if isinstance(res, BaseException):
-                results[name] = ProviderHealth(
-                    provider=name, ok=False, error=f"{type(res).__name__}: {res}"
-                )
-            else:
-                results[name] = res
-        # Кэшируем только если ВСЁ зелено: красный должен сразу проходить заново,
-        # как только сайт починили (TTL=60с задержки на «всё снова работает» нет).
-        if _cache_is_all_ok(results):
-            _health_cache[key] = (time.monotonic(), dict(results))
-        inflight.set_result(results)
-        return results
-    except BaseException as exc:
-        inflight.set_exception(exc)
-        raise
-    finally:
-        async with _health_cache_lock:
-            _health_inflight.pop(key, None)
+        await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True), timeout=timeout)
+    except asyncio.TimeoutError:
+        pass  # дали браузерам шанс закрыться; дальше teardown loop'а добьёт
 
 
 def format_health(results: dict[str, ProviderHealth]) -> str:

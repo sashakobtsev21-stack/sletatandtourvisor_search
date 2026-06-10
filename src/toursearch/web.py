@@ -20,7 +20,7 @@ from fastapi.templating import Jinja2Templates
 from toursearch import billing, refdata
 from toursearch.async_storage import storage_op
 from toursearch.billing_runner import BillingContext, CreditSession
-from toursearch.healthcheck import gate_passed, run_health_check
+from toursearch.healthcheck import cancel_inflight_health, gate_passed, run_health_check
 from toursearch.models import SearchParams, is_not_applicable_error
 from toursearch.orchestrator import run_search
 from toursearch.providers import (
@@ -31,7 +31,9 @@ from toursearch.providers import (
 )
 from toursearch.providers.base import prune_screenshots
 from toursearch.storage import Storage
-from toursearch.web_auth import LOCAL_HOSTS, current_user_id, owner_filter, register_auth
+from toursearch.web_auth import (
+    LOCAL_HOSTS, current_user_id, insecure_exposure, owner_filter, register_auth,
+)
 from toursearch.web_billing import register_billing
 from toursearch.web_jobs import register_jobs
 from toursearch.web_tests import register_tests_panel
@@ -154,12 +156,19 @@ def _operator_dict(o) -> dict:
     }
 
 
-def _result_dict(r, run_id: int | None = None) -> dict:
+def _result_dict(r, run_id: int | None = None, session_token: str | None = None) -> dict:
     c = r.cheapest
-    # screenshot_url — owner-checked эндпоинт, который читает screenshot_path из БД
-    # и сверяет владельца прогона. Прямой путь к файлу клиенту не отдаём.
-    screenshot_url = (f"/api/runs/{run_id}/screenshot/{r.provider}"
-                      if run_id is not None and r.screenshot_path else None)
+    # screenshot_url — залогиненным owner-checked /api/runs/... (читает screenshot_path
+    # из БД и сверяет владельца прогона). Анонимному гостю /api/runs недоступен (401,
+    # регрессия фидбэка №1) — ему отдаём сессионный /search/screenshot/{token}/...
+    # (анониму разрешён middleware'ом, владелец сверяется через _owns_session).
+    # Прямой путь к файлу клиенту не отдаём в обоих случаях.
+    if session_token is not None and r.screenshot_path:
+        screenshot_url = f"/search/screenshot/{session_token}/{r.provider}"
+    elif run_id is not None and r.screenshot_path:
+        screenshot_url = f"/api/runs/{run_id}/screenshot/{r.provider}"
+    else:
+        screenshot_url = None
     return {
         "provider": r.provider, "success": r.success,
         "not_applicable": is_not_applicable_error(r.error),
@@ -176,7 +185,7 @@ def _result_dict(r, run_id: int | None = None) -> dict:
     }
 
 
-def _report_dict(report, run_id: int | None = None) -> dict:
+def _report_dict(report, run_id: int | None = None, session_token: str | None = None) -> dict:
     p = report.params
     best = report.cheapest
     return {
@@ -189,7 +198,8 @@ def _report_dict(report, run_id: int | None = None) -> dict:
             "nights_min": p.nights_min, "nights_max": p.nights_max,
             "adults": p.adults, "children_ages": p.children_ages,
         },
-        "results": [_result_dict(r, run_id=run_id) for r in report.results],
+        "results": [_result_dict(r, run_id=run_id, session_token=session_token)
+                    for r in report.results],
         "best": ({"price": str(best.price), "label": best.label, "provider": best.provider} if best else None),
         "fastest_provider": report.fastest_provider,
         "slowest_provider": report.slowest_provider,
@@ -224,7 +234,8 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
         # сломает IP-rate-limit (DoS на login) и анти-брутфорс. Предупреждаем громко.
         if secure_cookies and os.environ.get("TOURSEARCH_BEHIND_PROXY") != "1":
             logging.getLogger("toursearch.web").warning(
-                "secure_cookies включены (вне localhost / TOURSEARCH_SECURE_COOKIES=1), "
+                "secure_cookies включены (вне localhost / TOURSEARCH_PUBLIC=1 / "
+                "TOURSEARCH_SECURE_COOKIES=1), "
                 "но не выставлен TOURSEARCH_BEHIND_PROXY=1. Если за reverse-proxy — "
                 "запустите uvicorn с --proxy-headers --forwarded-allow-ips=<IP_прокси>, "
                 "иначе IP-rate-limit и анти-брутфорс ВНУТРЕННО ВИДЯТ ВСЕХ как 127.0.0.1.")
@@ -232,6 +243,9 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
             yield
         finally:
             await bg.cancel_all(timeout=5.0)
+            # Детачнутые health-задачи живут вне реестра (healthcheck не знает app) —
+            # отменяем отдельно, чтобы их browser.close() в finally успел отработать.
+            await cancel_inflight_health(timeout=5.0)
 
     app = FastAPI(title="Tour Search", lifespan=_lifespan)
     app.state.bg_tasks = BackgroundRegistry()
@@ -239,18 +253,35 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
     # Авторизация (3 режима: локальный / legacy-токен / мультиюзер) — middleware и эндпоинты
     # /api/login|logout|me|users живут в web_auth.py.
     auth_token = (os.environ.get("TOURSEARCH_TOKEN") or "").strip()
-    # secure-cookie автоматически вне localhost; за TLS-прокси на 127.0.0.1 — форс через env.
-    secure_cookies = (host not in LOCAL_HOSTS) or os.environ.get("TOURSEARCH_SECURE_COOKIES") == "1"
+    # «Публичный» инстанс: явная декларация TOURSEARCH_PUBLIC=1 ИЛИ нелокальный host.
+    # host передаёт только CLI (toursearch web); при деплое `uvicorn toursearch.web:app`
+    # он остаётся дефолтным 127.0.0.1, и предохранители ниже на нём не срабатывали
+    # (audit P1-2) — TOURSEARCH_PUBLIC включает их независимо от способа запуска.
+    effective_public = os.environ.get("TOURSEARCH_PUBLIC") == "1" or host not in LOCAL_HOSTS
+    # secure-cookie автоматически на публичном инстансе; за TLS-прокси на 127.0.0.1 — форс через env.
+    secure_cookies = effective_public or os.environ.get("TOURSEARCH_SECURE_COOKIES") == "1"
     app.state.secure_cookies = secure_cookies
     # Fail-fast: stub-провайдер оплаты в проде = бесплатные «подписки» в обход денег.
     # На localhost допустим (разработка); вне — обязан быть настоящий провайдер.
     # Опт-аут через TOURSEARCH_ALLOW_INSECURE=1 (для нагрузочного тестирования за TLS-прокси).
-    if (billing.PROVIDER == "stub" and host not in LOCAL_HOSTS
+    if (billing.PROVIDER == "stub" and effective_public
             and os.environ.get("TOURSEARCH_ALLOW_INSECURE") != "1"):
         raise RuntimeError(
-            "TOURSEARCH_PAYMENT_PROVIDER=stub в production-окружении (host=%r). "
+            "TOURSEARCH_PAYMENT_PROVIDER=stub в production-окружении "
+            "(host=%r или TOURSEARCH_PUBLIC=1). "
             "stub принимает 'оплату' без денег — это бесплатные подписки. "
             "Задайте реальный провайдер (yookassa) или явно TOURSEARCH_ALLOW_INSECURE=1." % host)
+    # Fail-fast: публичный инстанс без какой-либо авторизации (local-режим: нет пользователей
+    # и нет TOURSEARCH_TOKEN) = весь функционал и история открыты интернету. Раньше эта
+    # проверка жила только в CLI (toursearch web) — деплой `uvicorn toursearch.web:app`
+    # её обходил (audit P1-2). Логика общая с CLI — web_auth.insecure_exposure.
+    if effective_public and insecure_exposure(db_path):
+        raise RuntimeError(
+            "Инстанс объявлен публичным (TOURSEARCH_PUBLIC=1 или host=%r), но авторизация "
+            "не настроена — local-режим открыл бы всё без входа. Сделайте одно из: "
+            "создайте пользователя (toursearch init-auth --username admin), задайте "
+            "TOURSEARCH_TOKEN или явно разрешите TOURSEARCH_ALLOW_INSECURE=1 "
+            "(TLS — на reverse-proxy)." % host)
     register_auth(app, db_path=db_path, auth_token=auth_token, secure_cookies=secure_cookies)
     register_billing(app, db_path=db_path)
     # OpenTelemetry — опциональная инструментация. No-op без TOURSEARCH_OTEL_EXPORTER_OTLP_ENDPOINT.
@@ -628,7 +659,13 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
                 db_path, lambda s: s.save_report(report, user_id=session.user_id))
             done_ev = {"type": "done", "run_id": run_id}
             if session.device is not None:  # гостю нет доступа к /api/runs — отдаём отчёт прямо в событии
-                done_ev["report"] = _report_dict(report, run_id)
+                # Пути скриншотов запоминаем в сессии: их раздаёт сессионный маршрут
+                # /search/screenshot/{token}/{provider} (регрессия фидбэка №1 — гостю
+                # /api/runs/{id}/screenshot отвечал 401). Атрибут динамический, т.к.
+                # SearchSession (web_sse.py) — общий pure-data слой, а маршрут — деталь web.py.
+                session.screenshot_paths = {
+                    r.provider: r.screenshot_path for r in report.results if r.screenshot_path}
+                done_ev["report"] = _report_dict(report, run_id, session_token=token)
             _emit(session, done_ev)
         except asyncio.CancelledError:
             # Остановка по запросу пользователя — штатный финал. Не пробрасываем дальше:
@@ -700,6 +737,27 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
         return ((session.user_id is not None and session.user_id == uid)
                 or (session.device is not None and session.device == device)
                 or (session.user_id is None and session.device is None))
+
+    @app.get("/search/screenshot/{token}/{provider}")
+    async def search_screenshot(request: Request, token: str, provider: str):
+        """Скриншот выдачи для анонимного гостя: сессионный маршрут под /search/
+        (анониму разрешён middleware'ом) вместо /api/runs/..., который требует входа
+        (регрессия фидбэка №1 — гость получал 401 и битую картинку). Владелец сверяется
+        той же _owns_session, что у stream/cancel; не владелец / сессия выселена /
+        скриншота нет — единый 404, не раскрывающий существование сессии. История
+        скриншотов (после грейс-периода ~3 мин) — только после входа через /api/runs."""
+        session = _searches.get(token)
+        if session is None or not _owns_session(request, session):
+            raise HTTPException(status_code=404, detail="Скриншот не найден")
+        path = getattr(session, "screenshot_paths", {}).get(provider)
+        if not path:
+            raise HTTPException(status_code=404, detail="Скриншот не найден")
+        # Путь из отчёта прогона, но сверяем, что файл реально внутри screenshots_dir
+        # (та же защита от path-traversal, что у /api/runs/{id}/screenshot).
+        shot = safe_screenshot_path(screenshots_dir, path, strict_basename=False)
+        if shot is None:
+            raise HTTPException(status_code=404, detail="Скриншот не найден")
+        return FileResponse(shot, media_type="image/png")
 
     @app.get("/search/stream")
     async def search_stream(request: Request, token: str):

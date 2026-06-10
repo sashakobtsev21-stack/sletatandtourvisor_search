@@ -11,8 +11,11 @@ COPY frontend/ ./
 RUN npm run build
 
 # --- Stage 2: backend ---
-# mcr.microsoft.com/playwright/python включает Python 3.12 + системные либы Chromium.
-FROM mcr.microsoft.com/playwright/python:v1.49.0-jammy
+# mcr.microsoft.com/playwright/python:v1.60.0-noble — Ubuntu 24.04, Python 3.12
+# (pyproject требует >=3.12), браузеры Playwright уже в /ms-playwright.
+# ВАЖНО: тег образа обязан совпадать с пином playwright==X в requirements.txt —
+# драйвер другой версии не найдёт «свои» сборки браузеров и упадёт в рантайме.
+FROM mcr.microsoft.com/playwright/python:v1.60.0-noble
 
 # Запуск НЕ от root (контейнер уже идёт с пользователем pwuser, но создадим явный app-user
 # в HOME-овой папке, чтобы права на /app и /data были чистыми).
@@ -24,19 +27,21 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Сначала только pyproject.toml + requirements.txt — для слойного кэша Docker.
+# Сначала только зависимости (pyproject.toml + requirements.txt) — слойный кэш Docker.
+# Сам пакет здесь НЕ ставим: hatchling для сборки wheel требует src/ и README.md,
+# которые копируются ниже (иначе build падает на этом слое).
 COPY pyproject.toml requirements.txt ./
-RUN pip install -r requirements.txt && pip install --no-deps .
+RUN pip install -r requirements.txt
 
-# Копируем код и собранный фронт.
+# Копируем код и собранный фронт; теперь ставим пакет (зависимости уже в кэш-слое выше).
 COPY src/ ./src/
 COPY README.md LICENSE ./
 RUN pip install --no-deps -e .   # editable, чтобы entrypoint видел изменения src
 COPY --from=frontend /build/dist ./frontend/dist
 
 # Папка для БД и скриншотов — пробрасывается как volume в проде.
+# Путь к БД задаёт флаг --db в CMD (env TOURSEARCH_DB кодом не читается).
 RUN mkdir -p /data/screenshots && chown -R 1000:1000 /data
-ENV TOURSEARCH_DB=/data/toursearch.db
 VOLUME ["/data"]
 
 # Healthcheck — /healthz без auth, без БД (только что процесс жив + event loop отвечает).

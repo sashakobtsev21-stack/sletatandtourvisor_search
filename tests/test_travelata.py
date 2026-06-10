@@ -11,7 +11,7 @@ import pytest
 
 pytest.importorskip("playwright")  # провайдер требует опциональную группу 'browser'
 
-from toursearch.models import SearchParams
+from toursearch.models import NotApplicableError, SearchParams
 from toursearch.providers import (
     default_providers,
     get_provider,
@@ -210,3 +210,40 @@ def test_verify_url_ignores_date_to():
     # dateTo в хэше равен dateFrom (Travelata ищет по дате заезда + ночам) — не сверяем
     p = _params(date_from=date(2026, 6, 27), date_to=date(2026, 7, 5))
     assert verify_travelata_search_url(URL, p) == []
+
+
+# --------------------- детерминированные отказы ---------------------
+
+class _PageWithDictionary:
+    """Фейковая страница: page.evaluate (JSONP) отдаёт словарь направлений как есть."""
+
+    def __init__(self, data: dict) -> None:
+        self._data = data
+
+    async def evaluate(self, *a, **k):
+        return self._data
+
+
+_DESTINATIONS = {
+    "data": {
+        "departureCities": [{"id": 2, "name": "Москва"}],
+        "destinationListPositions": [{"country": {"id": 92, "name": "Турция"}}],
+    }
+}
+
+
+async def test_resolve_ids_unknown_city_is_not_applicable():
+    """Города нет в справочнике (сам словарь получен) — NotApplicableError, не сбой."""
+    prov = get_provider("travelata")(headless=True)
+    with pytest.raises(NotApplicableError, match="не найден в справочнике Travelata"):
+        await prov._resolve_ids(
+            _PageWithDictionary(_DESTINATIONS),
+            _params(departure_city="Урюпинск", destination_country="Турция"))
+
+
+async def test_resolve_ids_unknown_country_is_not_applicable():
+    """Страны нет в справочнике — NotApplicableError («не предлагается»), не сбой."""
+    prov = get_provider("travelata")(headless=True)
+    with pytest.raises(NotApplicableError, match="не предлагается на Travelata"):
+        await prov._resolve_ids(
+            _PageWithDictionary(_DESTINATIONS), _params(destination_country="Нарния"))

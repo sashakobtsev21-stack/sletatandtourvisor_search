@@ -10,16 +10,7 @@ import { formatPrice, formatDate, formatDateTime, providerLabel } from "../lib/f
 import { navigate } from "../lib/router.js";
 import { setRepeat } from "../lib/repeatStore.js";
 import { apiFetch } from "../lib/api.js";
-
-/** Статус мультипоиска: цвет/подпись бейджа. Совпадает с JobsPage/JobPage. */
-const JOB_STATUS = {
-  pending:     { label: "в очереди",        cls: "border-white/15 bg-white/5 text-muted" },
-  running:     { label: "идёт",             cls: "border-ocean/40 bg-ocean/15 text-ocean" },
-  done:        { label: "готово",           cls: "border-emerald-400/30 bg-emerald-500/15 text-emerald-200" },
-  partial:     { label: "частично",         cls: "border-amber-400/30 bg-amber-400/10 text-amber-300" },
-  failed:      { label: "ошибка",           cls: "border-rose-400/30 bg-rose-500/15 text-rose-200" },
-  interrupted: { label: "прервано",         cls: "border-amber-400/30 bg-amber-400/10 text-amber-300" },
-};
+import { jobStatus } from "../lib/jobStatus.js";
 
 
 /** Краткая сводка параметров прогона для заголовка строки истории. */
@@ -96,7 +87,7 @@ export default function HistoryPage() {
               <Layers className="size-3.5 text-brand-soft" /> Мультипоиски ({jobs.length})
             </m.div>
             {jobs.slice(0, 10).map((j) => {
-              const status = JOB_STATUS[j.status] ?? JOB_STATUS.pending;
+              const status = jobStatus(j.status);
               const summary = (j.directions ?? []).map((d) => {
                 const dates = d.date_from && d.date_to ? ` (${d.date_from} → ${d.date_to})` : "";
                 return `${d.country}${dates}`;

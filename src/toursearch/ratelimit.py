@@ -9,7 +9,9 @@
 * InMemoryBackend (default) — `dict[str, list[float]]` в памяти процесса. При
   multi-worker uvicorn каждый воркер считает отдельно (rate-limit ослаблен в N раз).
 * RedisBackend — Redis ZSet с Lua-скриптом для атомарности (ZADD/ZREMRANGEBYSCORE/
-  ZCARD/EXPIRE в одном transaction'е). Multi-worker-safe.
+  ZCARD/EXPIRE в одном transaction'е). Multi-worker-safe. При сбое Redis в рантайме
+  (упал ПОСЛЕ старта) — деградация на внутренний InMemory с кулдауном, чтобы
+  /api/login не падал в 500 (см. докстринг RedisBackend).
 
 Выбор бекенда — переменной окружения TOURSEARCH_REDIS_URL; если она пуста или Redis-
 клиент не установлен, fallback на InMemory (с warning'ом в лог).
@@ -21,6 +23,17 @@ import logging
 import os
 import time
 from typing import Protocol
+
+# Ошибки, означающие «Redis недоступен» (соединение/таймаут/протокол). RedisError
+# подключаем только если пакет установлен: RedisBackend можно использовать с фейковым
+# клиентом в тестах без пакета redis. Builtin ConnectionError/TimeoutError/OSError —
+# на случай клиентов, не оборачивающих socket-ошибки в свои классы.
+try:
+    import redis as _redis_mod  # type: ignore[import-not-found]
+    _REDIS_ERRORS: tuple[type[BaseException], ...] = (
+        _redis_mod.exceptions.RedisError, ConnectionError, TimeoutError, OSError)
+except ImportError:
+    _REDIS_ERRORS = (ConnectionError, TimeoutError, OSError)
 
 log = logging.getLogger("toursearch.ratelimit")
 
@@ -81,7 +94,23 @@ class RedisBackend:
       2. ZADD timestamp timestamp — добавить событие (для add)
       3. ZCARD — посчитать всё что осталось
       4. EXPIRE — авто-удаление ключа через окно (защита от роста БД)
+
+    Lua грузится через register_script (НЕ script_load/evalsha вручную): объект
+    Script сам перезагружает скрипт при NOSCRIPT — рестарт Redis чистит script
+    cache, и evalsha по старому sha падал бы до конца жизни процесса.
+
+    Деградация: если Redis упал ПОСЛЕ старта (при старте мёртвый Redis и так даёт
+    InMemory-fallback в _get_redis_client), операции переключаются на внутренний
+    InMemoryBackend вместо 500 на /api/login. Лимиты при этом считаются
+    per-process (при multi-worker ослаблены в N раз) — осознанный размен:
+    временно мягче лимит лучше, чем вход лежит. Circuit-breaker: после сбоя Redis
+    не дёргаем на каждом запросе (socket_timeout=2с блокировал бы каждый вызов),
+    а ждём RETRY_INTERVAL секунд и пробуем снова.
     """
+
+    # Кулдаун между попытками вернуться на Redis после сбоя. Параметр класса —
+    # тесты подкручивают его (или time.monotonic), не дожидаясь 30с реального времени.
+    RETRY_INTERVAL: float = 30.0
 
     LUA_HIT = """
     local key = KEYS[1]
@@ -104,20 +133,55 @@ class RedisBackend:
     def __init__(self, redis_client, namespace: str = "ts:rl:") -> None:
         self._r = redis_client
         self._ns = namespace
-        self._hit_sha = self._r.script_load(self.LUA_HIT)
-        self._count_sha = self._r.script_load(self.LUA_COUNT)
+        self._hit_script = self._r.register_script(self.LUA_HIT)
+        self._count_script = self._r.register_script(self.LUA_COUNT)
+        self._fallback = InMemoryBackend()          # деградация при сбое Redis в рантайме
+        self._down_since: float | None = None       # time.monotonic() момента сбоя; None = Redis жив
 
     def _k(self, key: str) -> str:
         return self._ns + key
 
+    def _redis_usable(self) -> bool:
+        """Circuit-breaker: после сбоя не трогаем Redis до истечения RETRY_INTERVAL."""
+        return (self._down_since is None
+                or time.monotonic() - self._down_since >= self.RETRY_INTERVAL)
+
+    def _call(self, redis_op, fallback_op):
+        """Выполнить операцию на Redis; при ошибке соединения — InMemory-фолбэк.
+
+        Warning в лог — один раз на эпизод сбоя (не на каждый запрос); при
+        восстановлении после кулдауна возвращаемся на Redis.
+        """
+        if self._redis_usable():
+            try:
+                result = redis_op()
+                if self._down_since is not None:
+                    log.info("RateLimit: Redis снова доступен — возврат с InMemory-фолбэка.")
+                    self._down_since = None
+                return result
+            except _REDIS_ERRORS as exc:
+                if self._down_since is None:
+                    log.warning("RateLimit: Redis недоступен (%s) — деградация на InMemory "
+                                "(лимиты per-process), повтор через %.0fс.",
+                                exc, self.RETRY_INTERVAL)
+                self._down_since = time.monotonic()  # рестарт кулдауна при каждом сбое
+        return fallback_op()
+
     def recent_count(self, key: str, window: float, now: float) -> int:
-        return int(self._r.evalsha(self._count_sha, 1, self._k(key), now, window))
+        return self._call(
+            lambda: int(self._count_script(keys=[self._k(key)], args=[now, window])),
+            lambda: self._fallback.recent_count(key, window, now))
 
     def add(self, key: str, window: float, now: float) -> int:
-        return int(self._r.evalsha(self._hit_sha, 1, self._k(key), now, window))
+        return self._call(
+            lambda: int(self._hit_script(keys=[self._k(key)], args=[now, window])),
+            lambda: self._fallback.add(key, window, now))
 
     def clear(self, key: str) -> None:
-        self._r.delete(self._k(key))
+        # Фолбэк чистим всегда: после возврата на Redis там могли остаться события
+        # эпизода деградации, и при следующем сбое они бы «воскресли» в счётчике.
+        self._fallback.clear(key)
+        self._call(lambda: self._r.delete(self._k(key)), lambda: None)
 
 
 # Один shared Redis-клиент на процесс (TCP-соединение дорогое; ping() при создании).
@@ -197,7 +261,7 @@ class SlidingWindow:
         """Записать событие, если лимит не превышен. True — записали (в пределах
         лимита), False — лимит достигнут (событие НЕ записано).
 
-        ВНИМАНИЕ: в Redis-режиме чек-и-запись через два evalsha — мини-окно гонки
+        ВНИМАНИЕ: в Redis-режиме чек-и-запись через два Lua-вызова — мини-окно гонки
         (миллисекунды). Для строгой атомарности лимита можно расширить Lua, но
         для анти-брутфорса хватает: оверкомит на 1 событие в редкой гонке не критичен.
         """

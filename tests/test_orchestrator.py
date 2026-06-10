@@ -9,7 +9,7 @@ import pytest
 
 pytest.importorskip("playwright")  # orchestrator импортирует браузерные провайдеры
 
-from toursearch.models import Offer, ProviderResult, SearchParams
+from toursearch.models import NotApplicableError, Offer, ProviderResult, SearchParams
 from toursearch.orchestrator import run_search
 from toursearch.providers.base import register_provider
 
@@ -126,6 +126,22 @@ class _FakeNotApplicable:
                               error="Режим «Отели» не поддерживается этой площадкой")
 
 
+@register_provider("fake_naraise")
+class _FakeNotApplicableRaise:
+    """Бросает NotApplicableError с текстом, который regex НЕ распознаёт, — проверяем,
+    что оркестратор классифицирует отказ по ТИПУ исключения (первичный признак)."""
+
+    name = "fake_naraise"
+    calls = 0
+
+    def __init__(self, headless: bool = False) -> None:
+        self.headless = headless
+
+    async def search(self, params: SearchParams) -> ProviderResult:
+        _FakeNotApplicableRaise.calls += 1
+        raise NotApplicableError("эта площадка так не умеет")
+
+
 def _params() -> SearchParams:
     return SearchParams(
         departure_city="Москва", destination_country="Турция",
@@ -195,6 +211,17 @@ async def test_not_applicable_failure_is_not_retried():
     report = await run_search(_params(), providers=["fake_namode"], provider_retries=1)
     assert _FakeNotApplicable.calls == 1    # повтора не было
     assert report.results[0].success is False
+
+
+async def test_not_applicable_exception_is_not_retried():
+    """NotApplicableError из search() — детерминированный отказ: классифицируется по типу
+    исключения (текст regex'у незнаком), НЕ ретраится, в error — чистый текст без префикса."""
+    _FakeNotApplicableRaise.calls = 0
+    report = await run_search(_params(), providers=["fake_naraise"], provider_retries=1)
+    r = report.results[0]
+    assert _FakeNotApplicableRaise.calls == 1   # повтора не было
+    assert r.success is False
+    assert r.error == "эта площадка так не умеет"  # без «NotApplicableError: »
 
 
 async def test_orchestrator_timeout_is_not_retried():

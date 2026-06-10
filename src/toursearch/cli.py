@@ -103,21 +103,16 @@ def search(
         typer.echo(f"\nПрогон сохранён в {db} (id={run_id}).")
 
 
-_LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
-
-
 def _insecure_exposure(host: str, db: str) -> bool:
     """True, если запуск на НЕлокальном host без какой-либо авторизации — пароли и данные
     пошли бы по открытой сети. Обходы: TOURSEARCH_ALLOW_INSECURE=1, TOURSEARCH_TOKEN или
-    наличие учётных записей в БД."""
-    import os
+    наличие учётных записей в БД. Сама проверка «авторизация настроена?» — общая с
+    fail-fast в create_app (web_auth.insecure_exposure), чтобы CLI и ASGI-деплой
+    `uvicorn toursearch.web:app` не расходились (audit P1-2)."""
+    # Импорт лениво: web_auth тянет fastapi, не нужный остальным CLI-командам.
+    from toursearch.web_auth import LOCAL_HOSTS, insecure_exposure
 
-    if host in _LOCAL_HOSTS or os.environ.get("TOURSEARCH_ALLOW_INSECURE") == "1":
-        return False
-    if (os.environ.get("TOURSEARCH_TOKEN") or "").strip():
-        return False
-    with Storage(db) as storage:
-        return not storage.has_any_user()
+    return host not in LOCAL_HOSTS and insecure_exposure(db)
 
 
 @app.command()

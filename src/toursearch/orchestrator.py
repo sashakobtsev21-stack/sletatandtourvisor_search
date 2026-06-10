@@ -8,6 +8,7 @@ import os
 
 from toursearch.models import (
     ComparisonReport,
+    NotApplicableError,
     ProviderResult,
     SearchParams,
     is_not_applicable_error,
@@ -63,12 +64,13 @@ async def run_search(
                 inst.on_frame = on_frame
             except Exception:
                 pass
-    async def _attempt(name: str, inst) -> tuple[ProviderResult, bool]:
-        """Одна попытка площадки под жёстким таймаутом. Возвращает (результат, был_таймаут).
-        Любой сбой превращается в ProviderResult(success=False), чтобы не валить прогон."""
+    async def _attempt(name: str, inst) -> tuple[ProviderResult, bool, bool]:
+        """Одна попытка площадки под жёстким таймаутом. Возвращает (результат,
+        был_таймаут, детерминированный_отказ). Любой сбой превращается в
+        ProviderResult(success=False), чтобы не валить прогон."""
         try:
             res = await asyncio.wait_for(inst.search(params), timeout=timeout_s)
-            return res, False
+            return res, False, False
         except TimeoutError:
             # Внешняя страховка: внутренние таймауты площадки не сработали (зависший
             # браузер/цикл). wait_for отменил search() → провайдер закрыл браузер в finally.
@@ -76,27 +78,37 @@ async def run_search(
             return ProviderResult(
                 provider=name, success=False, duration_seconds=timeout_s,
                 search_mode=params.search_mode,
-                error=f"Превышен таймаут {timeout_s:.0f}с — площадка прервана оркестратором"), True
+                error=f"Превышен таймаут {timeout_s:.0f}с — площадка прервана оркестратором"), True, False
+        except NotApplicableError as exc:
+            # Детерминированный отказ («не обслуживает такой запрос») долетел сюда
+            # исключением: это не сбой — текст отдаём чистым (без префикса типа, UI
+            # покажет нейтрально ℹ️), повторять бессмысленно (повтор дал бы тот же отказ).
+            log.info("provider %s: не обслуживает запрос — %s", name, exc)
+            return ProviderResult(
+                provider=name, success=False, duration_seconds=0.0,
+                search_mode=params.search_mode, error=str(exc)), False, True
         except Exception as exc:  # noqa: BLE001 — падение площадки не должно валить прогон
             log.warning("provider %s raised: %s: %s", name, type(exc).__name__, exc)
             return ProviderResult(
                 provider=name, success=False, duration_seconds=0.0,
-                search_mode=params.search_mode, error=f"{type(exc).__name__}: {exc}"), False
+                search_mode=params.search_mode, error=f"{type(exc).__name__}: {exc}"), False, False
 
     async def _run_one(name: str, inst) -> ProviderResult:
         # Логируем завершение КАЖДОЙ площадки сразу, как она закончила (а не общим списком
         # после gather): тогда веб-прогресс растёт по мере готовности площадок в реальном
         # времени, а не скачком в самом конце.
-        res, timed_out = await _attempt(name, inst)
+        res, timed_out, not_applicable = await _attempt(name, inst)
         # Автоповтор ТОЛЬКО на случайном сбое: пропускаем успех, верхний таймаут (площадка
-        # зависла — второй такой же впустую) и детерминированные «не обслуживает запрос».
+        # зависла — второй такой же впустую) и детерминированные «не обслуживает запрос»
+        # (первичный признак — тип NotApplicableError; regex по тексту — фолбэк для
+        # отказов, которые провайдер уже превратил в строку внутри своего fail-обработчика).
         left = retries
-        while (left > 0 and not res.success and not timed_out
+        while (left > 0 and not res.success and not timed_out and not not_applicable
                and not is_not_applicable_error(res.error)):
             left -= 1
             log.info("provider %s: случайный сбой (%s) — повтор (осталось %d)",
                      name, res.error, left)
-            res, timed_out = await _attempt(name, inst)
+            res, timed_out, not_applicable = await _attempt(name, inst)
         n = len(res.offers) + len(res.hotel_offers)
         if res.success:
             log.info("provider %s: OK %.1fs, %d результатов", name, res.duration_seconds, n)

@@ -39,8 +39,19 @@ class BackgroundRegistry:
     def spawn(self, coro: Coroutine, *, name: str | None = None) -> asyncio.Task:
         task = asyncio.create_task(coro, name=name)
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(self._on_done)
         return task
+
+    def _on_done(self, task: asyncio.Task) -> None:
+        """discard + вычитать исключение (P1-7): раньше его никто не читал, и фоновая
+        задача умирала ТИХО (asyncio пишет «Task exception was never retrieved» лишь
+        при GC, без гарантий). CancelledError — штатная остановка, не шумим."""
+        self._tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.error("фоновая задача %r упала: %s", task.get_name(), exc, exc_info=exc)
 
     def list_names(self) -> list[str]:
         """Имена живых задач (для диагностики)."""

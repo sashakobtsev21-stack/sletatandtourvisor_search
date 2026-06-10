@@ -165,6 +165,7 @@ toursearch grant-sub --username bob --days 30         # выдать/продл�
 |---|---|---|
 | `TOURSEARCH_TOKEN` | — | Legacy‑режим: единый общий токен (для CI/скриптов), пока в БД нет учёток. |
 | `TOURSEARCH_ALLOW_INSECURE` | — | Разрешить старт **не на localhost без авторизации** (только за TLS‑прокси). |
+| `TOURSEARCH_PUBLIC` | — | `=1` — объявить инстанс **публичным** (выставлен за пределы localhost). Включает Secure‑cookie и fail‑fast'ы (отказ старта при stub‑оплате и без настроенной авторизации) независимо от способа запуска — обязателен при деплое `uvicorn toursearch.web:app` за reverse‑proxy. |
 | `TOURSEARCH_SECURE_COOKIES` | — | Форсировать Secure‑cookie + HSTS на 127.0.0.1 (за TLS‑прокси). Вне localhost — автоматически. |
 | `TOURSEARCH_PAYMENT_PROVIDER` | `stub` | Провайдер оплаты. `stub` — имитация; далее `yookassa`. |
 | `TOURSEARCH_MAX_CONCURRENT_SEARCHES` | `3` | Предел одновременных поисков (каждый поднимает ~5 браузеров). |
@@ -260,14 +261,19 @@ docs/                планы фаз, разбор для любителя, г
   `GET /api/runs/{run_id}/screenshot/{provider}` (только владелец прогона/admin) и
   `GET /api/tests/screenshot/{filename}` (право `tests.view`). Прямой `/screenshots/*`
   убран — раньше любой залогиненный/гость мог перебором микросекунд скачивать чужие выдачи.
+  Анонимному гостю скриншоты **его** прогона отдаёт сессионный
+  `GET /search/screenshot/{token}/{provider}` — владелец сверяется по device‑cookie
+  (тот же owner‑check, что у stream/cancel), чужой токен/устройство получает 404.
 - **Owner‑check на SSE‑стриме поиска:** `/search/stream` и `/search/cancel` проверяют
   владельца сессии — утёкший uuid токен сам по себе бесполезен.
 - **DoS‑caps:** ограничение размера тела HTTP (`TOURSEARCH_MAX_BODY_BYTES`, 256 KB по умолчанию)
   + предел числа направлений в одном мультипоиске (50).
 - **Заголовки:** CSP, `X‑Frame‑Options: DENY`, `X‑Content‑Type‑Options: nosniff`, `Referrer‑Policy`.
 - **Предохранитель** от старта наружу без TLS.
-- **Зависимости:** CI‑гейты `pip-audit` (Python) и `npm audit --audit-level=high` (фронт) на
-  каждый push/PR — критические CVE не пропускают в `main`.
+- **Зависимости:** в `.github/workflows/` подготовлены CI‑гейты `pip-audit` (Python, блокирующий)
+  и `npm audit --audit-level=high` (фронт, информирующий) — воркфлоу сейчас **выключены**
+  (`*.yml.disabled`, включаются переименованием, см. [Тесты](#тесты)); до включения действует
+  правило локальных прогонов перед push (`pip-audit` / `npm audit` запускаются вручную).
 
 Подробно — `docs/AUTH_PLAN.md`.
 
@@ -286,6 +292,10 @@ docker compose exec toursearch \
 `init-auth --password-from-env VAR` читает пароль из env (для Docker без TTY) —
 переменная не светит в argv/history. После создания админа — удалите ADMIN_PASSWORD из .env.
 
+Версия `playwright` в `requirements.txt` и тег базового образа в `Dockerfile` обязаны
+совпадать (сейчас `1.60.0` / `v1.60.0-noble`) — при обновлении менять **парой**, иначе
+драйвер не найдёт браузеры в `/ms-playwright`.
+
 **Multi-worker НЕ поддерживается** by design: `ratelimit` in-memory (счётчик в каждом
 воркере) + `retention loop` стартует в каждом (N параллельных purge/VACUUM по одной
 SQLite). Контейнер запускает uvicorn workers=1 (см. `Dockerfile` CMD). Для горизонтального
@@ -294,9 +304,14 @@ SQLite). Контейнер запускает uvicorn workers=1 (см. `Dockerf
 ### fail-fast на stub-провайдер оплаты в проде
 
 `TOURSEARCH_PAYMENT_PROVIDER=stub` — «оплата» без денег (заглушка для разработки).
-В production-окружении (host не в `127.0.0.1`/`localhost`) приложение **откажется
-стартовать** с stub-провайдером (RuntimeError при `create_app`). Опт-аут — явный
-`TOURSEARCH_ALLOW_INSECURE=1` (для нагрузочного тестирования за TLS-прокси).
+В production-окружении (host не в `127.0.0.1`/`localhost` **или** `TOURSEARCH_PUBLIC=1`)
+приложение **откажется стартовать** с stub-провайдером (RuntimeError при `create_app`).
+Опт-аут — явный `TOURSEARCH_ALLOW_INSECURE=1` (для нагрузочного тестирования за TLS-прокси).
+Аналогичный fail-fast срабатывает, если публичный инстанс запускается **без настроенной
+авторизации** (в БД нет пользователей и не задан `TOURSEARCH_TOKEN`): сначала
+`toursearch init-auth`. Даже без `TOURSEARCH_PUBLIC` защита остаётся: в local-режиме
+запросы с нелокальных IP получают 403 (defense-in-depth в middleware; `/healthz`,
+`/readyz`, `/metrics` продолжают отвечать).
 
 ### Деплой за reverse‑proxy
 
@@ -305,8 +320,14 @@ SQLite). Контейнер запускает uvicorn workers=1 (см. `Dockerf
 - все запросы будут с `127.0.0.1` → IP‑rate‑limit на login заблочит ВСЕХ при первой же атаке;
 - без `--forwarded-allow-ips` (или с `*`) — `X-Forwarded-For` можно подделать → обход лимитов.
 
-Также рекомендуется выставить `TOURSEARCH_SECURE_COOKIES=1` (форс `Secure` cookie на 127.0.0.1
-если TLS терминируется в прокси). Минимальный пример nginx:
+При деплое за прокси **обязательно** задайте `TOURSEARCH_PUBLIC=1` (вместе с
+`TOURSEARCH_BEHIND_PROXY=1`): это включает Secure-cookie и предохранители независимо от
+способа запуска. Особенно если запускаете напрямую `uvicorn toursearch.web:app`, минуя
+`toursearch web`: в мультиюзер-режиме (юзеры уже созданы) host остаётся дефолтным
+`127.0.0.1`, поэтому без `TOURSEARCH_PUBLIC=1` сессионные cookie уйдут **без флага
+`Secure`** — настройте его до выставления наружу. Дополнительно можно
+`TOURSEARCH_SECURE_COOKIES=1` (форс `Secure` cookie на 127.0.0.1, если TLS терминируется
+в прокси). Минимальный пример nginx:
 
 ```nginx
 location / {
@@ -334,6 +355,12 @@ toursearch web
 Если URL пустой ИЛИ пакет `redis` не установлен ИЛИ Redis недоступен — автоматический
 fallback на InMemory с warning в лог. Логика sliding-window та же, реализация — ZSet +
 EXPIRE + Lua-script (атомарность из коробки).
+
+Отказ Redis **в рантайме** (после старта) тоже не валит вход: лимитер деградирует на
+in-memory (per-process — в multi-worker лимит временно ослаблен в N раз) вместо 500 на
+`/api/login`; повторная проба Redis — раз в 30 секунд, при восстановлении учёт
+возвращается на него. Рестарт Redis (очистка script cache) переживается прозрачно —
+Lua перезагружается автоматически (`register_script`).
 
 ### API версионирование (`/api/v1/*`)
 

@@ -22,6 +22,7 @@ from playwright.async_api import Page, TimeoutError as PWTimeout, async_playwrig
 
 from toursearch.models import (
     HotelOffer,
+    NotApplicableError,
     Offer,
     OperatorOffer,
     ProviderResult,
@@ -286,8 +287,10 @@ class SletatProvider:
                 shot = await self._safe_screenshot(page)
                 msg = str(exc)
                 # «не предлагается / не обслуживает» — детерминированный отказ (не сбой):
-                # показываем чистым текстом, без префикса типа исключения.
-                err = msg if is_not_applicable_error(msg) else f"{type(exc).__name__}: {msg}"
+                # показываем чистым текстом, без префикса типа исключения. Первичен тип
+                # NotApplicableError; regex — фолбэк для текстов из вложенных слоёв.
+                err = (msg if isinstance(exc, NotApplicableError) or is_not_applicable_error(msg)
+                       else f"{type(exc).__name__}: {msg}")
                 return ProviderResult(
                     provider=self.name,
                     success=False,
@@ -386,7 +389,7 @@ class SletatProvider:
         # формы, а «не предлагается» — показывается нейтрально (ℹ️), без красной ошибки. В
         # режиме «Отели» вызывающий (_select_country_for_hotels) сперва пробует выбрать страну
         # в «Турах» и перенести — сюда долетают лишь направления, которых нет нигде.
-        raise RuntimeError(f"направление «{country}» не предлагается на Sletat")
+        raise NotApplicableError(f"направление «{country}» не предлагается на Sletat")
 
     async def _select_country_for_hotels(self, page: Page, params: SearchParams) -> None:
         """Выбрать страну назначения для режима «Отели» (без перелёта).
@@ -413,8 +416,9 @@ class SletatProvider:
 
     async def _select_dates(self, page: Page, date_from: date, date_to: date) -> None:
         # Sletat ограничивает окно вылета ±13 дней от первой даты — дальше дни disabled.
+        # Лимит самой площадки, повтор не поможет — детерминированный отказ.
         if (date_to - date_from).days > 13:
-            raise ValueError(
+            raise NotApplicableError(
                 f"Диапазон дат вылета {(date_to - date_from).days} дн. превышает лимит Sletat (13)"
             )
         await page.click("div.containerTitle")

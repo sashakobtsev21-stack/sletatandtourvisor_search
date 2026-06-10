@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -170,6 +171,21 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
                 s.update_job(job_id, status=final_status, finished_at=auth.utcnow_iso())
                 if user_id:
                     s.add_notification(user_id, notif_kind, summary, job_id=job_id)
+        except asyncio.CancelledError:
+            # P1-7: воркер отменили (shutdown / cancel_all) — раньше CancelledError
+            # пролетал мимо `except Exception`, и джоба зависала «running» навсегда
+            # (до рестарта), без уведомления. Помечаем interrupted (тот же статус,
+            # что при рестарте сервера), уведомляем владельца и ПРОБРАСЫВАЕМ отмену
+            # дальше — глотать её нельзя (ломает cancel_all/shutdown).
+            logger.warning("батч #%s прерван отменой фоновой задачи", job_id)
+            with Storage(db_path) as s:
+                s.update_job(job_id, status="interrupted", finished_at=auth.utcnow_iso(),
+                             error="Выполнение прервано (фоновая задача остановлена).")
+                if user_id:
+                    s.add_notification(user_id, "batch_partial",
+                                       f"Мультипоиск #{job_id} прерван (сервер остановлен).",
+                                       job_id=job_id)
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.exception("батч #%s упал", job_id)
             with Storage(db_path) as s:

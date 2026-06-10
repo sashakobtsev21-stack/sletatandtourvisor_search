@@ -385,6 +385,47 @@ def test_worker_credit_exhaustion_marks_interrupted(tmp_path, monkeypatch):
         assert "прерван" in notifs[0]["text"]
 
 
+def test_worker_cancellation_marks_interrupted_and_reraises(tmp_path, monkeypatch):
+    # P1-7: отмена воркер-задачи mid-run (shutdown / cancel_all) — раньше CancelledError
+    # пролетал мимо `except Exception`, job висел 'running' навсегда, уведомления не было.
+    async def fake_health(providers=None, headless=True):
+        return {}
+
+    started = asyncio.Event()
+
+    async def hang_run(params, providers=None, headless=True, on_frame=None):
+        started.set()
+        await asyncio.sleep(3600)              # «вечный» поиск — отменим снаружи
+
+    monkeypatch.setattr("toursearch.web_jobs.run_health_check", fake_health)
+    monkeypatch.setattr("toursearch.web_jobs.gate_passed", lambda h: True)
+    monkeypatch.setattr("toursearch.web_jobs.run_search", hang_run)
+    db = _seed(tmp_path, [("u", "secret1", "user")])
+    app = create_app(db_path=db)
+    with Storage(db) as s:
+        uid = s.get_user_by_username("u")["id"]            # 5 кредитов
+        job_id = s.create_job(uid, _params_json(), ["Турция", "Египет"])
+
+    async def go():
+        task = asyncio.create_task(app.state.run_job(job_id))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):        # отмена ПРОБРОШЕНА, не проглочена
+            await task
+
+    asyncio.run(go())
+
+    with Storage(db) as s:
+        job = s.get_job(job_id)
+        assert job["status"] == "interrupted"              # не висит 'running' до рестарта
+        assert job["finished_at"]
+        assert "прервано" in (job["error"] or "")
+        assert s.get_user_by_id(uid)["searches_left"] == 5  # кредит за прерванное возвращён
+        notifs = s.list_notifications(uid)
+        assert notifs and notifs[0]["kind"] == "batch_partial"
+        assert "прерван" in notifs[0]["text"]
+
+
 def test_notifications_api_and_isolation(tmp_path, monkeypatch):
     _patch_search(monkeypatch)
     db = _seed(tmp_path, [("u", "secret1", "user"), ("v", "secret1", "user")])

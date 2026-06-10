@@ -5,15 +5,7 @@ import GlassCard from "../components/ui/GlassCard.jsx";
 import { staggerContainer, fadeUp } from "../lib/animations.js";
 import { apiFetch } from "../lib/api.js";
 import { formatShortDateTime } from "../lib/format.js";
-
-/** Человеческая метка и цвет статуса батча. */
-const STATUS = {
-  pending: { label: "в очереди", cls: "border-white/15 bg-white/5 text-muted" },
-  running: { label: "идёт", cls: "border-ocean/40 bg-ocean/15 text-ocean" },
-  done: { label: "готово", cls: "border-emerald-400/30 bg-emerald-500/15 text-emerald-200" },
-  failed: { label: "ошибка", cls: "border-rose-400/30 bg-rose-500/15 text-rose-200" },
-  interrupted: { label: "прервано", cls: "border-amber-400/30 bg-amber-400/10 text-amber-300" },
-};
+import { jobStatus } from "../lib/jobStatus.js";
 
 /**
  * JobsPage (#/jobs) — «Мои анализы»: список батч-заданий пользователя (статус, прогресс,
@@ -57,7 +49,7 @@ export default function JobsPage() {
         </GlassCard>
       ) : (
         jobs.map((j) => {
-          const st = STATUS[j.status] ?? STATUS.pending;
+          const st = jobStatus(j.status);
           return (
             <GlassCard key={j.id} as={m.a} variants={fadeUp} href={`#/jobs/${j.id}`} className="flex items-center gap-4 p-4 transition-colors hover:bg-white/[0.04]">
               <div className="min-w-0 flex-1">
@@ -74,7 +66,7 @@ export default function JobsPage() {
                         const dates = d.date_from && d.date_to ? ` (${d.date_from} → ${d.date_to})` : "";
                         return `${d.country}${dates}`;
                       }).join(" · ")
-                    : j.destinations.join(", ")}
+                    : (j.destinations ?? []).join(", ")}
                 </div>
                 {j.error && <div className="mt-1 text-xs text-amber-300/80">{j.error}</div>}
               </div>

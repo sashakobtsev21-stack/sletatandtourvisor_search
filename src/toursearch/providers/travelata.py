@@ -34,7 +34,15 @@ from decimal import Decimal
 
 from playwright.async_api import Page, TimeoutError as PWTimeout, async_playwright
 
-from toursearch.models import HotelOffer, Offer, OperatorOffer, ProviderResult, SearchParams
+from toursearch.models import (
+    HotelOffer,
+    NotApplicableError,
+    Offer,
+    OperatorOffer,
+    ProviderResult,
+    SearchParams,
+    is_not_applicable_error,
+)
 from toursearch.providers.base import (
     capture_top as _capture_top,
     dedup_hotel_offers,
@@ -359,7 +367,7 @@ class TravelataProvider:
                 return ProviderResult(
                     provider=self.name, success=False,
                     duration_seconds=time.monotonic() - start, search_mode="tours",
-                    error=f"{type(exc).__name__}: {exc}", screenshot_path=shot,
+                    error=self._format_error(exc), screenshot_path=shot,
                     search_url=page.url if not page.is_closed() else None,
                 )
             finally:
@@ -429,7 +437,7 @@ class TravelataProvider:
                 return ProviderResult(
                     provider=self.name, success=False,
                     duration_seconds=time.monotonic() - start, search_mode="hotels",
-                    error=f"{type(exc).__name__}: {exc}", screenshot_path=shot,
+                    error=self._format_error(exc), screenshot_path=shot,
                     search_url=page.url if not page.is_closed() else None,
                 )
             finally:
@@ -456,10 +464,12 @@ class TravelataProvider:
                 countries[_norm(c["name"])] = c.get("id")
         city_id = cities.get(_norm(params.departure_city))
         country_id = countries.get(_norm(params.destination_country))
+        # Города/страны нет в словаре направлений Travelata — детерминированный отказ
+        # (словарь получен успешно, повтор вернёт тот же словарь).
         if need_city and city_id is None:
-            raise RuntimeError(f"Город вылета «{params.departure_city}» не найден в справочнике Travelata")
+            raise NotApplicableError(f"Город вылета «{params.departure_city}» не найден в справочнике Travelata")
         if country_id is None:
-            raise RuntimeError(f"Страна «{params.destination_country}» не предлагается на Travelata")
+            raise NotApplicableError(f"Страна «{params.destination_country}» не предлагается на Travelata")
         return (int(city_id) if city_id is not None else 0), int(country_id)
 
     def _build_search_url(self, params: SearchParams, city_id: int, country_id: int) -> str:
@@ -658,6 +668,16 @@ class TravelataProvider:
             log.warning("Travelata: лишь %.0f%% карточек в стране «%s» — направление не применилось?",
                         ratio * 100, params.destination_country)
         return ratio >= 0.5
+
+    @staticmethod
+    def _format_error(exc: Exception) -> str:
+        """Текст ошибки для ProviderResult. «Не обслуживает такой запрос» —
+        детерминированный отказ (не сбой): чистым текстом, без префикса типа исключения.
+        Первичен тип NotApplicableError; regex — фолбэк для текстов из вложенных слоёв."""
+        msg = str(exc)
+        if isinstance(exc, NotApplicableError) or is_not_applicable_error(msg):
+            return msg
+        return f"{type(exc).__name__}: {msg}"
 
     async def _safe_screenshot(self, page: Page) -> str | None:
         try:

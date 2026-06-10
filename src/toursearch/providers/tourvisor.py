@@ -15,7 +15,15 @@ from decimal import Decimal
 
 from playwright.async_api import Page, TimeoutError as PWTimeout, async_playwright
 
-from toursearch.models import HotelOffer, Offer, OperatorOffer, ProviderResult, SearchParams
+from toursearch.models import (
+    HotelOffer,
+    NotApplicableError,
+    Offer,
+    OperatorOffer,
+    ProviderResult,
+    SearchParams,
+    is_not_applicable_error,
+)
 from toursearch.providers._formcheck import (
     UNKNOWN,
     FormVerificationError,
@@ -398,12 +406,18 @@ class TourvisorProvider:
                 # если поиск уже начинался (был переход на /tours/) — отдаём ссылку на него
                 if nav_url is None and "/tours/" in (page.url or ""):
                     nav_url = page.url
+                msg = str(exc)
+                # «не обслуживает такой запрос» — детерминированный отказ (не сбой):
+                # чистым текстом, без префикса типа исключения. Первичен тип
+                # NotApplicableError; regex — фолбэк для текстов из вложенных слоёв.
+                err = (msg if isinstance(exc, NotApplicableError) or is_not_applicable_error(msg)
+                       else f"{type(exc).__name__}: {msg}")
                 return ProviderResult(
                     provider=self.name,
                     success=False,
                     duration_seconds=time.monotonic() - start,
                     search_mode=params.search_mode,
-                    error=f"{type(exc).__name__}: {exc}",
+                    error=err,
                     screenshot_path=shot,
                     search_url=nav_url,
                     unsupported_filters=unsupported,
@@ -590,7 +604,8 @@ class TourvisorProvider:
             candidates,
         )
         if not clicked:
-            raise RuntimeError(f"Город вылета «{city}» недоступен на Tourvisor")
+            # Города нет в таблице вылетов — детерминированный отказ, повтор не поможет.
+            raise NotApplicableError(f"Город вылета «{city}» недоступен на Tourvisor")
         await page.wait_for_timeout(400)
 
     async def _select_country(self, page: Page, country: str) -> None:
@@ -638,7 +653,8 @@ class TourvisorProvider:
             country,
         )
         if not clicked:
-            raise RuntimeError(f"Страна «{country}» недоступна на Tourvisor")
+            # Страны нет в списке направлений (доскроллили до конца) — детерминированный отказ.
+            raise NotApplicableError(f"Страна «{country}» недоступна на Tourvisor")
         await page.wait_for_timeout(500)
 
     async def _open_dates_filter(self, page: Page) -> None:

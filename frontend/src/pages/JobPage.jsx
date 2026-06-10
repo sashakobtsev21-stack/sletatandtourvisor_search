@@ -5,14 +5,7 @@ import GlassCard from "../components/ui/GlassCard.jsx";
 import { staggerContainer, fadeUp } from "../lib/animations.js";
 import { formatPrice } from "../lib/format.js";
 import { apiFetch } from "../lib/api.js";
-
-const JOB_STATUS = {
-  pending: { label: "в очереди", cls: "border-white/15 bg-white/5 text-muted" },
-  running: { label: "идёт мультипоиск", cls: "border-ocean/40 bg-ocean/15 text-ocean" },
-  done: { label: "готово", cls: "border-emerald-400/30 bg-emerald-500/15 text-emerald-200" },
-  failed: { label: "ошибка", cls: "border-rose-400/30 bg-rose-500/15 text-rose-200" },
-  interrupted: { label: "прервано", cls: "border-amber-400/30 bg-amber-400/10 text-amber-300" },
-};
+import { jobStatus } from "../lib/jobStatus.js";
 
 /**
  * JobPage (#/jobs/{id}) — прогресс и результат батч-анализа. Пока задание идёт — опрашиваем
@@ -70,7 +63,7 @@ export default function JobPage({ jobId }) {
   if (!job)
     return <Center icon={Loader2} spin text={`Загружаю мультипоиск #${jobId}…`} />;
 
-  const st = JOB_STATUS[job.status] ?? JOB_STATUS.pending;
+  const st = jobStatus(job.status);
   const pct = job.progress_total ? Math.round((job.progress_done / job.progress_total) * 100) : 0;
 
   return (

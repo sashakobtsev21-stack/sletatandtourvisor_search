@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from toursearch.models import (
     ComparisonReport,
+    NotApplicableError,
     Offer,
     ProviderResult,
     SearchParams,
@@ -20,8 +21,26 @@ def test_is_not_applicable_error():
     assert is_not_applicable_error("направление «Армения» не предлагается на Sletat") is True
     assert is_not_applicable_error("country: не найдена в списке Sletat") is True
     assert is_not_applicable_error("Островок работает только в режиме «Отели»") is True
+    assert is_not_applicable_error("Город вылета «Урюпинск» недоступен на Tourvisor") is True
+    assert is_not_applicable_error("Страна «Нарния» недоступна на Tourvisor") is True
+    assert is_not_applicable_error("Город вылета «Урюпинск» не найден в справочнике Travelata") is True
+    assert is_not_applicable_error("Диапазон дат вылета 20 дн. превышает лимит Sletat (13)") is True
     assert is_not_applicable_error("TimeoutError: страница не загрузилась") is False
+    # «Превышен таймаут» оркестратора — сбой (ретраить нельзя, но это НЕ «не обслуживает»)
+    assert is_not_applicable_error("Превышен таймаут 180с — площадка прервана оркестратором") is False
+    # связка « на » обязательна: транзиентное «недоступен» без неё — это СБОЙ (ретраить),
+    # а не «не обслуживает» (иначе реальный отказ сайта молча показали бы как ℹ️)
+    assert is_not_applicable_error("Сервис временно недоступен, попробуйте позже") is False
+    assert is_not_applicable_error("Сайт недоступен") is False
     assert is_not_applicable_error(None) is False
+
+
+def test_not_applicable_error_is_runtime_error():
+    # контракт: NotApplicableError ловится существующими except RuntimeError/Exception
+    assert issubclass(NotApplicableError, RuntimeError)
+    # текст детерминированного отказа распознаётся и regex-фолбэком (строки из БД)
+    err = NotApplicableError("Страна «Нарния» недоступна на Tourvisor")
+    assert is_not_applicable_error(str(err)) is True
 
 
 def make_params(**overrides) -> SearchParams:

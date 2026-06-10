@@ -123,6 +123,65 @@ async def test_health_check_coalesces_parallel_calls(monkeypatch):
     assert calls["n"] == 1, "должны слиться в один прогон"
 
 
+async def test_health_check_waiter_cancel_does_not_cascade(monkeypatch):
+    """P1-7: отмена первого ждущего (юзер остановил поиск во время гейта / SSE-клиент
+    оборвался) НЕ отменяет расчёт и не каскадит остальным — раньше «раннер» публиковал
+    свой CancelledError в inflight.set_exception, и все ждущие получали ЧУЖУЮ отмену."""
+    import asyncio as _asyncio
+    import toursearch.healthcheck as hc
+    hc._clear_health_cache()
+    gate = _asyncio.Event()
+
+    async def slow_check(name, headless=True, timeout_ms=15_000):
+        await gate.wait()
+        return ProviderHealth(provider=name, ok=True)
+
+    monkeypatch.setattr(hc, "check_provider", slow_check)
+    monkeypatch.setattr(hc, "load_browser_providers", lambda: None)
+
+    t1 = _asyncio.create_task(hc.run_health_check(providers=["sletat"]))
+    await _asyncio.sleep(0.05)             # t1 запустил расчёт и ждёт future
+    t2 = _asyncio.create_task(hc.run_health_check(providers=["sletat"]))
+    await _asyncio.sleep(0.05)             # t2 присоединился к тому же inflight
+    t1.cancel()                            # первый оборвался mid-гейт
+    gate.set()
+    with pytest.raises(_asyncio.CancelledError):
+        await t1
+    results = await t2                     # второй получает НОРМАЛЬНЫЙ результат
+    assert results["sletat"].ok
+
+
+async def test_cancel_inflight_health_cancels_detached_tasks(monkeypatch):
+    """P1-7 (доводка): детачнутые health-задачи отменяются на shutdown — их browser.close()
+    в finally успевает отработать, Chromium не осиротеет. Раньше bg.cancel_all их не видел."""
+    import asyncio as _asyncio
+    import toursearch.healthcheck as hc
+    hc._clear_health_cache()
+    gate = _asyncio.Event()
+    closed = _asyncio.Event()
+
+    async def slow_check(name, headless=True, timeout_ms=15_000):
+        try:
+            await gate.wait()                # висим как реальный health-прогон
+            return ProviderHealth(provider=name, ok=True)
+        except _asyncio.CancelledError:
+            closed.set()                     # имитируем browser.close() в finally
+            raise
+
+    monkeypatch.setattr(hc, "check_provider", slow_check)
+    monkeypatch.setattr(hc, "load_browser_providers", lambda: None)
+
+    waiter = _asyncio.create_task(hc.run_health_check(providers=["sletat"]))
+    await _asyncio.sleep(0.05)               # детачнутая задача запущена и висит
+    assert any(not t.done() for t in hc._health_tasks)
+    await hc.cancel_inflight_health(timeout=2.0)
+    assert closed.is_set()                   # finally отработал (браузер закрыт)
+    assert not [t for t in hc._health_tasks if not t.done()]
+    waiter.cancel()
+    with pytest.raises(_asyncio.CancelledError):
+        await waiter
+
+
 @pytest.mark.e2e
 async def test_healthcheck_live_sites_pass():
     """Живая проверка: якоря обеих форм на месте (ловит редизайн сайтов).
