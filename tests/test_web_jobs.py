@@ -297,6 +297,73 @@ def test_worker_subscription_consumes_no_credits(tmp_path, monkeypatch):
         assert s.get_user_by_id(uid)["searches_left"] == before  # подписка → кредиты не тронуты
 
 
+def test_worker_applies_per_direction_dates(tmp_path, monkeypatch):
+    """audit P2: воркер применяет ДАТЫ направления, а не shared base. Раньше fake_run не
+    ассертил params.date_from — регрессию «батч ищет всё по общим датам» сьют не ловил."""
+    seen: list[tuple] = []
+
+    async def fake_health(providers=None, headless=True):
+        return {}
+
+    async def fake_run(params, providers=None, headless=True, on_frame=None):
+        seen.append((params.destination_country,
+                     params.date_from.isoformat(), params.date_to.isoformat()))
+        return _report(params.destination_country)
+
+    monkeypatch.setattr("toursearch.web_jobs.run_health_check", fake_health)
+    monkeypatch.setattr("toursearch.web_jobs.gate_passed", lambda h: True)
+    monkeypatch.setattr("toursearch.web_jobs.run_search", fake_run)
+
+    db = _seed(tmp_path, [("u", "secret1", "user")])
+    app = create_app(db_path=db)
+    base = SearchParams(departure_city="Москва", destination_country="X",
+                        date_from=date(2026, 7, 1), date_to=date(2026, 7, 8),
+                        nights_min=7, nights_max=10, adults=2)
+    params_json = json.dumps({"search_params": base.model_dump(mode="json"),
+                              "providers": ["sletat"]}, ensure_ascii=False)
+    directions = [
+        {"country": "Турция", "date_from": "2026-07-01", "date_to": "2026-07-05"},
+        {"country": "Египет", "date_from": "2026-08-10", "date_to": "2026-08-14"},
+    ]
+    with Storage(db) as s:
+        uid = s.get_user_by_username("u")["id"]
+        job_id = s.create_job(uid, params_json, directions)
+
+    asyncio.run(app.state.run_job(job_id))
+
+    seen_set = set(seen)
+    assert ("Турция", "2026-07-01", "2026-07-05") in seen_set
+    assert ("Египет", "2026-08-10", "2026-08-14") in seen_set   # НЕ shared base 07-01..07-08
+    with Storage(db) as s:
+        assert s.get_job(job_id)["status"] == "done"
+
+
+def test_worker_rejects_invalid_direction_window(tmp_path, monkeypatch):
+    """audit P2: направление с окном дат >13 дней ревалидируется и помечается неуспешным
+    (job → partial), не уходя на площадку и не валя остальные направления."""
+    _patch_search(monkeypatch)
+    db = _seed(tmp_path, [("u", "secret1", "user")])
+    app = create_app(db_path=db)
+    base = SearchParams(departure_city="Москва", destination_country="X",
+                        date_from=date(2026, 7, 1), date_to=date(2026, 7, 8),
+                        nights_min=7, nights_max=10, adults=2)
+    params_json = json.dumps({"search_params": base.model_dump(mode="json"),
+                              "providers": ["sletat"]}, ensure_ascii=False)
+    directions = [
+        {"country": "Турция", "date_from": "2026-07-01", "date_to": "2026-07-05"},   # ок
+        {"country": "Египет", "date_from": "2026-07-01", "date_to": "2026-08-01"},   # окно 31 дн.
+    ]
+    with Storage(db) as s:
+        uid = s.get_user_by_username("u")["id"]
+        job_id = s.create_job(uid, params_json, directions)
+
+    asyncio.run(app.state.run_job(job_id))
+
+    with Storage(db) as s:
+        job = s.get_job(job_id)
+        assert job["status"] == "partial" and job["progress_done"] == 1   # ровно одно успешно
+
+
 def test_worker_health_fail_marks_failed_and_notifies(tmp_path, monkeypatch):
     # health-check не пройден → job failed + уведомление batch_failed, кредиты не тронуты
     async def fake_health(providers=None, headless=True):

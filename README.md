@@ -256,7 +256,10 @@ docs/                планы фаз, разбор для любителя, г
   в legacy‑режиме) освобождён от CSRF: браузеры Bearer автоматически не шлют, значит API‑скрипт
   не CSRF‑вектор; этот путь оставлен для curl/CI без double‑submit.
 - **Анти‑брутфорс:** rate‑limit на IP + лок‑аут по `username|ip` + анти‑enumeration
-  (равное время ответа для несуществующего/неверного логина).
+  (равное время ответа: ровно один PBKDF2 на любой неуспешной ветке — в т.ч. для
+  деактивированного аккаунта, иначе его выдавал бы тайминг). PBKDF2 (~0.3с) считается
+  в отдельном потоке (`asyncio.to_thread`), чтобы вход не морозил event loop.
+- **Rate‑limit на `/search/prepare`** (30/мин на IP) — анти‑абьюз реестра сессий поиска.
 - **Скриншоты выдачи (IDOR закрыт):** раздаются только через owner‑checked эндпоинты
   `GET /api/runs/{run_id}/screenshot/{provider}` (только владелец прогона/admin) и
   `GET /api/tests/screenshot/{filename}` (право `tests.view`). Прямой `/screenshots/*`
@@ -269,6 +272,9 @@ docs/                планы фаз, разбор для любителя, г
 - **DoS‑caps:** ограничение размера тела HTTP (`TOURSEARCH_MAX_BODY_BYTES`, 256 KB по умолчанию)
   + предел числа направлений в одном мультипоиске (50).
 - **Заголовки:** CSP, `X‑Frame‑Options: DENY`, `X‑Content‑Type‑Options: nosniff`, `Referrer‑Policy`.
+- **Минимизация recon‑поверхности:** на публичном инстансе (`TOURSEARCH_PUBLIC=1`)
+  интерактивные доки `/docs`/`/redoc`/`/openapi.json` отключены; `/readyz` не отдаёт
+  текст внутренней ошибки наружу. В local‑режиме `/docs` доступен (удобно при разработке).
 - **Предохранитель** от старта наружу без TLS.
 - **Зависимости:** в `.github/workflows/` подготовлены CI‑гейты `pip-audit` (Python, блокирующий)
   и `npm audit --audit-level=high` (фронт, информирующий) — воркфлоу сейчас **выключены**
@@ -400,7 +406,8 @@ Healthcheck/metrics-endpoints (`/healthz`, `/readyz`, `/metrics`) исключе
 - `GET /readyz` — БД доступна (`SELECT 1`). 503 если SQLite залочена/недоступна.
 - `GET /metrics` — JSON-снимок бизнес-метрик: runs_total / runs_24h / jobs_by_status /
   users_total / payments_succeeded / active_searches (+ их лимит) / bg_tasks_alive.
-  Без auth, без PII — закройте за reverse-proxy от внешнего доступа если нужно.
+  В мультиюзер-режиме закрыт за правом `system.health` (admin) — это коммерческие
+  показатели; в local-режиме открыт (мониторинг разработки). Без PII (агрегаты).
 
 ### Резервная копия БД
 

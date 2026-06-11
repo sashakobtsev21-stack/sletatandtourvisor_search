@@ -67,6 +67,15 @@ def test_prepare_dates_backwards(tmp_path):
     assert r.status_code == 200 and "error" in r.json()
 
 
+def test_prepare_rate_limited(tmp_path):
+    """audit P2: шквал /search/prepare с одного IP тормозится (30/мин) — анти-абьюз реестра
+    сессий (prepare без CSRF-стоимости, у гостя списание лишь на старте стрима)."""
+    cli = _client(tmp_path)
+    codes = [cli.post("/search/prepare", data=_FORM).status_code for _ in range(31)]
+    assert codes.count(200) == 30
+    assert codes[-1] == 429
+
+
 # --------------------------- POST /search (синхронный HTML-путь) ---------------------------
 
 def test_do_search_bad_date_rerenders_form(tmp_path):

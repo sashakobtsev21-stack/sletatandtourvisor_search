@@ -1,6 +1,7 @@
 """Тесты слоя хранения (Фаза 1)."""
 
 import sqlite3
+import threading
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
@@ -372,6 +373,70 @@ def test_grant_subscription_and_payment(tmp_path):
     assert p["status"] == "succeeded" and p["kind"] == "subscription"
     assert storage.get_user_by_id(uid)["searches_left"] == 5   # кредиты не тронуты
     storage.close()
+
+
+def test_grant_subscription_concurrent_stacks_days(tmp_path):
+    """audit P2: два параллельных grant_subscription(7) под BEGIN IMMEDIATE стэкаются
+    (≈14 дней), а не теряют дни одного из них (lost update на read-modify-write paid_until)."""
+    db = str(tmp_path / "t.db")
+    with Storage(db) as s:
+        uid = s.create_user("u", "p", iters=1000)
+    barrier = threading.Barrier(2)
+
+    def grant():
+        with Storage(db) as st:
+            barrier.wait()                 # старт одновременно → провоцируем гонку
+            st.grant_subscription(uid, days=7)
+
+    threads = [threading.Thread(target=grant) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    with Storage(db) as s:
+        paid = datetime.fromisoformat(s.get_user_by_id(uid)["paid_until"])
+    if paid.tzinfo is None:
+        paid = paid.replace(tzinfo=auth.utcnow().tzinfo)
+    delta_days = (paid - auth.utcnow()).total_seconds() / 86400
+    assert 13.0 < delta_days < 15.0, f"дни не сложились: {delta_days}"
+
+
+def test_try_consume_anon_concurrent_respects_device_limit(tmp_path):
+    """audit P2: восемь параллельных списаний одного устройства под BEGIN IMMEDIATE дают
+    ровно device_limit успехов (без овершута на гонке чтения ip_used/used)."""
+    db = str(tmp_path / "t.db")
+    with Storage(db):
+        pass  # инициализировать схему до гонки
+    barrier = threading.Barrier(8)
+    results = []
+    lock = threading.Lock()
+
+    def consume():
+        with Storage(db) as st:
+            barrier.wait()
+            ok = st.try_consume_anon("dev1", "1.2.3.4", device_limit=2, ip_limit=100)
+        with lock:
+            results.append(ok)
+
+    threads = [threading.Thread(target=consume) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert results.count(True) == 2, f"овершут лимита устройства: {results}"
+
+
+def test_vacuum_enables_incremental_and_is_idempotent(tmp_path):
+    """audit P2: vacuum() переводит БД в auto_vacuum=INCREMENTAL (одноразовый полный VACUUM),
+    повторный вызов идёт инкрементально и не падает."""
+    db = str(tmp_path / "t.db")
+    with Storage(db) as s:
+        s.create_user("u", "p", iters=1000)
+        s.vacuum()                                            # 1-й вызов: включает INCREMENTAL
+        mode = s._conn.execute("PRAGMA auto_vacuum").fetchone()[0]
+        assert mode == 2
+        s.vacuum()                                            # 2-й: инкрементальный путь, без ошибок
+        assert s._conn.execute("PRAGMA auto_vacuum").fetchone()[0] == 2
 
 
 def test_complete_payment_atomic_and_idempotent(tmp_path):

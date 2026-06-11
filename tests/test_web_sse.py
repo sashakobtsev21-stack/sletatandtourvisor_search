@@ -99,6 +99,44 @@ def test_cap_tokens_drops_oldest():
     assert "t69" in store
 
 
+class _FakeTask:
+    def __init__(self, done: bool) -> None:
+        self._done = done
+
+    def done(self) -> bool:
+        return self._done
+
+
+def test_cap_tokens_never_evicts_live_sessions():
+    """audit P2: сессию с ЖИВОЙ задачей поиска cap_tokens НЕ выселяет, даже если она самая
+    старая — иначе спам /search/prepare выбивал бы чужой идущий поиск из реестра (владелец
+    терял бы реконнект к стриму и кнопку отмены). Выселяются только завершённые/без задачи."""
+    store: dict = {}
+    for i in range(64):                                   # 64 старых ЖИВЫХ
+        s = SearchSession(params=_params(), chosen=["sletat"])
+        s.task = _FakeTask(done=False)
+        store[f"live{i}"] = s
+    for i in range(10):                                   # 10 новых завершённых
+        s = SearchSession(params=_params(), chosen=["sletat"])
+        s.task = _FakeTask(done=True)
+        store[f"dead{i}"] = s
+    cap_tokens(store, limit=64)
+    assert all(f"live{i}" in store for i in range(64))    # живые на месте
+    assert not [k for k in store if k.startswith("dead")]  # завершённые выселены
+
+
+def test_cap_tokens_overflows_when_all_live():
+    """Если живых сессий больше лимита — словарь временно перерастает кап (живых не трогаем;
+    реальный потолок одновременных поисков держит отдельный семафор)."""
+    store: dict = {}
+    for i in range(70):
+        s = SearchSession(params=_params(), chosen=["sletat"])
+        s.task = _FakeTask(done=False)
+        store[f"live{i}"] = s
+    cap_tokens(store, limit=64)
+    assert len(store) == 70
+
+
 def test_emit_does_not_crash_on_full_queue():
     """Если очередь подписчика забита — emit НЕ ронит весь прогон, просто пропускает.
     Иначе зависший SSE-клиент мог бы вырубить весь поиск."""

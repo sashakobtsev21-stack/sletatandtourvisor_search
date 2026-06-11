@@ -31,7 +31,7 @@ from toursearch.storage import Storage
 from datetime import date
 
 from toursearch.web_auth import current_user_id, owner_filter
-from toursearch.web_forms import err_response, parse_search_params
+from toursearch.web_forms import err_response, parse_search_params, validate_date_window
 
 logger = logging.getLogger("toursearch.jobs")
 
@@ -131,6 +131,13 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
                         if direction.get("nights_max") is not None:
                             overrides["nights_max"] = int(direction["nights_max"])
                         sp = base.model_copy(update=overrides)
+                        # model_copy НЕ прогоняет валидаторы SearchParams и доменную
+                        # проверку окна дат — ревалидируем явно (audit P2). Кривое
+                        # направление (from>to, окно >13 дней) иначе уходит до площадки и
+                        # падает там, потратив прогон; здесь ValueError ловится ниже и
+                        # помечает направление как неуспешное, не валя весь батч.
+                        sp = SearchParams.model_validate(sp.model_dump())
+                        validate_date_window(sp.date_from, sp.date_to)
                         report = await run_search(sp, providers=providers, headless=True)
                         # Heavy write — worker-thread (раньше save_report блокировал loop
                         # на N×M INSERT'ов внутри батч-цикла, влияло на параллельные стримы).

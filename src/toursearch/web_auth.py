@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import ipaddress
 import logging
@@ -79,9 +80,13 @@ def insecure_exposure(db_path: str) -> bool:
 # удалён — было IDOR, любой авторизованный/гость мог скачивать чужие выдачи перебором.
 # Гостю скриншоты СВОЕГО прогона отдаёт сессионный `/search/screenshot/{token}/{provider}`
 # (web.py, owner-check по device-cookie) — он под анонимным префиксом `/search/` ниже.
+# /metrics НЕ в skip: отдаёт бизнес-метрики (число клиентов, успешных оплат, динамику
+# прогонов) — в мультиюзере закрыт за правом system.health (admin). В local-режиме
+# остаётся открытым (мониторинг разработки — там middleware всё пропускает). /healthz и
+# /readyz публичны (k8s liveness/readiness без секретов).
 _AUTH_SKIP_PREFIXES = ("/app", "/assets")
 _AUTH_SKIP_EXACT = ("/", "/favicon.ico", "/openapi.json", "/docs", "/redoc",
-                    "/healthz", "/readyz", "/metrics")
+                    "/healthz", "/readyz")
 # Пути, где creds резолвятся, но доступ НЕ требуется (вход / регистрация / выход / «кто я»).
 _AUTH_EXEMPT_EXACT = ("/api/login", "/api/register", "/api/logout", "/api/me")
 _UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -124,6 +129,8 @@ def _required_permission(path: str) -> "str | None":
         return "tests.run"
     if path.startswith("/api/users") or path.startswith("/api/audit"):
         return "users.manage"            # admin-only (audit-log — управление пользователями)
+    if path == "/metrics":
+        return "system.health"           # бизнес-метрики — только admin (в local открыто)
     if path.startswith("/search"):                       # /search, /prepare, /cancel, /stream
         return "search.run"
     if path.startswith("/api/runs") or path == "/history" or path.startswith("/run/"):
@@ -228,7 +235,8 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
         # нелокальные IP (политика та же, что у CLI-предохранителя: init-auth / токен /
         # явный TOURSEARCH_ALLOW_INSECURE=1). Непарсящиеся client.host ('testclient',
         # None) пропускаем — это не сетевые клиенты, иначе ляжет весь тестовый сьют.
-        # Проверка ПОСЛЕ _auth_skip → /healthz|/readyz|/metrics отвечают (k8s-пробы).
+        # Проверка ПОСЛЕ _auth_skip → /healthz|/readyz отвечают (k8s-пробы); /metrics
+        # больше не в skip (закрыт за system.health в мультиюзере, открыт в local).
         if mode == "local" and os.environ.get("TOURSEARCH_ALLOW_INSECURE") != "1":
             try:
                 remote = not ipaddress.ip_address(_client_ip(request)).is_loopback
@@ -362,15 +370,24 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
             if not storage.has_any_user():
                 return err_response(400, "Вход не настроен (нет пользователей).")
             user = storage.get_user_by_username(uname)
-            ok = bool(user and bool(user["is_active"])
-                      and auth.verify_password(password, user["password_hash"]))
+            # PBKDF2 (~0.3с CPU) — в отдельный поток: иначе каждый вход морозит весь
+            # event loop (SSE-стримы, прогресс активных поисков, cancel). GIL внутри
+            # hashlib.pbkdf2_hmac отпускается. И ровно ОДИН PBKDF2 на неуспешной ветке:
+            # для существующего юзера verify считаем НЕЗАВИСИМО от is_active, для
+            # отсутствующего — dummy-хеш. Иначе деактивированный аккаунт (short-circuit
+            # на is_active без verify) отвечал заметно быстрее → по таймингу виден.
+            if user is not None:
+                pw_ok = await asyncio.to_thread(
+                    auth.verify_password, password, user["password_hash"])
+                ok = bool(user["is_active"]) and pw_ok
+            else:
+                await asyncio.to_thread(_dummy_verify, password)
+                ok = False
             if not ok:
-                if user is None:
-                    _dummy_verify(password)  # равное время ответа → не выдаём существование логина
                 _login_fails.add(fail_key)
                 _log.warning("login fail: user=%r ip=%s reason=%s", uname, ip,
                              "unknown_user" if user is None else
-                             "inactive" if user and not user["is_active"] else "bad_password")
+                             "inactive" if not user["is_active"] else "bad_password")
                 return err_response(401, "Неверный логин или пароль.")
             _login_fails.clear(fail_key)       # успех → сбрасываем счётчик неудач
             token = auth.new_session_token()   # новый токен на каждый вход → нет session fixation
@@ -396,14 +413,23 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
         ip = request.client.host if request.client else "?"
         if not _reg_rate.hit(ip):  # лимит считаем после валидации формата
             return err_response(429, "Слишком много регистраций — подождите немного.")
-        with Storage(db_path) as storage:
-            if storage.get_user_by_username(username):
-                return err_response(409, "Такой логин уже занят.")
-            uid = storage.create_user(username, password, role="user")  # роль user, 5 бесплатных
-            token = auth.new_session_token()
-            storage.create_session(uid, token)
-            storage.touch_last_login(uid)
-            user = storage.get_user_by_id(uid)
+        token = auth.new_session_token()
+
+        def _register_tx():
+            # PBKDF2 в create_user (~0.3с) + запись — в отдельном потоке, иначе
+            # морозит event loop. Storage открывается ВНУТРИ потока (sqlite-коннект
+            # привязан к потоку); возврат None = логин занят.
+            with Storage(db_path) as storage:
+                if storage.get_user_by_username(username):
+                    return None
+                uid = storage.create_user(username, password, role="user")  # роль user, 5 бесплатных
+                storage.create_session(uid, token)
+                storage.touch_last_login(uid)
+                return storage.get_user_by_id(uid)
+
+        user = await asyncio.to_thread(_register_tx)
+        if user is None:
+            return err_response(409, "Такой логин уже занят.")
         resp = JSONResponse({"username": user["username"], "role": user["role"],
                              "permissions": auth.permissions_for(user["role"])})
         _set_session_cookies(resp, token, auth.new_session_token(), remember=False)
@@ -460,11 +486,19 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
             return err_response(400, f"Неизвестная роль: {role}")
         if len(password) < 6:
             return err_response(400, "Пароль слишком короткий (мин. 6 символов).")
-        with Storage(db_path) as storage:
-            if storage.get_user_by_username(username):
-                return err_response(409, "Пользователь уже существует.")
-            uid = storage.create_user(username, password, role=role, comment=(comment or None))
-            return _user_public(storage.get_user_by_id(uid))
+
+        def _create_tx():
+            # PBKDF2 (~0.3с) + запись в отдельном потоке (Storage открыт внутри потока).
+            with Storage(db_path) as storage:
+                if storage.get_user_by_username(username):
+                    return None
+                uid = storage.create_user(username, password, role=role, comment=(comment or None))
+                return storage.get_user_by_id(uid)
+
+        created = await asyncio.to_thread(_create_tx)
+        if created is None:
+            return err_response(409, "Пользователь уже существует.")
+        return _user_public(created)
 
     @app.patch("/api/users/{user_id}")
     async def api_users_update(request: Request, user_id: int, payload: UserPatch):

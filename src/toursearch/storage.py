@@ -12,6 +12,7 @@ import json
 import sqlite3
 import threading
 from collections import defaultdict
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -779,6 +780,21 @@ class Storage:
                            (n, user_id))
         self._conn.commit()
 
+    @contextmanager
+    def _immediate(self):
+        """Транзакция с немедленным write-lock (BEGIN IMMEDIATE сразу берёт RESERVED-lock).
+        Нужна для read-modify-write, который иначе сериализуется неверно: с дефолтным
+        deferred-BEGIN драйвера SELECT не держит блокировку, и между чтением и записью
+        вклинивается другое соединение (lost update / овершут лимита). Коммитит при
+        успехе, откатывает при исключении."""
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+            self._conn.commit()
+        except BaseException:
+            self._conn.rollback()
+            raise
+
     def try_consume_search(self, user_id: int) -> bool:
         """АТОМАРНО списать 1 поиск. True — списали (был остаток), False — поисков нет. Условный
         UPDATE → два параллельных поиска не проскочат по одному последнему остатку."""
@@ -810,20 +826,23 @@ class Storage:
         now = auth.utcnow()
         now_iso = auth.iso(now)
         cutoff = auth.iso(now - timedelta(hours=ip_window_hours))
-        ip_used = self._conn.execute(
-            "SELECT COALESCE(SUM(used), 0) FROM anon_usage WHERE ip = ? AND updated_at >= ?",
-            (ip, cutoff)).fetchone()[0]
-        if int(ip_used) >= ip_limit:
-            return False
-        before = self._conn.total_changes
-        self._conn.execute(
-            """INSERT INTO anon_usage (device, ip, used, created_at, updated_at)
-               VALUES (?, ?, 1, ?, ?)
-               ON CONFLICT(device) DO UPDATE SET
-                   used = used + 1, ip = excluded.ip, updated_at = excluded.updated_at
-               WHERE anon_usage.used < ?""",
-            (device, ip, now_iso, now_iso, device_limit))
-        self._conn.commit()
+        # IP-cap читаем и устройство списываем под ОДНИМ write-lock (BEGIN IMMEDIATE),
+        # иначе две параллельные гостевые сессии с одного IP читают один и тот же ip_used
+        # и обе проскакивают → овершут лимита (audit P2).
+        with self._immediate():
+            ip_used = self._conn.execute(
+                "SELECT COALESCE(SUM(used), 0) FROM anon_usage WHERE ip = ? AND updated_at >= ?",
+                (ip, cutoff)).fetchone()[0]
+            if int(ip_used) >= ip_limit:
+                return False
+            before = self._conn.total_changes
+            self._conn.execute(
+                """INSERT INTO anon_usage (device, ip, used, created_at, updated_at)
+                   VALUES (?, ?, 1, ?, ?)
+                   ON CONFLICT(device) DO UPDATE SET
+                       used = used + 1, ip = excluded.ip, updated_at = excluded.updated_at
+                   WHERE anon_usage.used < ?""",
+                (device, ip, now_iso, now_iso, device_limit))
         return self._conn.total_changes - before == 1
 
     def refund_anon(self, device: str) -> None:
@@ -971,9 +990,11 @@ class Storage:
                            (auth.iso(base + timedelta(days=days)), user_id))
 
     def grant_subscription(self, user_id: int, *, days: int) -> None:
-        """Выдать/ПРОДЛИТЬ подписку на `days` (стэк от max(сейчас, текущий))."""
-        self._apply_subscription(user_id, days=days)
-        self._conn.commit()
+        """Выдать/ПРОДЛИТЬ подписку на `days` (стэк от max(сейчас, текущий)).
+        Read-modify-write paid_until под write-lock (BEGIN IMMEDIATE) — два параллельных
+        granta иначе читают один paid_until и теряют дни одного из них (audit P2)."""
+        with self._immediate():
+            self._apply_subscription(user_id, days=days)
 
     # --- платежи: пакеты поисков (kind='credits') и подписка (kind='subscription') ---
 
@@ -1149,7 +1170,18 @@ class Storage:
         return total
 
     def vacuum(self) -> None:
-        """VACUUM сжимает БД (актуально после массовой purge_old)."""
-        # VACUUM нельзя в транзакции — изолируем коммитом и выполняем отдельно.
+        """Сжать БД после массовой purge_old. На auto_vacuum=INCREMENTAL используем
+        incremental_vacuum — он возвращает свободные страницы порциями БЕЗ эксклюзивной
+        перезаписи всего файла, поэтому не держит БД дольше busy_timeout и не валит
+        параллельный save_report по «database is locked» (полный VACUUM на большой БД
+        занимал >5с — audit P2). Если режим ещё не INCREMENTAL (старая БД, созданная до
+        этого фикса) — включаем его и ОДИН раз делаем полный VACUUM: он перестраивает
+        файл в incremental-режим, дальше идёт только инкрементально."""
+        # VACUUM/PRAGMA нельзя внутри транзакции — изолируем коммитом.
         self._conn.commit()
-        self._conn.execute("VACUUM")
+        mode = self._conn.execute("PRAGMA auto_vacuum").fetchone()[0]
+        if mode != 2:  # 0=NONE, 1=FULL, 2=INCREMENTAL
+            self._conn.execute("PRAGMA auto_vacuum = INCREMENTAL")
+            self._conn.execute("VACUUM")  # одноразово: применить новый режим к существующей БД
+        else:
+            self._conn.execute("PRAGMA incremental_vacuum")

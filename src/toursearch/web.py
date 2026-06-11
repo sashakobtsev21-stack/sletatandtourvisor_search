@@ -23,6 +23,7 @@ from toursearch.billing_runner import BillingContext, CreditSession
 from toursearch.healthcheck import cancel_inflight_health, gate_passed, run_health_check
 from toursearch.models import SearchParams, is_not_applicable_error
 from toursearch.orchestrator import run_search
+from toursearch.ratelimit import SlidingWindow
 from toursearch.providers import (
     get_provider,
     is_experimental,
@@ -247,17 +248,20 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
             # отменяем отдельно, чтобы их browser.close() в finally успел отработать.
             await cancel_inflight_health(timeout=5.0)
 
-    app = FastAPI(title="Tour Search", lifespan=_lifespan)
-    app.state.bg_tasks = BackgroundRegistry()
-
-    # Авторизация (3 режима: локальный / legacy-токен / мультиюзер) — middleware и эндпоинты
-    # /api/login|logout|me|users живут в web_auth.py.
-    auth_token = (os.environ.get("TOURSEARCH_TOKEN") or "").strip()
     # «Публичный» инстанс: явная декларация TOURSEARCH_PUBLIC=1 ИЛИ нелокальный host.
     # host передаёт только CLI (toursearch web); при деплое `uvicorn toursearch.web:app`
     # он остаётся дефолтным 127.0.0.1, и предохранители ниже на нём не срабатывали
     # (audit P1-2) — TOURSEARCH_PUBLIC включает их независимо от способа запуска.
     effective_public = os.environ.get("TOURSEARCH_PUBLIC") == "1" or host not in LOCAL_HOSTS
+    # Интерактивные доки (/docs, /redoc, /openapi.json) — помощник для recon: на публичном
+    # инстансе отключаем (None), в local-режиме оставляем (удобно при разработке).
+    _docs_kw = (dict(docs_url=None, redoc_url=None, openapi_url=None) if effective_public else {})
+    app = FastAPI(title="Tour Search", lifespan=_lifespan, **_docs_kw)
+    app.state.bg_tasks = BackgroundRegistry()
+
+    # Авторизация (3 режима: локальный / legacy-токен / мультиюзер) — middleware и эндпоинты
+    # /api/login|logout|me|users живут в web_auth.py.
+    auth_token = (os.environ.get("TOURSEARCH_TOKEN") or "").strip()
     # secure-cookie автоматически на публичном инстансе; за TLS-прокси на 127.0.0.1 — форс через env.
     secure_cookies = effective_public or os.environ.get("TOURSEARCH_SECURE_COOKIES") == "1"
     app.state.secure_cookies = secure_cookies
@@ -297,6 +301,10 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
     active_runs = ConcurrencySlot(max_concurrent_searches)
     app.state.active_runs = active_runs
     app.state.max_concurrent_searches = max_concurrent_searches
+    # Анти-абьюз /search/prepare: на него нет CSRF-стоимости и (у гостя) списание идёт
+    # только при старте стрима, поэтому спам prepare копит сессии и был вектором выселения
+    # чужих живых поисков из реестра (audit P2 — закрыто и в cap_tokens). Лимит на IP.
+    _prepare_rate = SlidingWindow(limit=30, window=60.0, name="prepare_rate")
 
     # Батч-анализ (Ф1): мульти-направления фоновой задачей. Регистрируем после active_runs —
     # воркер занимает общий слот одновременных поисков (app.state.active_runs).
@@ -471,14 +479,16 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
             with Storage(db_path) as s:
                 s._conn.execute("SELECT 1").fetchone()
             return {"ok": True}
-        except Exception as exc:                                # noqa: BLE001
-            return err_response(503, str(exc), ok=False)
+        except Exception:                                       # noqa: BLE001
+            # str(exc) от sqlite светил бы путь к БД/детали движка наружу (probe без auth).
+            logging.getLogger("toursearch.web").exception("readyz: БД недоступна")
+            return err_response(503, "БД недоступна", ok=False)
 
     @app.get("/metrics")
     async def metrics():
-        """Минимальный info-endpoint для мониторинга (audit-final P2). Без auth —
-        Prometheus-стиль text-формат не нужен здесь; отдаём JSON со счётчиками.
-        Не светим PII (только агрегаты)."""
+        """Info-endpoint для мониторинга (audit-final P2). В мультиюзере закрыт за правом
+        system.health (admin) — раньше отдавал бизнес-метрики (клиенты, оплаты, динамику)
+        без auth; в local-режиме открыт. Отдаём JSON со счётчиками, без PII (агрегаты)."""
         with Storage(db_path) as s:
             runs_total = s._conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
             runs_24h = s._conn.execute(
@@ -692,6 +702,9 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
 
     @app.post("/search/prepare")
     async def search_prepare(request: Request):
+        ip = request.client.host if request.client else "?"
+        if not _prepare_rate.hit(ip):   # шквал prepare с одного IP → притормозить
+            return err_response(429, "Слишком много запросов — подождите немного.")
         f = await request.form()
         try:
             params, chosen = parse_search_params(f)

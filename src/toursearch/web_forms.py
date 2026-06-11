@@ -36,6 +36,19 @@ def err_response(status: int, message: str, **extras) -> JSONResponse:
 MAX_DATE_SPAN_DAYS = 13
 
 
+def validate_date_window(df: "date", dt: "date") -> None:
+    """Проверить окно дат вылета. Общая доменная проверка для одиночного поиска
+    (parse_search_params) и per-direction дат батча (web_jobs) — раньше per-direction
+    даты через model_copy не проходили её, и кривое направление падало уже на площадке
+    (audit P2). Бросает ValueError с понятным текстом."""
+    if dt < df:
+        raise ValueError("Дата «до» не может быть раньше даты «от».")
+    if (dt - df).days > MAX_DATE_SPAN_DAYS:
+        raise ValueError(
+            f"Диапазон дат вылета не должен превышать {MAX_DATE_SPAN_DAYS} дней "
+            "(ограничение Sletat).")
+
+
 def parse_price_input(raw) -> "Decimal | None":
     """Безопасно разобрать цену из формы: берём только цифры («12 000 ₽» → 12000),
     мусор/пусто → None. НИКОГДА не бросает — иначе нечисловой ввод ронял /search в
@@ -65,13 +78,7 @@ def parse_search_params(
         dt = date.fromisoformat(form.get("date_to") or "")
     except ValueError:
         raise ValueError("Некорректные даты поиска.") from None
-    if dt < df:
-        raise ValueError("Дата «до» не может быть раньше даты «от».")
-    if (dt - df).days > MAX_DATE_SPAN_DAYS:
-        raise ValueError(
-            f"Диапазон дат вылета не должен превышать {MAX_DATE_SPAN_DAYS} дней "
-            "(ограничение Sletat)."
-        )
+    validate_date_window(df, dt)
     try:
         nmin = int(form.get("nights_min") or 7)
         nmax = int(form.get("nights_max") or 10)
