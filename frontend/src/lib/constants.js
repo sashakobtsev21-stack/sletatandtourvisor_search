@@ -46,3 +46,6 @@ export const CHILD_AGES = Array.from({ length: 18 }, (_, i) => i); // 0..17
 
 // Sletat ограничивает окно вылета 13 днями (синхронизировано с бэкендом).
 export const MAX_DATE_SPAN_DAYS = 13;
+
+// Предел направлений в одном мультипоиске (= MAX_DESTINATIONS_PER_JOB на бэкенде).
+export const MAX_DESTINATIONS = 50;

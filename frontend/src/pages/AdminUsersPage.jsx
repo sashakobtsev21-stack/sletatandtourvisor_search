@@ -18,9 +18,15 @@ export default function AdminUsersPage() {
 
   const load = useCallback(async () => {
     setError("");
-    const r = await apiFetch("/api/users");
-    if (r.ok) setUsers(await r.json());
-    else setError("Не удалось загрузить пользователей");
+    try {
+      const r = await apiFetch("/api/users");
+      if (r.ok) setUsers(await r.json());
+      else setError("Не удалось загрузить пользователей");
+    } catch {
+      // apiFetch бросает после ретраев — иначе «Загрузка…» навсегда (audit P2).
+      setError("Сеть недоступна — попробуйте обновить страницу.");
+      setUsers([]);
+    }
   }, []);
 
   useEffect(() => {
@@ -49,16 +55,20 @@ export default function AdminUsersPage() {
 
   async function patch(id, payload) {
     setError("");
-    const r = await apiFetch(`/api/users/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!r.ok) {
-      const j = await r.json().catch(() => ({}));
-      setError(j.error || "Не удалось изменить");
+    try {
+      const r = await apiFetch(`/api/users/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        setError(j.error || "Не удалось изменить");
+      }
+      await load();
+    } catch {
+      setError("Сеть недоступна — изменение не сохранено.");
     }
-    await load();
   }
 
   return (

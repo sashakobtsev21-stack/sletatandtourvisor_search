@@ -81,9 +81,11 @@ export async function apiFetch(url, opts = {}) {
       return res;
     } catch (err) {
       lastError = err;
-      // AbortError — пользователь/таймаут отменил, не ретраим (это сознательная остановка).
+      // AbortError — пользователь отменил; TimeoutError — наш таймаут сработал. Оба не
+      // ретраим (иначе зависший сервер держал бы запрос до MAX_RETRIES×timeoutMs).
       // Сетевые ошибки (TypeError "Failed to fetch") — transient, ретраим если разрешено.
-      if (!retryEnabled || attempt >= MAX_RETRIES || err.name === "AbortError") throw err;
+      if (!retryEnabled || attempt >= MAX_RETRIES
+          || err.name === "AbortError" || err.name === "TimeoutError") throw err;
       await delay(500 * 2 ** attempt, externalSignal);
     } finally {
       clearTimeout(timer);

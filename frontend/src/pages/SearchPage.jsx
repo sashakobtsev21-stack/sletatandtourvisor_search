@@ -78,7 +78,12 @@ export default function SearchPage() {
   const setPhase = useCallback((p, phase) =>
     setPhases((prev) => ({ ...prev, [p]: phase })), []);
 
-  const handleSubmit = (payload) => {
+  // Стабильная ссылка onSubmit через ref на актуальную логику: без неё memo(SearchForm)
+  // не помогал бы — новый handleSubmit на каждый тик прогресса (creep, ~4 раза/сек)
+  // перерисовывал бы тяжёлую форму весь поиск. Ref всегда зовёт свежую логику (нет
+  // stale-closure и каскада зависимостей useCallback на runRealSearch/status).
+  const submitImplRef = useRef(null);
+  submitImplRef.current = (payload) => {
     if (status === "running") return;
     setLogs([]);
     setFrames({});
@@ -89,6 +94,7 @@ export default function SearchPage() {
     setStatus("running");
     runRealSearch(payload);
   };
+  const handleSubmit = useCallback((payload) => submitImplRef.current(payload), []);
 
   // Монтирование: либо повтор из истории (новый поиск), либо возврат к ещё идущему
   // прогону (ушли на другую страницу приложения и вернулись) — переподключаемся.

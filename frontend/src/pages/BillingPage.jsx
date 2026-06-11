@@ -26,10 +26,15 @@ export default function BillingPage() {
 
   const load = useCallback(async () => {
     setError("");
-    const r = await apiFetch("/api/billing/status");
-    if (r.ok) setStatus(await r.json());
-    else setError("Не удалось получить статус");
-    refresh();
+    try {
+      const r = await apiFetch("/api/billing/status");
+      if (r.ok) setStatus(await r.json());
+      else setError("Не удалось получить статус");
+      refresh();
+    } catch {
+      // apiFetch бросает после ретраев (сеть/таймаут) — иначе вечный спиннер (audit P2).
+      setError("Сеть недоступна — попробуйте обновить страницу.");
+    }
   }, [refresh]);
 
   useEffect(() => {

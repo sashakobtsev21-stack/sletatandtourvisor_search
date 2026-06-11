@@ -112,6 +112,15 @@ describe("apiFetch retry/timeout", () => {
     expect(globalThis.fetch).toHaveBeenCalledTimes(3);       // 1 первичная + 2 ретрая
   });
 
+  it("таймаут (TimeoutError) НЕ ретраится, несмотря на GET (audit P2)", async () => {
+    // Иначе зависший сервер держал бы запрос до MAX_RETRIES×timeoutMs (~90с).
+    globalThis.fetch = vi.fn(async () => {
+      throw new DOMException("timeout", "TimeoutError");
+    });
+    await expect(apiFetch("/api/runs")).rejects.toThrow();
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("внешний AbortSignal отменяет до завершения", async () => {
     // fetch принимает signal — реалистично пробрасываем abort через ошибку.
     globalThis.fetch = vi.fn(async (_url, opts) => {

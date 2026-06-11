@@ -9,6 +9,7 @@ import { navigate } from "../lib/router.js";
 import { formatDate } from "../lib/format.js";
 import { staggerContainer, fadeUp } from "../lib/animations.js";
 import { incompatReasons, caveatOf } from "../lib/providerCoverage.js";
+import { MAX_DATE_SPAN_DAYS, MAX_DESTINATIONS } from "../lib/constants.js";
 
 /**
  * BatchPage (#/batch) — мультипоиск с per-direction датами.
@@ -105,8 +106,24 @@ export default function BatchPage() {
 
   const addDirection = () => {
     if (!country || !dateFrom || !dateTo) return;
+    // Клиентская проверка parity с бэкендом (иначе отказ всплыл бы только после сабмита
+    // или — для окна дат — уже на площадке, сожгя прогон направления; audit P2).
+    if (directions.length >= MAX_DESTINATIONS) {
+      setError(`В одном мультипоиске не больше ${MAX_DESTINATIONS} направлений.`);
+      return;
+    }
     if (dateFrom > dateTo) {
       setError("Дата «до» должна быть не раньше «от».");
+      return;
+    }
+    const minISO = isoDate(addDays(today(), 1));   // вылет не раньше завтра (как одиночный поиск)
+    if (dateFrom < minISO) {
+      setError("Дата вылета не раньше завтрашнего дня.");
+      return;
+    }
+    const spanDays = Math.round((new Date(dateTo) - new Date(dateFrom)) / 86_400_000);
+    if (spanDays > MAX_DATE_SPAN_DAYS) {
+      setError(`Окно дат вылета не больше ${MAX_DATE_SPAN_DAYS} дней (ограничение Sletat).`);
       return;
     }
     // В отелях город вылета и ночи не нужны — храним только то, что важно для

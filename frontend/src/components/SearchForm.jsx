@@ -1,9 +1,9 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useState } from "react";
 import { m, AnimatePresence } from "framer-motion";
 import {
   Plane, Globe2, CalendarDays, MoonStar, Users, Baby,
   Building2, Search, ChevronRight, Hotel, Sparkles,
-  ShieldCheck, ChevronDown, Plus, X,
+  ShieldCheck, ChevronDown,
 } from "lucide-react";
 import GlassCard from "./ui/GlassCard.jsx";
 import { Field, Select } from "./ui/Field.jsx";
@@ -28,17 +28,8 @@ const minDate = addDays(today, 1);
 const defaultFrom = minDate;
 const defaultTo = addDays(minDate, 7);
 
-// «8–10 июля» (один месяц) либо «30 июня – 2 июля» — для строки-сводки батча.
-function fmtDateRange(fromIso, toIso) {
-  const f = new Date(fromIso), t = new Date(toIso);
-  const month = (d) => d.toLocaleDateString("ru-RU", { month: "long" });
-  if (f.getMonth() === t.getMonth() && f.getFullYear() === t.getFullYear())
-    return `${f.getDate()}–${t.getDate()} ${month(t)}`;
-  return `${f.getDate()} ${month(f)} – ${t.getDate()} ${month(t)}`;
-}
-
 /**
- * SearchForm — центральная колонка. Форма параметров поиска тура.
+ * SearchForm — центральная колонка. Форма параметров одиночного поиска тура.
  * Анимации:
  *  - ступенчатое появление всех полей (staggerContainer + fadeUp на каждом Field);
  *  - микроинтеракции на чипах/кнопке (whileHover / whileTap);
@@ -47,10 +38,13 @@ function fmtDateRange(fromIso, toIso) {
  * props.onSubmit(payload) — вызывается с собранными параметрами при сабмите.
  * props.isSearching — блокирует кнопку, пока идёт поиск.
  * props.initial — параметры для предзаполнения (повтор прогона из истории).
- * props.batch — режим батч-анализа: «Куда?» становится мультивыбором направлений (чипы),
- *   кнопка — «Запустить анализ», payload содержит destinations[] вместо destination_country.
+ *
+ * Мультипоиск (много направлений) — отдельная страница BatchPage с собственной формой
+ * (per-direction даты); раньше здесь был prop `batch`, теперь выпилен как мёртвый код.
+ * Обёрнут в memo: во время поиска SearchPage тикает прогресс ~4 раза/сек, и без memo
+ * этот тяжёлый компонент перерисовывался бы каждый тик.
  */
-export default function SearchForm({ onSubmit, isSearching = false, initial = null, batch = false }) {
+function SearchForm({ onSubmit, isSearching = false, initial = null }) {
   // Справочники с бэкенда (/api/refdata); до ответа — фолбэк-константы.
   const { departureCities, countries, operators: operatorOptions, providers: providerOptions,
           providerModes = {}, providerCoverage = {} } = useRefData();
@@ -73,8 +67,6 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
   // controlled — иначе провайдерные подсказки про «нет страны X» не работали (audit-2026-06).
   const [destinationCountry, setDestinationCountry] = useState(initial?.destination_country ?? "Турция");
   const [adults, setAdults] = useState(initial?.adults ?? 2);
-  const [destinations, setDestinations] = useState([]); // батч: выбранные направления (чипы)
-  const [destPick, setDestPick] = useState("");          // батч: страна в селекте «добавить»
 
   // Ночи: «от» не больше «до» — при изменении одного подтягиваем второй.
   const onNightsMin = (v) => {
@@ -162,13 +154,6 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
   const toggleOperator = (op) =>
     setOperators((prev) => (prev.includes(op) ? prev.filter((x) => x !== op) : [...prev, op]));
 
-  // Батч: добавить/убрать направление из списка чипов.
-  const addDest = () => {
-    setDestinations((prev) => (destPick && !prev.includes(destPick) ? [...prev, destPick] : prev));
-    setDestPick("");
-  };
-  const removeDest = (c) => setDestinations((prev) => prev.filter((x) => x !== c));
-
   const handleSubmit = (e) => {
     e.preventDefault();
     const data = new FormData(e.currentTarget);
@@ -188,9 +173,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
       direct_only: data.get("direct_only") === "on",
       providers,
     };
-    // Батч → много направлений; одиночный поиск → одна страна (controlled state).
-    if (batch) onSubmit?.({ ...shared, destinations });
-    else onSubmit?.({ ...shared, destination_country: destinationCountry });
+    onSubmit?.({ ...shared, destination_country: destinationCountry });
   };
 
   return (
@@ -260,73 +243,14 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
           </Field>
         )}
 
-        {!batch && (
-          <Field label="Куда?" icon={Globe2} htmlFor="destination_country">
-            <Select id="destination_country" name="destination_country" icon searchable
-                    value={destinationCountry}
-                    onChange={(e) => setDestinationCountry(e.target.value)}>
-              {countries.map((c) => <option key={c}>{c}</option>)}
-            </Select>
-          </Field>
-        )}
+        <Field label="Куда?" icon={Globe2} htmlFor="destination_country">
+          <Select id="destination_country" name="destination_country" icon searchable
+                  value={destinationCountry}
+                  onChange={(e) => setDestinationCountry(e.target.value)}>
+            {countries.map((c) => <option key={c}>{c}</option>)}
+          </Select>
+        </Field>
       </div>
-
-      {/* Батч: мультивыбор направлений — селект «Добавить» + чипы выбранного с удалением. */}
-      {batch && (
-        <m.div variants={fadeUp} className="mt-4">
-          <label className="mb-1.5 block text-xs font-medium tracking-wide text-muted">
-            Направления{" "}
-            <span className="text-muted/60">
-              {destinations.length ? `выбрано: ${destinations.length}` : "(минимум 2)"}
-            </span>
-          </label>
-          <div className="flex gap-2">
-            <div className="flex-1">
-              <Select icon searchable value={destPick} onChange={(e) => setDestPick(e.target.value)}>
-                <option value="">— выберите страну —</option>
-                {countries.filter((c) => !destinations.includes(c)).map((c) => <option key={c}>{c}</option>)}
-              </Select>
-            </div>
-            <button
-              type="button"
-              onClick={addDest}
-              disabled={!destPick}
-              className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.05] px-4 text-sm font-semibold text-ink transition-colors hover:bg-white/[0.09] disabled:opacity-40"
-            >
-              <Plus className="size-4" /> Добавить
-            </button>
-          </div>
-          <div className="mt-2 flex min-h-[2.75rem] flex-wrap gap-2 rounded-xl border border-white/5 bg-white/[0.02] p-2.5">
-            {destinations.length === 0 && (
-              <span className="self-center px-1 text-xs text-muted">Пока не выбрано ни одного направления</span>
-            )}
-            {destinations.map((c) => (
-              <span key={c} className="flex items-center gap-1.5 rounded-full border border-brand/40 bg-brand/15 px-3 py-1.5 text-xs font-semibold text-white">
-                <Globe2 className="size-3.5" />
-                {c}
-                <button
-                  type="button"
-                  onClick={() => removeDest(c)}
-                  title="Убрать направление"
-                  className="ml-0.5 rounded-full p-0.5 text-white/70 transition-colors hover:bg-white/15 hover:text-white"
-                >
-                  <X className="size-3.5" />
-                </button>
-              </span>
-            ))}
-          </div>
-          {destinations.length > 0 && (
-            <p className="mt-2 px-1 text-xs leading-relaxed text-muted">
-              {!isHotels && `Из ${departureCity}: `}
-              <span className="text-ink">{destinations.join(", ")}</span>
-              {" · "}{fmtDateRange(dateFrom, dateTo)}
-              {!isHotels && ` · ${nightsMin}–${nightsMax} ноч.`}
-              {` · ${adults} взр.`}
-              {childAges.length > 0 && ` + ${childAges.length} реб. (${childAges.join(", ")})`}
-            </p>
-          )}
-        </m.div>
-      )}
 
       {/* Даты. В отелях это даты проживания (заезд→выезд) — ими же задаются ночи. */}
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -562,7 +486,7 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
       <m.button
         variants={fadeUp}
         type="submit"
-        disabled={isSearching || providers.length === 0 || (batch && destinations.length < 2)}
+        disabled={isSearching || providers.length === 0}
         whileHover={{ scale: isSearching ? 1 : 1.02 }}
         whileTap={{ scale: isSearching ? 1 : 0.98 }}
         className={[
@@ -576,12 +500,12 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
         {isSearching ? (
           <>
             <span className="size-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
-            {batch ? "Запускаю…" : "Идёт поиск…"}
+            Идёт поиск…
           </>
         ) : (
           <>
             <Search className="size-5" />
-            {batch ? `Запустить мультипоиск${destinations.length ? ` (${destinations.length})` : ""}` : "Сравнить"}
+            Сравнить
             <ChevronRight className="size-4 transition-transform group-hover:translate-x-1" />
           </>
         )}
@@ -591,6 +515,8 @@ export default function SearchForm({ onSubmit, isSearching = false, initial = nu
     </GlassCard>
   );
 }
+
+export default memo(SearchForm);
 
 /**
  * HealthCheckInfo — раскрывающийся блок: коротко о том, что делает health-check.
