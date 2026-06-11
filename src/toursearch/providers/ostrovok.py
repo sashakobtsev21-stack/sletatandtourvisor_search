@@ -254,7 +254,10 @@ class OstrovokProvider:
             last = count
             if count > 0 and stable >= 3 and (time.monotonic() - t0) >= 12:
                 return
-            if count == 0 and stable >= 8:
+            # Пустую выдачу подтверждаем не раньше 30с: count считает только карточки с
+            # ценой (₽), а цены грузятся асинхронно — ранний выход давал ложное «Отелей
+            # не найдено» под нагрузкой (audit P2; у Level такой же min-elapsed guard).
+            if count == 0 and stable >= 8 and (time.monotonic() - t0) >= 30:
                 return
 
     async def _parse_hotels(self, page: Page) -> list[HotelOffer]:

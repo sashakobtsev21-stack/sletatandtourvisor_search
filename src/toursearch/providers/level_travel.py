@@ -195,6 +195,11 @@ class LevelTravelProvider:
     experimental = True
     URL = "https://level.travel/"
 
+    # Только «Туры» (с перелётом). Без этого атрибута web/flowkit брали дефолт
+    # ("tours","hotels") через getattr и пускали Level в режим «Отели», хотя
+    # PROVIDER_COVERAGE говорит modes=["tours"] (audit P2 — рассинхрон).
+    SEARCH_MODES = ("tours",)
+
     HEALTH_URL = URL
     HEALTH_POPUPS: list[str] = []
     # Level — тяжёлый Next.js SPA: health-check в «настольном» контексте + больше времени,

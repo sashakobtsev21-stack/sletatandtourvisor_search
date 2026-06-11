@@ -561,8 +561,13 @@ class SletatProvider:
                 if await inp.count() and await inp.is_checked():
                     await master.click()
                     await page.wait_for_timeout(500)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001
+            # Раньше — немой except:pass. Если «Все туроператоры» не снялся, в выдаче
+            # останутся ВСЕ операторы, и «лучшая цена» могла прийти от незапрошенного
+            # (audit P2). Пост-фильтр офферов небезопасен без живой сверки имён панели
+            # (латиница _OPERATOR_MAP vs возможная кириллица) — пока хотя бы делаем сбой
+            # видимым в логе, а не молчим.
+            log.warning("Sletat: не удалось снять «Все туроператоры»: %s", exc)
         # Имя оператора теперь в `.slsf-white-space-nowrap` (раньше было `.slsf-text-bold`).
         # Матч ищем в JS (без проблем с кавычками в именах вроде Let's Fly), а клик —
         # настоящий, через Playwright (JS-клик по React-чекбоксу не всегда срабатывает).
