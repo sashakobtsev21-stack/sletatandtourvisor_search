@@ -448,20 +448,11 @@ npm run build:analyze          # → dist/stats.html (treemap) + текстов�
 node scripts/bundle-report.mjs
 ```
 
-Текущий профиль (после P2 партии от 2026-06):
-
-| Пакет | gzip KB | % |
-|---|---:|---:|
-| `framer-motion` | 89.3 | 38.9% |
-| `(app)` (наш код) | 69.2 | 30.2% |
-| `react-dom` | 47.0 | 20.5% |
-| `lucide-react` | 11.1 | 4.8% |
-| остальное | ~12 | ~5.6% |
-| **Итого main bundle** | **229 KB gzip** | |
-
-Основной кандидат на оптимизацию — `framer-motion` (38.9%). При желании
-снизить ~50% его размера: использовать `LazyMotion` с `domAnimation`-features
-и заменить `motion.div` → `m.div`. Это глобальная правка, требует тестирования.
+Текущий профиль (main bundle ≈ **99 KB gzip**; неглавные страницы вынесены в отдельные
+чанки через `React.lazy` и грузятся по навигации). `LazyMotion` (`domAnimation` + `m.*`
+вместо `motion.*`) уже внедрён — прямых `import { motion }` в коде нет, что и держит долю
+`framer-motion` под контролем. Точные цифры по пакетам смотри в `dist/stats.html` после
+`npm run build:analyze`.
 
 ## Тесты
 
