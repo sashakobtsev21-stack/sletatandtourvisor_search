@@ -393,8 +393,18 @@ def register_auth(app: FastAPI, *, db_path: str, auth_token: str, secure_cookies
             token = auth.new_session_token()   # новый токен на каждый вход → нет session fixation
             storage.create_session(user["id"], token, remember=bool(remember))
             storage.touch_last_login(user["id"])
-            if auth.needs_rehash(user["password_hash"]):
-                storage.update_password(user["id"], password)  # тихо усилить хеш
+            do_rehash = auth.needs_rehash(user["password_hash"])
+        # Тихий rehash слабого хеша — тоже PBKDF2 (~0.3с): в отдельном потоке (Storage
+        # открыт внутри потока), иначе первый вход старого юзера после ужесточения
+        # политики морозил бы event loop — ровно то, что фикс и устраняет.
+        if do_rehash:
+            uid = user["id"]
+
+            def _rehash():
+                with Storage(db_path) as s:
+                    s.update_password(uid, password)
+
+            await asyncio.to_thread(_rehash)
         _log.info("login ok: user=%s role=%s ip=%s remember=%s", uname, user["role"], ip, bool(remember))
         resp = JSONResponse({"username": user["username"], "role": user["role"],
                              "permissions": auth.permissions_for(user["role"])})

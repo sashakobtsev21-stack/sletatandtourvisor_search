@@ -129,3 +129,14 @@ def test_unsupported_country():
     res = asyncio.run(get_provider("level")(headless=True).search(_params(destination_country="Абхазия")))
     assert res.success is False
     assert "направлен" in (res.error or "").lower()
+
+
+def test_hotels_mode_rejected_server_side():
+    """audit P2-review: Level — только «Туры». Серверный mode-guard (как у Островка)
+    отклоняет hotels-режим до браузера, чтобы crafted-POST/CLI/replay не подмешали
+    турово-производные офферы в hotels-сравнение. «доступно в режиме» = not-applicable."""
+    from toursearch.models import is_not_applicable_error
+    res = asyncio.run(get_provider("level")(headless=True).search(_params(search_mode="hotels")))
+    assert res.success is False
+    assert "доступно в режиме" in (res.error or "")
+    assert is_not_applicable_error(res.error) is True       # нейтральный показ, без ретрая

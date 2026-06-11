@@ -193,12 +193,10 @@ function SearchForm({ onSubmit, isSearching = false, initial = null }) {
         </span>
         <div>
           <h2 className="text-xl font-extrabold tracking-tight text-white">
-            {batch ? "Мультипоиск" : "Параметры поиска"}
+            Параметры поиска
           </h2>
           <p className="text-xs text-muted">
-            {batch
-              ? "Один набор параметров — сразу по многим направлениям"
-              : `Сравним ${providerOptions.length} площадки за один прогон`}
+            {`Сравним ${providerOptions.length} площадки за один прогон`}
           </p>
         </div>
       </m.div>
@@ -330,9 +328,8 @@ function SearchForm({ onSubmit, isSearching = false, initial = null }) {
         </div>
       )}
 
-      {/* Туроператоры — мультивыбор чипами. В режиме мультипоиска скрыто (одни параметры на все направления). */}
-      {!batch && (
-        <m.div variants={fadeUp} className="mt-5">
+      {/* Туроператоры — мультивыбор чипами. */}
+      <m.div variants={fadeUp} className="mt-5">
           <label className="mb-2 block text-xs font-medium tracking-wide text-muted">
             Туроператоры{" "}
             <span className="text-muted/60">
@@ -362,8 +359,7 @@ function SearchForm({ onSubmit, isSearching = false, initial = null }) {
               );
             })}
           </div>
-        </m.div>
-      )}
+      </m.div>
 
       {/* Фильтры рейсов — только для туров */}
       {!isHotels && (
@@ -392,7 +388,7 @@ function SearchForm({ onSubmit, isSearching = false, initial = null }) {
             // UI подсвечивает + баннер ниже перечисляет.
             const reasons = incompatReasons(providerCoverage, p, {
               city: !isHotels ? departureCity : undefined,    // в отелях вылет не критичен
-              country: batch ? undefined : destinationCountry,  // в батче страна per-direction
+              country: destinationCountry,
               mode,
               operators,
             });
@@ -460,7 +456,7 @@ function SearchForm({ onSubmit, isSearching = false, initial = null }) {
               provider: p,
               reasons: incompatReasons(providerCoverage, p, {
                 city: !isHotels ? departureCity : undefined,
-                country: batch ? undefined : destinationCountry,
+                country: destinationCountry,
                 mode,
                 operators,
               }),

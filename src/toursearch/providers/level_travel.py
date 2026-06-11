@@ -227,6 +227,15 @@ class LevelTravelProvider:
         self.on_frame = None
 
     async def search(self, params: SearchParams) -> ProviderResult:
+        # Серверный mode-guard (симметрично Островку): SEARCH_MODES=("tours",) гейтит
+        # площадку только в UI, но crafted-POST / CLI / replay сохранённого hotels-поиска
+        # обошли бы фронт и подмешали бы турово-производные офферы в hotels-сравнение
+        # (audit P2-review). «доступно в режиме» распознаётся как not-applicable.
+        if params.search_mode != "tours":
+            return ProviderResult(
+                provider=self.name, success=False, duration_seconds=0.0,
+                search_mode=params.search_mode,
+                error="Level Travel: туры с перелётом — доступно в режиме «Туры».")
         dep = _DEPARTURE_SLUG.get(params.departure_city)
         cc = _COUNTRY_CC.get(params.destination_country)
         if not dep:

@@ -130,6 +130,12 @@ def register_jobs(app: FastAPI, *, db_path: str, app_state) -> None:
                             overrides["nights_min"] = int(direction["nights_min"])
                         if direction.get("nights_max") is not None:
                             overrides["nights_max"] = int(direction["nights_max"])
+                        # Паритет с одиночным поиском (parse_search_params): ночи min>max
+                        # молча свопим, а не фейлим направление (audit P2-review).
+                        if "nights_min" in overrides and "nights_max" in overrides:
+                            overrides["nights_min"], overrides["nights_max"] = (
+                                min(overrides["nights_min"], overrides["nights_max"]),
+                                max(overrides["nights_min"], overrides["nights_max"]))
                         sp = base.model_copy(update=overrides)
                         # model_copy НЕ прогоняет валидаторы SearchParams и доменную
                         # проверку окна дат — ревалидируем явно (audit P2). Кривое

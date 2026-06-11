@@ -130,7 +130,8 @@ _TEMPLATES.env.filters["price"] = _fmt_price
 # зависимости. Сохраняем алиасы и реэкспорт под старыми именами для совместимости
 # с тестами и Jinja-форм-обработчиком ниже.
 from toursearch.web_forms import (  # noqa: E402 — после длинного блока импортов специально
-    MAX_DATE_SPAN_DAYS, err_response, parse_price_input, parse_search_params, safe_screenshot_path,
+    MAX_DATE_SPAN_DAYS, err_response, parse_price_input, parse_search_params,
+    safe_screenshot_path, validate_date_window,
 )
 __all__ = ["create_app", "MAX_DATE_SPAN_DAYS", "parse_search_params"]
 
@@ -546,10 +547,7 @@ def create_app(db_path: str = "toursearch.db", host: str = "127.0.0.1") -> FastA
         # перерисовывает форму с понятным текстом, а не падает в 500.
         try:
             df, dt = date.fromisoformat(date_from), date.fromisoformat(date_to)
-            if (dt - df).days > MAX_DATE_SPAN_DAYS:
-                raise ValueError(
-                    f"Диапазон дат вылета не должен превышать {MAX_DATE_SPAN_DAYS} дней (ограничение Sletat)."
-                )
+            validate_date_window(df, dt)  # единая проверка окна дат (как /search/prepare и батч)
             params = SearchParams(
                 departure_city=departure_city,
                 destination_country=destination_country,

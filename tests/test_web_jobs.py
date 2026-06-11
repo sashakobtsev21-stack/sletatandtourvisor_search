@@ -362,6 +362,8 @@ def test_worker_rejects_invalid_direction_window(tmp_path, monkeypatch):
     with Storage(db) as s:
         job = s.get_job(job_id)
         assert job["status"] == "partial" and job["progress_done"] == 1   # ровно одно успешно
+        # кредит за УСПЕШНОЕ списан, за невалидное направление — возвращён (5 − 1 = 4)
+        assert s.get_user_by_id(uid)["searches_left"] == 4
 
 
 def test_worker_health_fail_marks_failed_and_notifies(tmp_path, monkeypatch):

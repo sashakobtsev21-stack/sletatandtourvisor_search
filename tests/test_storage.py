@@ -439,6 +439,28 @@ def test_vacuum_enables_incremental_and_is_idempotent(tmp_path):
         assert s._conn.execute("PRAGMA auto_vacuum").fetchone()[0] == 2
 
 
+def test_vacuum_incremental_reclaims_full_freelist(tmp_path):
+    """audit P2-review: else-ветка (incremental_vacuum) должна реклаймить ВЕСЬ freelist,
+    а не 1 страницу за вызов. Без .fetchall() PRAGMA шагает ровно на одну страницу —
+    место в steady-state (все вызовы после первого) не освобождалось бы."""
+    db = str(tmp_path / "t.db")
+    with Storage(db) as s:
+        s._conn.execute("CREATE TABLE _bulk (x TEXT)")
+        s._conn.executemany("INSERT INTO _bulk VALUES (?)",
+                            [("d" * 500,) for _ in range(5000)])
+        s._conn.commit()
+        s.vacuum()                                            # 1-й: INCREMENTAL + полный VACUUM
+        assert s._conn.execute("PRAGMA auto_vacuum").fetchone()[0] == 2
+        # порождаем много свободных страниц и реклаймим их инкрементально (else-ветка)
+        s._conn.execute("DROP TABLE _bulk")
+        s._conn.commit()
+        free_before = s._conn.execute("PRAGMA freelist_count").fetchone()[0]
+        s.vacuum()                                            # 2-й: else-ветка
+        free_after = s._conn.execute("PRAGMA freelist_count").fetchone()[0]
+        assert free_before > 1, f"тест не породил свободных страниц: {free_before}"
+        assert free_after == 0, f"freelist не реклаймнут целиком: {free_before}→{free_after}"
+
+
 def test_complete_payment_atomic_and_idempotent(tmp_path):
     # пакет кредитов: статус succeeded и начисление — согласованы и применяются РОВНО один раз
     storage = Storage(tmp_path / "t.db")

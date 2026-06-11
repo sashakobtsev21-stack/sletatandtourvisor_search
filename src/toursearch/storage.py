@@ -1184,4 +1184,8 @@ class Storage:
             self._conn.execute("PRAGMA auto_vacuum = INCREMENTAL")
             self._conn.execute("VACUUM")  # одноразово: применить новый режим к существующей БД
         else:
-            self._conn.execute("PRAGMA incremental_vacuum")
+            # ВАЖНО: `PRAGMA incremental_vacuum` — пошаговый стейтмент, он реклаймит
+            # страницы ровно настолько, насколько вычитывается курсор. Без .fetchall()
+            # освобождалась бы ОДНА страница за вызов (~4 КБ/неделю) — место фактически
+            # не сжималось (audit P2-review). fetchall() прогоняет весь freelist.
+            self._conn.execute("PRAGMA incremental_vacuum").fetchall()
