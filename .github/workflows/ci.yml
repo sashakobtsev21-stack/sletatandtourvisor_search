@@ -9,8 +9,8 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - name: Install
@@ -24,13 +24,17 @@ jobs:
         run: python -m playwright install --with-deps chromium
       - name: Lint (ruff)
         run: ruff check src/ tests/ scripts/
-      - name: Security audit (pip-audit)
+      - name: Security audit (pip-audit, non-blocking)
+        # Информационный шаг, как и npm audit ниже: новая чужая advisory не должна
+        # красить сборку на неизменившемся коде. Смотрим в логи и чиним обновлением
+        # зависимостей отдельным коммитом.
+        continue-on-error: true
         run: pip-audit --skip-editable
       - name: Unit & integration tests (e2e excluded)
         run: pytest -q --cov=toursearch --cov-report=term-missing --cov-report=xml --junitxml=junit.xml
       - name: Upload test & coverage reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-reports
           path: |
@@ -41,10 +45,10 @@ jobs:
   frontend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: "20"
+          node-version: "22"
       - name: Install deps
         run: npm --prefix frontend ci
       - name: Security audit (npm audit, non-blocking)
